@@ -2231,6 +2231,11 @@ await scanChannelEmbeds(client, {
   },
 });
   // MANAGER: Escaneia os dois canais com deduplicação real por RM MSGID
+  let mgrTotalFound = 0;
+  let mgrTotalCounted = 0;
+  let mgrTotalDupIgnored = 0;
+  const mgrStatsByCh = {};
+
   for (const mgrCh of [CH_MANAGER_ID, CH_MANAGER_MAIN_ID]) {
     await scanChannelEmbeds(client, {
       channelId: mgrCh,
@@ -2245,12 +2250,19 @@ await scanChannelEmbeds(client, {
         if (!GERAL_PARSERS.isManager(emb)) { auditor.reject('manager', 'invalid_embed'); return; }
         if (GERAL_PARSERS.isManagerRejected(emb)) { auditor.reject('manager', 'rejected'); return; }
         if (!GERAL_PARSERS.isManagerApproved(emb)) { auditor.reject('manager', 'not_approved'); return; }
+        mgrTotalFound++;
         const uid = manager_getManagerId(emb) || manager_getRegistrarId(emb);
         if (!uid) { auditor.reject('manager', 'uid_null'); return; }
         const approvedAt = manager_getApprovedAtSP(emb);
         const managerStableKey = makeManagerStableDedupeKey(emb, m, uid, approvedAt);
-        if (seenManagerStableKeys.has(managerStableKey)) { auditor.reject('manager', 'duplicate'); return; }
+        if (seenManagerStableKeys.has(managerStableKey)) {
+          mgrTotalDupIgnored++;
+          auditor.reject('manager', 'duplicate');
+          return;
+        }
         seenManagerStableKeys.add(managerStableKey);
+        mgrTotalCounted++;
+        mgrStatsByCh[mgrCh] = (mgrStatsByCh[mgrCh] || 0) + 1;
         auditor.addStats('manager', 'uidOk');
         pushItem({ userId: uid, ts: approvedAt || new Date(m.createdTimestamp), source: "manager" });
       },

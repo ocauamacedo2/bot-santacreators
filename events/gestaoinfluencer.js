@@ -15,17 +15,53 @@
 // ===============================
 (async () => {
   try {
-    if (!globalThis.client) {
-      console.warn('[SC_GI] client global não encontrado. Cole este bloco DEPOIS de criar o client do Discord.');
+
+    // =====================================================
+    // SANTA CREATORS
+    // RESOLUÇÃO SEGURA DO CLIENT DISCORD
+    // =====================================================
+
+    const client =
+      globalThis.client ||
+      globalThis.__SC_CLIENT__ ||
+      null;
+
+    if (
+      !client ||
+      typeof client.on !== "function"
+    ) {
+      console.error(
+        "[SC_GI] Client Discord indisponível. " +
+        "Verifique a inicialização do index.js."
+      );
+
       return;
     }
 
-const {
-  ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder,
-  TextInputBuilder, TextInputStyle, EmbedBuilder,
-  StringSelectMenuBuilder, UserSelectMenuBuilder,
-  Events, ChannelType, MessageFlags, AuditLogEvent, PermissionFlagsBits
-} = await import('discord.js');
+    console.log(
+      "[SC_GI] Client Discord localizado."
+    );
+
+    // =====================================================
+    // IMPORTAÇÕES DISCORD
+    // =====================================================
+
+    const {
+      ActionRowBuilder,
+      ButtonBuilder,
+      ButtonStyle,
+      ModalBuilder,
+      TextInputBuilder,
+      TextInputStyle,
+      EmbedBuilder,
+      StringSelectMenuBuilder,
+      UserSelectMenuBuilder,
+      Events,
+      ChannelType,
+      MessageFlags,
+      AuditLogEvent,
+      PermissionFlagsBits
+    } = await import("discord.js");
 
     const fs = await import('node:fs');
     const fsp = fs.promises;

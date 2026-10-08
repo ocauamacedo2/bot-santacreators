@@ -1,5 +1,15 @@
-import dotenv from "dotenv";
-dotenv.config({ override: true });
+// =====================================================
+// SANTA CREATORS
+// CARREGAMENTO PRIORITÁRIO DAS VARIÁVEIS DE AMBIENTE
+// =====================================================
+
+// Carrega o .env antes dos módulos que dependem
+// de DISCORD_TOKEN, GEMINI_API_KEY e outras variáveis.
+//
+// Na hospedagem, as variáveis configuradas no ambiente
+// devem continuar tendo prioridade sobre o arquivo .env.
+
+import "dotenv/config";
 
 import fs from "node:fs";
 import path from "node:path";
@@ -21,16 +31,60 @@ import {
   GatewayIntentBits,
 } from "discord.js";
 
-// Importa o Client configurado
+// =====================================================
+// SANTA CREATORS
+// CLIENT DISCORD GLOBAL E COMPARTILHADO
+// =====================================================
+
+// Importa a instância oficial do Discord.
 import {
   client,
   enviarMensagemPrivadaSegura,
 } from "./client.js";
 
 // =====================================================
+// PROTEÇÃO CONTRA CLIENTS DUPLICADOS
+// =====================================================
+
+// Não podemos permitir que sistemas diferentes
+// utilizem instâncias diferentes do Discord.
+
+if (
+  (
+    globalThis.client &&
+    globalThis.client !== client
+  ) ||
+  (
+    globalThis.__SC_CLIENT__ &&
+    globalThis.__SC_CLIENT__ !== client
+  )
+) {
+  throw new Error(
+    "[CORE] Detectados clients Discord diferentes. " +
+    "Inicialização interrompida por segurança."
+  );
+}
+
+// =====================================================
+// REGISTRA O CLIENT OFICIAL
+// =====================================================
+
+// Compatibilidade com Controle GI e módulos antigos.
+globalThis.client = client;
+
+// Compatibilidade com módulos que utilizam singleton.
+globalThis.__SC_CLIENT__ = client;
+
+console.log(
+  "[CORE] Client Discord global configurado."
+);
+
+// =====================================================
 // ESM compat
 // =====================================================
+
 const require = createRequire(import.meta.url);
+
 globalThis.require ??= require;
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -880,7 +934,101 @@ installBotSecurityGuardian(client);
       await reminderHandleChannelUpdate(o, n, client);
     } catch (e) {}
   });
+// =====================================================
+// SANTA CREATORS
+// LISTENER PRIORITÁRIO DO FORMSCREATOR
+// =====================================================
+//
+// Objetivos:
+//
+// 1. Receber comentários dos tópicos.
+// 2. Encaminhar feedbacks para a IA.
+// 3. Não depender do roteador principal.
+// 4. Não depender do boot pesado do Forms.
+// 5. Evitar registrar o mesmo listener duas vezes.
+//
+// =====================================================
 
+if (!client.__FORMS_CREATOR_MESSAGE_LISTENER__) {
+
+  client.__FORMS_CREATOR_MESSAGE_LISTENER__ = true;
+
+  client.on(
+    Events.MessageCreate,
+    async (message) => {
+
+      if (
+        !message?.guild ||
+        message.author?.bot
+      ) {
+        return;
+      }
+
+      const text =
+        String(
+          message.content || ""
+        ).trim();
+
+      // =================================================
+      // COMANDOS OFICIAIS DO FORMS
+      // =================================================
+
+      const isFormsCommand =
+        /^!(?:formscreator|syncforms|testpublic|testdm|testrunreminder)(?:\s|$)/i
+          .test(text);
+
+      // =================================================
+      // TÓPICOS DO SERVIDOR SANTA CREATORS
+      // =================================================
+
+      const isGuildThread =
+        message.guild.id ===
+          "1262262852782129183" &&
+        Boolean(
+          message.channel?.isThread?.()
+        );
+
+      // =================================================
+      // IGNORA MENSAGENS NÃO RELACIONADAS
+      // =================================================
+
+      if (
+        !isFormsCommand &&
+        !isGuildThread
+      ) {
+        return;
+      }
+
+      // =================================================
+      // ENCAMINHA PARA O FORMS
+      // =================================================
+
+      try {
+
+        await formsCreatorHandleMessage(
+          message,
+          client
+        );
+
+      } catch (error) {
+
+        console.error(
+          "[CORE] Erro no Forms prioritário:",
+          error?.stack ||
+          error?.message ||
+          error
+        );
+
+      }
+
+    }
+  );
+
+  console.log(
+    "[CORE] Listener prioritário de Forms instalado."
+  );
+
+}
   client.on("messageCreate", async (message) => {
     try {
       try {
@@ -1080,8 +1228,15 @@ if (await geralWeeklyRankHandleMessage(message, client)) return;
 // ✅ Auto React precisa receber comandos como !reagirsc eventos 1000
 if (await autoReactsFotosHandleMessage(message, client)) return;
 
-// ✅ FormsCreator precisa receber comandos como !formscreator, !syncforms, !testpublic, !testdm e !testrunreminder
-if (await formsCreatorHandleMessage(message, client)) return;
+// =====================================================
+// FORMSCREATOR
+// =====================================================
+//
+// Os comandos do Forms agora são recebidos
+// pelo listener prioritário instalado acima.
+//
+// Não executar novamente aqui para evitar duplicação.
+// =====================================================
 
 // ✅ Checklist Semanal de Logs
 // Comando: !checklogs
@@ -1102,9 +1257,12 @@ if (await registroManagerHandleMessage(message, client)) return;
       if (await verPermsHandleMessage(message)) return;
       if (await editarPermHandleMessage(message, client)) return;
 
-      if (await alinhamentosHandleMessage(message, client)) return;
-      await formsCreatorHandleMessage(message, client);
-      if (await setStaffV2HandleMessage(message, client)) return;
+if (await alinhamentosHandleMessage(message, client)) return;
+
+// FormsCreator já recebe as mensagens
+// pelo listener prioritário.
+
+if (await setStaffV2HandleMessage(message, client)) return;
       if (await doacaoHandleMessage(message, client)) return;
       if (await vipEventoHandleMessage(message, client)) return;
       if (await vipRegistroHandleMessage(message, client)) return;
@@ -1278,6 +1436,18 @@ client.on("interactionCreate", async (interaction) => {
       return;
     }
 
+
+    const routedId = String(interaction.customId || "");
+
+    if (/^sc_rm_(?:open(?:_v2)?|approve(?:_\d+)?|reject(?:_\d+)?|modal(?:_\w+)?|purge_rejected_week)$/.test(routedId)) {
+      await registroManagerHandleInteraction(interaction, client);
+      return;
+    }
+
+    if (routedId.startsWith("presenca_") || routedId.startsWith("modal_presenca_")) {
+      await confirmacaoPresencaHandleInteraction(interaction, client);
+      return;
+    }
 
     if (await eventosChecklistNotifierOnInteraction(interaction, client)) return;
 
@@ -1723,12 +1893,67 @@ export const initBot = async () => {
       );
     }
 
-   await import("../events/gestaoinfluencer.js");
+    // =====================================================
+    // CONTROLE GI
+    // IMPORTAÇÃO E DIAGNÓSTICO
+    // =====================================================
+
+    await import("../events/gestaoinfluencer.js");
+
+    // =====================================================
+    // VERIFICAÇÃO DA INTEGRAÇÃO
+    // =====================================================
+
+    // O GI utiliza uma função assíncrona interna.
+    // Por isso verificamos a instalação depois de um
+    // pequeno intervalo, sem bloquear o login do bot.
+
+    setTimeout(() => {
+
+      const installed =
+        Boolean(
+          client.__SC_GI_INSTALLED
+        );
+
+      const apiReady =
+        typeof globalThis
+          .SC_GI_CONTROL_API
+          ?.getControl === "function";
+
+      if (
+        !installed ||
+        !apiReady
+      ) {
+        console.error(
+          "[CORE] Controle GI não foi instalado corretamente:",
+          {
+            installed,
+            apiReady
+          }
+        );
+
+        return;
+      }
+
+      console.log(
+        "[CORE] Controle GI instalado e API registrada."
+      );
+
+    }, 10_000).unref?.();
+
+    // =====================================================
+    // LOGIN DO BOT
+    // =====================================================
 
     if (!client.__loggedIn) {
       client.__loggedIn = true;
+
       await client.login(BOT_TOKEN).catch((e) => {
-        console.error("Erro ao fazer login no bot:", e);
+        console.error(
+          "Erro ao fazer login no bot:",
+          e
+        );
+
         process.exit(1);
       });
     }

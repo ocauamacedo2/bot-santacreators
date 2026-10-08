@@ -7959,6 +7959,7 @@ recordApprovalDecision({
 
 // ✅ A mensagem do registro já foi atualizada neste ponto.
 // Confirma imediatamente para quem clicou.
+interaction.__scSocialDecisionApplied = true;
 await interaction.editReply({
   content: "✅ Atualizado e jogado pro final do chat!",
 }).catch(() => {});
@@ -8410,6 +8411,13 @@ export async function pagamentoSocialSiteDecision({
     throw new Error(
       "O módulo Social Media não reconheceu a ação enviada pelo site."
     );
+  }
+
+  if (fakeInteraction.__scSocialDecisionApplied !== true) {
+    const reply = fakeInteraction.lastReply;
+    throw Object.assign(new Error(
+      typeof reply === "string" ? reply : reply?.content || "A decisão Social Media não foi aplicada."
+    ), { status: 409 });
   }
 
   return {

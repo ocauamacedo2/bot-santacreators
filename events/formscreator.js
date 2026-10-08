@@ -4985,20 +4985,20 @@ async function syncLegacyThreads(client, progressMsg = null) {
   for (const thread of allThreads) {
     checkedThreads++;
 
-    const removedHistoricalCopies =
-      await cleanupEvolutionHistoricalDuplicatesInThread(
-        thread
-      ).catch(
-        (error) => {
-          console.warn(
-            `[FormsCreator] Não consegui limpar cópias históricas duplicadas da thread ${thread.id}:`,
-            error?.message ||
-            error
-          );
-
+    const removedHistoricalCopies = await import("./evolutionHierarchy.js")
+      .then(async evolution => {
+        if (typeof evolution.cleanupEvolutionHistoricalDuplicatesInThread !== "function") {
           return 0;
         }
-      );
+        return evolution.cleanupEvolutionHistoricalDuplicatesInThread(thread);
+      })
+      .catch(error => {
+        console.warn(
+          `[FormsCreator] Não consegui limpar cópias históricas duplicadas da thread ${thread.id}:`,
+          error?.message || error
+        );
+        return 0;
+      });
 
     if (
       removedHistoricalCopies >
@@ -8271,48 +8271,75 @@ export async function formsCreatorHandleMessage(message, client) {
           }
         }
 
-        dashEmit(
-          "formscreator:comentario_registrado",
-          {
-            guildId:
-              message.guild.id,
+// =====================================================
+// FORMSCREATOR
+// ENCAMINHAMENTO PERSISTENTE PARA O TICKET
+// =====================================================
 
-            userId:
-              targetUserId,
+const formsFeedbackPayload = {
 
-            threadId:
-              message.channel.id,
+  guildId:
+    message.guild.id,
 
-            messageId:
-              message.id,
+  userId:
+    targetUserId,
 
-            authorId:
-              message.author.id,
+  threadId:
+    message.channel.id,
 
-            authorName:
-              message.member?.displayName ||
-              message.author.globalName ||
-              message.author.username,
+  messageId:
+    message.id,
 
-            content:
-              String(
-                message.content ||
-                ""
-              ),
+  authorId:
+    message.author.id,
 
-            attachments,
+  authorName:
+    message.member?.displayName ||
+    message.author.globalName ||
+    message.author.username,
 
-            createdAtMs:
-              Number(
-                message.createdTimestamp ||
-                Date.now()
-              ),
+  content:
+    String(
+      message.content || ""
+    ),
 
-            messageUrl:
-              message.url ||
-              `https://discord.com/channels/${message.guild.id}/${message.channel.id}/${message.id}`,
-          }
-        );
+  attachments,
+
+  createdAtMs:
+    Number(
+      message.createdTimestamp ||
+      Date.now()
+    ),
+
+  messageUrl:
+    message.url ||
+    `https://discord.com/channels/${message.guild.id}/${message.channel.id}/${message.id}`,
+
+};
+
+// =====================================================
+// REGISTRA NA FILA
+// =====================================================
+
+if (typeof enqueueFormsPersonalFeedback === "function") {
+  enqueueFormsPersonalFeedback(
+    formsFeedbackPayload
+  );
+} else {
+  console.warn(
+    "[FormsCreator] Fila persistente indisponível; encaminhando o comentário diretamente à IA.",
+    { messageId: formsFeedbackPayload.messageId }
+  );
+}
+
+// =====================================================
+// AVISA A IA
+// =====================================================
+
+dashEmit(
+  "formscreator:comentario_registrado",
+  formsFeedbackPayload
+);
       }
     }
   }

@@ -54,34 +54,144 @@ if (!hub.__anyHooked) {
 // =====================================================
 // Emitir evento
 // =====================================================
+// =====================================================
+// SANTA CREATORS
+// EMISSÃO DE EVENTOS COM DIAGNÓSTICO
+// =====================================================
+
 export function dashEmit(eventName, payload = {}) {
+
   try {
-    hub.emit(eventName, {
-      ...payload,
+
+    // =================================================
+    // NORMALIZA A INFORMAÇÃO
+    // =================================================
+
+    const eventPayload = {
+      ...(
+        payload &&
+        typeof payload === "object"
+          ? payload
+          : {}
+      ),
+
       __at: Date.now(),
-    });
+    };
+
+    // =================================================
+    // DIAGNÓSTICO DO FORMSCREATOR
+    // =================================================
+
+    if (
+      eventName ===
+      "formscreator:comentario_registrado"
+    ) {
+
+      const listeners =
+        hub.listenerCount(
+          eventName
+        );
+
+      const diagnostic = {
+        messageId:
+          eventPayload.messageId ||
+          null,
+
+        userId:
+          eventPayload.userId ||
+          null,
+
+        listeners
+      };
+
+      if (listeners === 0) {
+
+        console.error(
+          "[dashHub] Feedback emitido SEM consumidor IA:",
+          diagnostic
+        );
+
+      } else {
+
+        console.log(
+          "[dashHub] Feedback recebido pelo hub:",
+          diagnostic
+        );
+
+      }
+
+    }
+
+    // =================================================
+    // DISTRIBUI EVENTO
+    // =================================================
+
+    return hub.emit(
+      eventName,
+      eventPayload
+    );
+
   } catch (error) {
+
     console.error(
       `[dashHub] Erro ao emitir o evento "${eventName}":`,
       error
     );
+
+    return false;
+
   }
+
 }
 
 // =====================================================
 // Escutar evento específico
 // =====================================================
-export function dashOn(eventName, handler) {
-  try {
-    if (typeof handler !== "function") return;
+// =====================================================
+// SANTA CREATORS
+// REGISTRO SEGURO DE LISTENERS
+// =====================================================
 
-    hub.on(eventName, handler);
+export function dashOn(eventName, handler) {
+
+  try {
+
+    if (
+      typeof handler !== "function"
+    ) {
+      return;
+    }
+
+    // =================================================
+    // EVITA REGISTRAR A MESMA FUNÇÃO NOVAMENTE
+    // =================================================
+
+    const alreadyRegistered =
+      hub.listeners(eventName)
+        .includes(handler);
+
+    if (alreadyRegistered) {
+      return;
+    }
+
+    // =================================================
+    // REGISTRA O LISTENER
+    // =================================================
+
+    hub.on(
+      eventName,
+      handler
+    );
+
   } catch (error) {
+
     console.error(
       `[dashHub] Erro ao registrar o evento "${eventName}":`,
       error
     );
+
   }
+
 }
 
 // =====================================================

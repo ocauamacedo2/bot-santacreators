@@ -5623,18 +5623,63 @@ function iaResponseLooksLikePending(text) {
   );
 }
 
+// =====================================================
+// IA SANTA CREATORS
+// RESPOSTA DE CONTINGÊNCIA
+// =====================================================
+
 function buildFallbackInstantResponse(message) {
-  const content = normalizeSearchText(message.content);
+
+  const content =
+    normalizeSearchText(
+      message?.content || ""
+    );
+
+  // =================================================
+  // SAUDAÇÕES
+  // =================================================
+
+  if (
+    /^(oi|ola|oie|opa|bom dia|boa tarde|boa noite)[!.? ]*$/
+      .test(content)
+  ) {
+    return "Olá! 👋 Como posso te ajudar na SantaCreators?";
+  }
+
+  // =================================================
+  // CONSULTAS INTERNAS
+  // =================================================
 
   if (
     content.includes("resp influ") ||
-    content.includes("responsavel influ") ||
-    content.includes("responsavel influencer")
+    content.includes("responsavel influ")
   ) {
-    return "Eu não consegui identificar com certeza quem é seu Resp Influ pelas informações disponíveis aqui. Me manda a menção do cargo, o canal da hierarquia ou o print certinho que eu respondo direto, sem enrolar.";
+
+    return (
+      "A consulta aos registros da SantaCreators " +
+      "está indisponível agora. " +
+      "Não consigo confirmar seu responsável " +
+      "sem verificar os dados atualizados."
+    );
+
   }
 
-  return "Não consegui encontrar essa informação com segurança agora. Me manda o canal, cargo, ID ou print certo que eu respondo direto com base nisso.";
+  // =================================================
+  // FALHA TÉCNICA REAL
+  // =================================================
+
+  console.warn(
+    "[IA CHAT AUTO] Resposta de contingência utilizada."
+  );
+
+  return (
+    "Tive uma falha temporária ao processar sua mensagem. " +
+    "Não vou inventar informações. " +
+    "Tente novamente em instantes. " +
+    "Se continuar acontecendo, avise a gestão " +
+    "para verificar os logs da IA."
+  );
+
 }
 
 // =====================================================
@@ -32528,20 +32573,83 @@ function installFormsCreatorPersonalTicketBridge(
             ""
           );
 
-        if (
-          !ticketLinkedByGi &&
-          String(
-            ticket.parentId ||
-            ""
-          ) !==
-            "1384650670145278033"
-        ) {
-          console.warn(
-            `[IA FORMS BRIDGE] Ticket ${ticket.id} localizado para ${userId}, mas ele não está vinculado ao Controle GI e não está na categoria oficial de membros.`
-          );
+      // =====================================================
+// VALIDAÇÃO DO PROPRIETÁRIO DO TICKET
+// =====================================================
+//
+// A categoria pode mudar.
+// O proprietário não pode mudar silenciosamente.
+//
+// Não autorizar entrega somente porque alguém
+// possui permissão para visualizar o canal.
+//
+// =====================================================
 
-          return;
-        }
+const topicOwnerId =
+  String(
+    ticket.topic || ""
+  ).match(
+    /(?:^|;)aberto_por:(\d{17,20})(?:;|$)/i
+  )?.[1] || null;
+
+let officialOwnerId = null;
+
+if (
+  typeof personalTicketApi.resolveOwnerId ===
+  "function"
+) {
+
+  officialOwnerId =
+    await personalTicketApi
+      .resolveOwnerId(ticket)
+      .catch(() => null);
+
+}
+
+const declaredOwnerId =
+  officialOwnerId ||
+  topicOwnerId ||
+  null;
+
+const canonicalOwnerId =
+  declaredOwnerId
+    ? (
+        resolveDiscordIdentity(
+          String(declaredOwnerId)
+        ) ||
+        String(declaredOwnerId)
+      )
+    : null;
+
+// =====================================================
+// NÃO ENVIAR PARA TICKET DE OUTRA PESSOA
+// =====================================================
+
+if (
+  canonicalOwnerId &&
+  canonicalOwnerId !== userId
+) {
+
+  throw new Error(
+    `[IA FORMS BRIDGE] Ticket ${ticket.id} pertence a outro usuário.`
+  );
+
+}
+
+// =====================================================
+// EXIGE VÍNCULO CONFIÁVEL
+// =====================================================
+
+if (
+  !ticketLinkedByGi &&
+  canonicalOwnerId !== userId
+) {
+
+  throw new Error(
+    `[IA FORMS BRIDGE] Não foi possível confirmar o proprietário do ticket ${ticket.id}.`
+  );
+
+}
 
         // ===============================================
         // DADOS ATUAIS DA PESSOA

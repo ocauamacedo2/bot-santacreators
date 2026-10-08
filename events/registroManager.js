@@ -2941,6 +2941,25 @@ async function purgeRejectedAny(canal) {
 // EXPORTS — INTERACTIONS (tudo aqui)
 // ===============================
 export async function registroManagerHandleInteraction(interaction, client) {
+  const decisionId = String(interaction.customId || "");
+  const isDecision = decisionId === "sc_rm_approve" ||
+    decisionId.startsWith("sc_rm_approve_") ||
+    decisionId.startsWith("sc_rm_modal_reject_");
+  const locks = globalThis.__SC_RM_DECISION_LOCKS__ ||= new Set();
+  const lockKey = isDecision ? String(interaction.guildId || interaction.guild?.id || "") : null;
+
+  if (lockKey && locks.has(lockKey)) {
+    const response = {
+      content: "⏳ Outra decisão Manager está em andamento. Aguarde e tente novamente.",
+      ephemeral: true,
+    };
+    if (interaction.deferred || interaction.replied) await interaction.editReply(response);
+    else await interaction.reply(response);
+    return true;
+  }
+
+  if (lockKey) locks.add(lockKey);
+
   try {
     const rankingAprovadoresHandled = await rankingAprovadoresManagersHandleInteraction(interaction, client);
     if (rankingAprovadoresHandled) return true;
@@ -3307,6 +3326,14 @@ if (!pode) {
   }
 
 const originalEmb = msg.embeds[0];
+
+if (isApprove && embedIsApproved(originalEmb)) {
+  const response = { content: "❌ Este registro já está aprovado.", ephemeral: true };
+  if (interaction.deferred || interaction.replied) await interaction.editReply(response);
+  else await interaction.reply(response);
+  return true;
+}
+
 const registrantId =
   getRegistrantIdFromMessage(msg, originalEmb) || parseRegistrantFromEmbed(originalEmb);
 
@@ -3403,8 +3430,10 @@ if (isOwnRegistration && !bypass && !selfApproveAllowed) {
   // APPROVE (botão)
   // =======================
   if (!interaction.deferred && !interaction.replied) {
+    await interaction.deferReply({ ephemeral: true });
+  }
 
-
+  {
 // =======================
 // ANTI DUPLICAÇÃO — antes de aprovar
 // ✅ Fonte de verdade = FACs (LISTÃO), porque:
@@ -3452,19 +3481,19 @@ async function _isDuplicateByIdConsideringFacs(orgId) {
         }
       );
 
-      return false;
+      throw new Error("Não foi possível verificar duplicidade no FACs. Aguarde a inicialização ou corrija a ponte antes de aprovar.");
     }
   }
 
   console.error(
-    "[SC_RM] Bridge do FACs indisponível na checagem por ID. Aprovação não será bloqueada por registros antigos do RM.",
+    "[SC_RM] Bridge do FACs indisponível na checagem por ID. Aprovação bloqueada até que a consulta esteja disponível.",
     {
       orgId,
       rmMsgId: msg.id,
     }
   );
 
-  return false;
+  throw new Error("Não foi possível verificar duplicidade no FACs. Aguarde a inicialização ou corrija a ponte antes de aprovar.");
 }
 
 async function _isDuplicateByNameConsideringFacs(name) {
@@ -3483,19 +3512,19 @@ async function _isDuplicateByNameConsideringFacs(name) {
         }
       );
 
-      return false;
+      throw new Error("Não foi possível verificar duplicidade no FACs. Aguarde a inicialização ou corrija a ponte antes de aprovar.");
     }
   }
 
   console.error(
-    "[SC_RM] Bridge do FACs indisponível na checagem por nome. Aprovação não será bloqueada por registros antigos do RM.",
+    "[SC_RM] Bridge do FACs indisponível na checagem por nome. Aprovação bloqueada até que a consulta esteja disponível.",
     {
       name,
       rmMsgId: msg.id,
     }
   );
 
-  return false;
+  throw new Error("Não foi possível verificar duplicidade no FACs. Aguarde a inicialização ou corrija a ponte antes de aprovar.");
 }
 
 // ✅ se tiver ID (e não for 00), bloqueia por ID
@@ -3537,8 +3566,6 @@ if (!orgIdForCheck && orgNameForCheck) {
 }
 
 
-await interaction.deferReply({ ephemeral: true }).catch(() => {});
-
   }
 
   const emb = EmbedBuilder.from(originalEmb);
@@ -3549,7 +3576,8 @@ emb.setColor("Green").addFields({
   })}`,
 });
 
-await msg.edit({ embeds: [emb], components: [] }).catch(() => {});
+await msg.edit({ embeds: [emb], components: [] });
+interaction.__scRmDecisionApplied = true;
 
 // ===== DONO DO PONTO = MANAGER RESPONSÁVEL (FIX) =====
 // 1) tenta pegar do embed ORIGINAL (mais confiável)
@@ -3785,7 +3813,8 @@ if (
     { name: "📝 Motivo da reprovação", value: reason }
   );
 
-  await msg.edit({ embeds: [emb], components: [] }).catch(() => {});
+  await msg.edit({ embeds: [emb], components: [] });
+  interaction.__scRmDecisionApplied = true;
 
   // =======================
   // FACs — REGRA CORRETA (POR ORG)
@@ -3951,15 +3980,20 @@ if (
   } catch (e) {
     console.error("[SC_RM] registroManagerHandleInteraction erro:", e);
     try {
-      if (!interaction.replied && !interaction.deferred) {
-        await interaction.reply({
-          content: "⚠️ Ocorreu um erro ao processar a ação.",
-          ephemeral: true,
-        }).catch(() => {});
+      const response = {
+        content: `⚠️ Não foi possível concluir a ação: ${String(e?.message || "erro interno").slice(0, 1400)}`,
+        ephemeral: true,
+      };
+      if (interaction.deferred || interaction.replied) {
+        await interaction.editReply(response).catch(() => {});
+      } else {
+        await interaction.reply(response).catch(() => {});
       }
     } catch {}
 
     return true;
+  } finally {
+    if (lockKey) locks.delete(lockKey);
   }
 }
 
@@ -4480,6 +4514,13 @@ export async function registroManagerSiteDecision({
     throw new Error(
       "O Registro Manager não reconheceu a ação enviada pelo site."
     );
+  }
+
+  if (fakeInteraction.__scRmDecisionApplied !== true) {
+    const reply = fakeInteraction.lastReply;
+    throw Object.assign(new Error(
+      typeof reply === "string" ? reply : reply?.content || "A decisão Manager não foi aplicada."
+    ), { status: 409 });
   }
 
   return {

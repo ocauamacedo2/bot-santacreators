@@ -781,6 +781,11 @@ const isUserBypass = isPresenceBypass(interaction.member);
   if (interaction.isModalSubmit() && customId.startsWith("modal_presenca_")) {
     await interaction.deferReply({ ephemeral: true });
 
+    if (!checkPerms(interaction.member, "CONFIRM")) {
+      await interaction.editReply("🚫 Você não tem permissão para alterar presenças.");
+      return true;
+    }
+
 let state = loadState();
 const isUserBypass = isPresenceBypass(interaction.member);
 
@@ -806,11 +811,30 @@ const isUserBypass = isPresenceBypass(interaction.member);
     state = syncOrgs(state); // Garante sync antes de buscar
 
 // Busca a ORG (pelo ID ou Nome)
-const orgKey = Object.keys(state.statuses).find(key => {
-  const id = getOrgId(key);
-  if (id && id === input) return true; // Match exato de ID
-  return key.toLowerCase().includes(input); // Match parcial de nome
-});
+const orgKeys = Object.keys(state.statuses);
+const numericInput = /^\d+$/.test(input);
+let matches;
+
+if (numericInput) {
+  const normalizedId = input.replace(/^0+(?=\d)/, "");
+  matches = orgKeys.filter(key => {
+    const id = getOrgId(key);
+    return id !== null && id !== undefined &&
+      String(id).replace(/^0+(?=\d)/, "") === normalizedId;
+  });
+} else {
+  const normalizedInput = normalizeOrgName(input);
+  const exactMatches = orgKeys.filter(key => normalizeOrgName(key) === normalizedInput);
+  matches = exactMatches.length ? exactMatches :
+    orgKeys.filter(key => key.toLowerCase().includes(input));
+}
+
+if (matches.length > 1) {
+  await interaction.editReply("⚠️ Mais de uma organização corresponde ao texto. Informe o ID exato ou o nome completo.");
+  return true;
+}
+
+const orgKey = matches[0];
 
 if (!orgKey) {
   return interaction.editReply("❌ ORG não encontrada na lista da semana. Verifique se ela foi registrada no menu de FACs.");
@@ -854,6 +878,7 @@ state.statuses[orgKey] = {
   time: Date.now()
 };
 saveState(state);
+interaction.__scPresenceApplied = true;
 
 // Atualiza painel
 await updatePanel(client);
@@ -869,15 +894,21 @@ await logAction(client, interaction, actionTxt, orgKey, "", {
     if (status === "YES") {
       // ✅ Emite evento para pontuação (GeralDash e WeeklyRanking escutam isso)
       try {
-        dashEmit("presenca:confirmada", {
-          userId: interaction.user.id,
-          org: orgKey,
-          __at: Date.now()
-        });
+        if (previousInfo.status !== "YES") {
+          dashEmit("presenca:confirmada", {
+            userId: interaction.user.id,
+            org: orgKey,
+            __at: Date.now()
+          });
+        }
       } catch (e) {
         console.error("Erro ao emitir dashEmit:", e);
       }
-      await interaction.editReply(`✅ Presença de **${orgKey}** confirmada! (+1 ponto computado)`);
+      await interaction.editReply(
+        previousInfo.status === "YES"
+          ? `✅ Presença de **${orgKey}** mantida. Nenhum novo ponto foi emitido.`
+          : `✅ Presença de **${orgKey}** confirmada! (+1 ponto computado)`
+      );
     } else {
       await interaction.editReply(`❌ Ausência de **${orgKey}** registrada.`);
     }
@@ -1413,6 +1444,13 @@ export async function setConfirmacaoPresencaFromSite({
     throw new Error(
       "O módulo de presença não reconheceu a solicitação do site."
     );
+  }
+
+  if (fakeInteraction.__scPresenceApplied !== true) {
+    const reply = fakeInteraction.lastReply;
+    throw Object.assign(new Error(
+      typeof reply === "string" ? reply : reply?.content || "A confirmação de presença não foi aplicada."
+    ), { status: 409 });
   }
 
   return {

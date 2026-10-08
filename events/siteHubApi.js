@@ -412,7 +412,11 @@ export function installSiteHubApi({
     },
   });
 
-  const snapshots = createSiteSnapshotStore({ directory: snapshotPath(new URL('../data/site-consultas/', import.meta.url)) });
+  const snapshots = createSiteSnapshotStore({
+    directory: snapshotPath(new URL('../data/site-consultas/', import.meta.url)),
+    freshMs: 30000,
+    maxAgeMs: 300000,
+  });
   for (const event of ['guildMemberUpdate','guildMemberRemove','channelUpdate','channelDelete','roleUpdate','roleDelete'])
     client.on(event, () => snapshots.invalidate());
 

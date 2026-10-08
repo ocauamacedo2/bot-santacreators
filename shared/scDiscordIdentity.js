@@ -5,26 +5,85 @@ import { fileURLToPath } from "node:url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// =====================================================
+// SANTA CREATORS
+// ARMAZENAMENTO COMPARTILHADO
+// =====================================================
+
 function pickPersistRoot() {
+
   const candidates = [
+
+    ...(
+      process.platform !== "win32" &&
+      fs.existsSync("/application/storage")
+        ? ["/application/storage"]
+        : []
+    ),
+
     process.env.SQUARECLOUD_STORAGE_PATH?.trim(),
-    "/storage",
-    "/home/container/storage",
-    "/home/squarecloud/storage",
+
+    process.env.STORAGE_PATH?.trim(),
+
+    ...(
+      process.platform !== "win32"
+        ? [
+            "/storage",
+            "/home/container/storage",
+            "/home/squarecloud/storage"
+          ]
+        : []
+    ),
+
+    path.join(
+      __dirname,
+      ".."
+    )
+
   ].filter(Boolean);
 
   for (const dir of candidates) {
+
     try {
-      if (fs.existsSync(dir)) return dir;
-    } catch {}
+
+      if (!fs.existsSync(dir)) {
+        continue;
+      }
+
+      fs.accessSync(
+        dir,
+        fs.constants.R_OK |
+        fs.constants.W_OK
+      );
+
+      return dir;
+
+    } catch (error) {
+
+      console.warn(
+        "[SC_GERAL_WEEKLY_RANK] Storage indisponível:",
+        dir,
+        error?.code || error?.message
+      );
+
+    }
+
   }
 
-  return null;
+  throw new Error(
+    "[SC_GERAL_WEEKLY_RANK] Nenhum diretório gravável encontrado."
+  );
+
 }
 
-const DATA_DIR = path.resolve(
-  pickPersistRoot() || path.join(__dirname, ".."),
-  "data"
+const DATA_DIR =
+  path.resolve(
+    pickPersistRoot(),
+    "data"
+  );
+
+console.log(
+  `[SC_GERAL_WEEKLY_RANK] Persistência ativa em: ${DATA_DIR}`
 );
 
 const STATE_FILE = path.join(
