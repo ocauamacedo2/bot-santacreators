@@ -9,7 +9,7 @@
 // Na hospedagem, as variáveis configuradas no ambiente
 // devem continuar tendo prioridade sobre o arquivo .env.
 
-import "dotenv/config";
+import "../utils/bridgeEnv.js";
 
 import fs from "node:fs";
 import path from "node:path";
