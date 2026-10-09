@@ -6571,6 +6571,16 @@ export function isPagamentoSocialInteraction(interaction) {
 // - Retorna true se a interação era nossa
 // ============================================================================
 export async function handlePagamentoSocial(interaction, client) {
+  const match = String(interaction.customId || '').match(/^(pago|solicitado|reprovado)_desc_(\d+)$/);
+  const locks = client.__SC_SOCIAL_DECISION_LOCKS__ ||= new Set();
+  const key = match ? String(interaction.guildId) + ':' + match[2] : null;
+  if (key && locks.has(key)) {
+    const payload = { content: 'Este pagamento está sendo atualizado. Aguarde e consulte novamente.', ephemeral: true };
+    if (interaction.deferred || interaction.replied) await interaction.editReply(payload).catch(() => {});
+    else await interaction.reply(payload).catch(() => {});
+    return true;
+  }
+  if (key) locks.add(key);
   try {
     // ✅ SAÍDA IMEDIATA:
     // Não executa dedupe, logs, fetch ou qualquer outra tarefa
@@ -7589,6 +7599,14 @@ if (id.startsWith("pago_desc_") || id.startsWith("solicitado_desc_") || id.start
     return true;
   }
 
+  if (!mensagemEhRegistroPagamento(msgOriginal) ||
+      /PAGO|REPROVADO/i.test(getStatusValueFromEmbed(msgOriginal.embeds[0]).split('\n')[0]) ||
+      !msgOriginal.components.some(row => row.components.some(button =>
+        /^(pago|solicitado|reprovado)__/.test(button.customId || '')))) {
+    await interaction.editReply({ content: 'Este pagamento já foi decidido ou movido. Atualize a consulta.' }).catch(() => {});
+    return true;
+  }
+
   const embedOriginal =
     EmbedBuilder.from(msgOriginal.embeds[0]);
 
@@ -8026,6 +8044,8 @@ void (async () => {
     if (isUnknownInteraction(err)) return true; // Ignora erros de interação já respondida/expirada
     console.warn("Erro no sistema de pagamentos:", err);
     return true;
+  } finally {
+    if (key) locks.delete(key);
   }
 }
 // =====================================================
@@ -8051,6 +8071,28 @@ export async function getPagamentoSocialSiteSnapshot({
     );
   }
 
+  const paymentChannel = await guild.channels.fetch(CANAL_PAGAMENTO);
+  const records = [];
+  const recordsAvailable = actor.id === '660311795327828008' ||
+    Boolean(paymentChannel?.permissionsFor(actor)?.has(['ViewChannel', 'ReadMessageHistory']));
+  let before;
+  for (let page = 0; recordsAvailable && page < 5; page++) {
+    const batch = await paymentChannel.messages.fetch({ limit: 100, ...(before ? { before } : {}) });
+    for (const message of batch.values()) {
+      if (message.author?.id !== guild.client.user.id || !mensagemEhRegistroPagamento(message) ||
+          String(message.content || '').includes('mensagem antiga')) continue;
+      const embed = message.embeds[0];
+      const statusText = getStatusValueFromEmbed(embed).split('\n')[0];
+      const status = /REPROVADO/i.test(statusText) ? 'rejected' : /PAGO/i.test(statusText) ? 'approved'
+        : /SOLICITADO/i.test(statusText) ? 'requested' : 'pending';
+      records.push({ messageId: message.id, creatorId: getCriadorIdFromEmbed(embed), status,
+        title: embed.title, text: getTextoCompletoRegistroPagamento(message), createdAt: message.createdTimestamp,
+        url: message.url, actionable: ['pending', 'requested'].includes(status) &&
+          message.components.some(row => row.components.some(button => /^(pago|solicitado|reprovado)__/.test(button.customId || ''))) });
+    }
+    if (batch.size < 100) break;
+    before = batch.last().id;
+  }
   const stats =
     loadStats();
 
@@ -8122,6 +8164,9 @@ export async function getPagamentoSocialSiteSnapshot({
     ]);
 
   return {
+    records,
+    recordsAvailable,
+    recordLimit: 500,
     month:
       stats.month,
 

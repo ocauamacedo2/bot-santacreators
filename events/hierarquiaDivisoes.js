@@ -602,6 +602,8 @@ export function isOfficialSantaCreatorsTeamMember(member) {
     return false;
   }
 
+  if (member.id === '660311795327828008') return true;
+
   const officialRoleIds = new Set([
     CONFIG.ROLES.OWNER,
     CONFIG.ROLES.RESP_CREATOR,

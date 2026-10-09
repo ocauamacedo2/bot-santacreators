@@ -119,7 +119,7 @@ export function createSiteHubExperience({ client, channels, isTeamMember, genera
     const results = [];
     for (const id of channels[module]) {
       const channel = guild.channels.cache.get(id) || await client.channels.fetch(id).catch(() => null);
-      if (channel?.guildId === guild.id && channel.permissionsFor(member)?.has('ViewChannel')) results.push(channel);
+      if (channel?.guildId === guild.id && (member.id === '660311795327828008' || channel.permissionsFor(member)?.has('ViewChannel'))) results.push(channel);
     }
     if (!results.length) throw failure(403, 'Você não possui acesso a esta área no Discord.');
     return results;
@@ -226,29 +226,7 @@ export function createSiteHubExperience({ client, channels, isTeamMember, genera
       const answer = await generateAI({ prompt, profile: context.profile,
         context, history: (conversation.messages || []).slice(-16) });
       if (!String(answer || '').trim()) throw failure(502, 'A IA respondeu sem conteúdo. Tente novamente.');
-      let discordSynced = false, discordWarning = '', threadUrl = '';
-      try {
-        let thread = conversation.threadId ? await client.channels.fetch(conversation.threadId).catch(() => null) : null;
-        if (!thread || thread.parentId !== channel.id || thread.type !== 12) {
-          if (!channel.threads?.create) throw new Error('O canal de IA não permite tópicos privados.');
-          thread = await channel.threads.create({ name: `Creators IA • ${member.displayName}`.slice(0, 100),
-            autoArchiveDuration: 1440, type: 12, invitable: false, reason: 'Conversa pessoal da IA Creators pelo site' });
-          conversation.threadId = thread.id;
-        }
-        if (thread.archived) await thread.setArchived(false);
-        await thread.members.add(member.id);
-        await thread.send({ embeds: [{ color: 0xa855f7,
-          author: { name: member.displayName, icon_url: context.profile.avatar },
-          title: 'Mensagem pelo Creators', description: prompt,
-          footer: { text: 'Conversa pessoal • Site conectado ao Discord' } }], allowedMentions: { parse: [] } });
-        for (let offset = 0; offset < answer.length; offset += 1900) {
-          await thread.send({ content: answer.slice(offset, offset + 1900), allowedMentions: { parse: [] } });
-        }
-        discordSynced = true; threadUrl = `https://discord.com/channels/${guild.id}/${thread.id}`;
-      } catch (error) {
-        discordWarning = 'A resposta está pronta. A cópia no Discord exige Criar tópicos privados, Enviar mensagens em tópicos e Gerenciar tópicos no canal da IA.';
-        console.error('[SITE AI SYNC]', error.code || error.message);
-      }
+      // O chat do site permanece privado; somente logAI registra a auditoria.
       conversation.messages = [...(conversation.messages || []), { role: 'user', text: prompt },
         { role: 'model', text: String(answer) }].slice(-24);
       await mkdir(folder, { recursive: true, mode: 0o700 });

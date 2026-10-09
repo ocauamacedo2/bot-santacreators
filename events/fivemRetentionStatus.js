@@ -1151,8 +1151,72 @@ async function syncContinuationMessages(channel, botId, embedGroups, row = null)
    await existing[i].delete().catch(() => {});
  }
 }
+const FIVEM_LOCAL_DIR = path.resolve(__dirname, '../data/fivem-local');
+let fivemLocalWrites = Promise.resolve(), fivemLocalCleanupAt = 0;
+let fivemLocalPeaks = {};
+try { fivemLocalPeaks = JSON.parse(fs.readFileSync(path.join(FIVEM_LOCAL_DIR, 'peaks.json'), 'utf8')); }
+catch (error) { if (error.code !== 'ENOENT') console.warn('[FIVEM JSON]', error.code || error.name); }
+async function readFivemLocal(file, fallback = null) {
+  try { return JSON.parse(await fs.promises.readFile(path.join(FIVEM_LOCAL_DIR, file), 'utf8')); }
+  catch { return fallback; }
+}
+async function writeFivemLocal(file, value) {
+  await fs.promises.mkdir(FIVEM_LOCAL_DIR, { recursive: true });
+  const final = path.join(FIVEM_LOCAL_DIR, file), temporary = final + '.tmp';
+  await fs.promises.writeFile(temporary, JSON.stringify(value));
+  await fs.promises.rename(temporary, final);
+}
+function persistFivemLocal(snapshot) {
+  if (!isReliableSnapshotForPersistence(snapshot) || !/^\d{4}-\d{2}-\d{2}$/.test(snapshot.spDate)) return;
+  const captured = JSON.parse(JSON.stringify(snapshot));
+  fivemLocalWrites = fivemLocalWrites.then(async () => {
+    const file = captured.spDate + '.json';
+    const day = await readFivemLocal(file, { snapshots: {} });
+    const slot = Math.floor((Number(captured.hour) * 60 + Number(captured.minute)) / 5);
+    day.snapshots[String(slot)] = captured;
+    const initialize = date => fivemLocalPeaks[date] ||= {
+      date, total: { peak: 0, primePeak: 0 }, cities: {}, exact21h: { total: 0, cities: {} }, eventWindows: {}
+    };
+    const peak = initialize(captured.spDate);
+    for (const city of FIVEM_CITIES) peak.cities[city.key] ||= { name: city.name, emoji: city.emoji, peak: 0, primePeak: 0 };
+    if (!hasStaleCityData(captured) && captured.totalClients > peak.total.peak) {
+      Object.assign(peak.total, { peak: captured.totalClients, peakTime: captured.spTime, peakAt: captured.timestamp });
+    }
+    for (const city of FIVEM_CITIES) {
+      const value = captured.cities[city.key];
+      if (value && !value.stale && value.clients > peak.cities[city.key].peak) {
+        Object.assign(peak.cities[city.key], { peak: value.clients, peakTime: captured.spTime, peakAt: captured.timestamp });
+      }
+    }
+    if (isExact21hSnapshot(captured) && !hasStaleCityData(captured) && !peak.exact21h.total) peak.exact21h = buildExact21hFromSnapshot(captured);
+    for (const window of getActiveEventWindowsForSnapshot(captured)) {
+      const target = initialize(window.targetDateKey);
+      for (const city of FIVEM_CITIES) target.cities[city.key] ||= { name: city.name, emoji: city.emoji, peak: 0, primePeak: 0 };
+      updatePrimePeaksInDoc(target, captured);
+      updateEventWindowPeakInDoc(target, captured, window);
+    }
+    const cutoff = Date.now() - FIVEM_HISTORY_MAX_DAYS * 86400000;
+    for (const date of Object.keys(fivemLocalPeaks)) if (new Date(date + 'T23:59:59-03:00').getTime() < cutoff) delete fivemLocalPeaks[date];
+    await writeFivemLocal(file, day);
+    await writeFivemLocal('latest.json', captured);
+    await writeFivemLocal('peaks.json', fivemLocalPeaks);
+    if (Date.now() - fivemLocalCleanupAt > 3600000) {
+      fivemLocalCleanupAt = Date.now();
+      const names = (await fs.promises.readdir(FIVEM_LOCAL_DIR)).filter(name => /^\d{4}-\d{2}-\d{2}\.json$/.test(name)).sort();
+      const files = await Promise.all(names.map(async name => ({ name, size: (await fs.promises.stat(path.join(FIVEM_LOCAL_DIR, name))).size })));
+      let bytes = files.reduce((sum, item) => sum + item.size, 0);
+      for (const item of files) {
+        if (new Date(item.name.slice(0, 10) + 'T23:59:59-03:00').getTime() >= cutoff && bytes <= 64 * 1024 * 1024) continue;
+        await fs.promises.unlink(path.join(FIVEM_LOCAL_DIR, item.name)); bytes -= item.size;
+      }
+    }
+  }).catch(error => console.warn('[FIVEM JSON]', error.code || error.name));
+}
+
 // ---------- DATA PERSISTENCE (MONGODB) ----------
 async function addSnapshot(newSnapshot) {
+  persistFivemLocal(newSnapshot);
+  if (HistoryModel.db.readyState !== 1) return false;
   try {
     const now = Date.now();
 
@@ -1226,8 +1290,14 @@ async function getSnapshotDaysAgo(days, currentSnapshot = null) {
  const targetDateKey = `${targetParts.year}-${String(targetParts.month).padStart(2, "0")}-${String(targetParts.day).padStart(2, "0")}`;
  const targetMinutes = Number(currentSnapshot?.hour ?? getSaoPauloParts(new Date()).hour) * 60 + Number(currentSnapshot?.minute ?? getSaoPauloParts(new Date()).minute);
 
+ const localDay = await readFivemLocal(targetDateKey + '.json', { snapshots: {} });
+ const localCandidates = Object.values(localDay.snapshots || {}).filter(isValidSnapshot);
+ const localBest = localCandidates.sort((a,b) =>
+   Math.abs(Number(a.hour) * 60 + Number(a.minute) - targetMinutes) -
+   Math.abs(Number(b.hour) * 60 + Number(b.minute) - targetMinutes))[0] || null;
+ if (localBest && Math.abs(Number(localBest.hour) * 60 + Number(localBest.minute) - targetMinutes) <= Math.ceil(FIVEM_COMPARISON_TOLERANCE_MS / 60000)) return localBest;
  try {
-   if (HistoryModel.db.readyState !== 1) return null;
+   if (HistoryModel.db.readyState !== 1) return localBest;
    const candidates = await HistoryModel.find({ spDate: targetDateKey })
      .maxTimeMS(3000).lean();
 
@@ -1236,7 +1306,7 @@ async function getSnapshotDaysAgo(days, currentSnapshot = null) {
        `[FIVEM_RETENTION] Sem base histórica para ${days} dia(s) atrás:`,
        targetDateKey
      );
-     return null;
+     return localBest;
    }
 
    let best = null;
@@ -1265,7 +1335,7 @@ async function getSnapshotDaysAgo(days, currentSnapshot = null) {
    return best;
  } catch (e) {
    console.error(`[FIVEM_RETENTION] Erro ao buscar snapshot histórico (${days} dias atrás):`, e.message);
-   return null;
+   return localBest;
  }
 }
 
@@ -1316,20 +1386,21 @@ async function loadPeaksMap() {
   }
   if (FIVEM_PEAKS_READ_CACHE.pending) return FIVEM_PEAKS_READ_CACHE.pending;
   if (PeakModel.db.readyState !== 1) {
-    return FIVEM_PEAKS_READ_CACHE.value || {};
+    return { ...(FIVEM_PEAKS_READ_CACHE.value || {}), ...fivemLocalPeaks };
   }
 
   const task = (async () => {
     try {
       const docs = await PeakModel.find().maxTimeMS(3000).lean();
       const map = {};
+      Object.assign(map, fivemLocalPeaks);
       for (const document of docs) map[document.date] = document;
       FIVEM_PEAKS_READ_CACHE.value = map;
       FIVEM_PEAKS_READ_CACHE.at = Date.now();
       return map;
     } catch (e) {
       console.error("[FIVEM_RETENTION] Erro ao carregar picos do MongoDB:", e);
-      return FIVEM_PEAKS_READ_CACHE.value || {};
+      return { ...(FIVEM_PEAKS_READ_CACHE.value || {}), ...fivemLocalPeaks };
     }
   })();
   FIVEM_PEAKS_READ_CACHE.pending = task;
@@ -1561,6 +1632,7 @@ function getActiveEventWindowsForSnapshot(snapshot) {
 }
 
 async function updateDailyPeaks(currentSnapshot) {
+  if (PeakModel.db.readyState !== 1) return false;
   try {
     const dateKey = currentSnapshot.spDate;
     let dayPeak = await PeakModel.findOne({ date: dateKey });
@@ -2195,11 +2267,12 @@ function hasStaleCityData(snapshot) {
 }
 
 async function getLastValidSnapshot() {
+ const local = await readFivemLocal('latest.json');
+ if (isValidSnapshot(local)) return local;
  if (HistoryModel.db.readyState !== 1) return null;
  const candidates = await HistoryModel.find({
    totalMaxClients: { $gt: 0 },
  }).sort({ timestamp: -1 }).limit(50).maxTimeMS(3000).lean();
-
  return candidates.find(isCompleteSnapshot) || candidates[0] || null;
 }
 

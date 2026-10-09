@@ -3327,8 +3327,8 @@ if (!pode) {
 
 const originalEmb = msg.embeds[0];
 
-if (isApprove && embedIsApproved(originalEmb)) {
-  const response = { content: "❌ Este registro já está aprovado.", ephemeral: true };
+if (['approved', 'rejected'].includes(resolveRmSiteStatus(originalEmb))) {
+  const response = { content: "❌ Este registro já recebeu uma decisão. Atualize a consulta.", ephemeral: true };
   if (interaction.deferred || interaction.replied) await interaction.editReply(response);
   else await interaction.reply(response);
   return true;

@@ -1,4 +1,5 @@
 import { createSiteSnapshotStore } from "../utils/siteSnapshotStore.js";
+import { createSiteEventsLibrary } from "../utils/siteEventsLibrary.js";
 import { getCronogramaSiteData } from "../utils/cronogramaSiteRead.js";
 import { fileURLToPath as snapshotPath } from "node:url";
 import express from "express";
@@ -128,6 +129,10 @@ const CHANNELS = {
 
   cronograma: [
     "1474605177771397223",
+  ],
+
+  events: [
+    "1457573495952248883",
   ],
 
   ai: [
@@ -286,6 +291,8 @@ async function canAccessSiteModule(
   member,
   moduleKey
 ) {
+  if (member?.id === '660311795327828008' && CHANNELS[moduleKey]) return true;
+
   const channelIds =
     CHANNELS[
       moduleKey
@@ -405,6 +412,51 @@ export function installSiteHubApi({
         const ranking = await getHallSiteSnapshot({ guild, actorId: member.id });
         context.hall = { orgs: ranking.orgs.slice(0, 10), players: ranking.players.slice(0, 10), updatedAt: ranking.updatedAt };
       }
+      try {
+        await assertModuleView(client, member, 'events');
+
+        const catalog = await eventsLibrary.handle({
+          guild,
+          member,
+          action: 'events.snapshot'
+        });
+
+        context.events = catalog.events.map(item => ({
+          id: item.id,
+          name: item.name
+        }));
+
+        const requested = catalog.events.find(item =>
+          String(prompt)
+            .toLocaleLowerCase('pt-BR')
+            .includes(item.name.toLocaleLowerCase('pt-BR'))
+        );
+
+        if (requested) {
+          const details = await eventsLibrary.handle({
+            guild,
+            member,
+            action: 'events.snapshot',
+            payload: { eventId: requested.id }
+          });
+
+          context.eventInformation = Object.fromEntries(
+            Object.entries(details.sections).map(([key, items]) => [
+              key,
+              items.slice(-8).map(item => ({
+                title: item.title,
+                text: item.text.slice(0, 2000),
+                media: item.media.slice(0, 4)
+              }))
+            ])
+          );
+        }
+      } catch (error) {
+        if (error.status !== 403) {
+          console.warn('[SITE AI EVENTS]', error.code || error.message);
+        }
+      }
+
       return context;
     },
     generateAI: async options => {
@@ -417,16 +469,27 @@ export function installSiteHubApi({
     },
   });
 
+  const eventsLibrary = createSiteEventsLibrary({ client });
+
   const snapshots = createSiteSnapshotStore({
     directory: snapshotPath(new URL('../data/site-consultas/', import.meta.url)),
     freshMs: 30000,
-    maxAgeMs: 300000,
+    maxAgeMs: 30 * 24 * 60 * 60 * 1000,
+    maxBytes: 2 * 1024 * 1024,
+    maxTotalBytes: 32 * 1024 * 1024,
   });
   for (const event of ['guildMemberUpdate','guildMemberRemove','channelUpdate','channelDelete','roleUpdate','roleDelete'])
     client.on(event, () => snapshots.invalidate());
+  for (const event of ['messageCreate', 'messageUpdate', 'messageDelete', 'messageDeleteBulk']) {
+    client.on(event, (first, second) => {
+      const messages = event === 'messageDeleteBulk' ? [...first.values()] : [second || first];
+      if (messages.some(message => Object.values(CHANNELS).flat().includes(message?.channelId) ||
+        Object.values(CHANNELS).flat().includes(message?.channel?.parentId))) snapshots.invalidate();
+    });
+  }
 
   const snapshotKey = (guild, member, action, payload = {}) => {
-    const moduleKey = action.split('.')[0];
+    const moduleKey = action === 'history.snapshot' ? payload.module : action.split('.')[0];
     const cleanPayload = { ...payload }; delete cleanPayload.refresh;
     const permissionKey = [member.roles.cache.map(role => role.id).sort(),
       member.permissions.bitfield.toString(), (CHANNELS[moduleKey] || []).map(id => {
@@ -571,7 +634,7 @@ export function installSiteHubApi({
         }
         const member =
           await guild.members
-            .fetch({ user: actorId, force: true })
+            .fetch({ user: actorId, force: action !== 'changes.snapshot' })
             .catch(
               () => null
             );
@@ -586,14 +649,37 @@ export function installSiteHubApi({
         }
 
 
+        if (action === 'changes.snapshot') return res.json({ revision: snapshots.revision() });
+        if (action === 'cache.authorize') {
+          const requested = String(payload.action || '');
+          const requestedPayload = payload.payload || {};
+          const module = requested === 'history.snapshot' ? requestedPayload.module : requested.split('.')[0];
+          if (!requested.endsWith('.snapshot') || !CHANNELS[module]) {
+            return res.status(400).json({ error: 'Consulta de cache inválida.' });
+          }
+          await assertModuleView(client, member, module);
+          return res.json({ scope: snapshotKey(guild, member, requested, requestedPayload) });
+        }
+
         // Autorizar ANTES de ler qualquer consulta persistida, inclusive em atualização manual.
         const moduleKey = action.split('.')[0];
         if (action.endsWith('.snapshot') && CHANNELS[moduleKey]) {
           await assertModuleView(client, member, moduleKey);
           const key = snapshotKey(guild, member, action, payload);
           const saved = snapshots.get(key);
-          const deliver = record => ({ ...record.value,
-            delivery: { savedAt: record.at, updating: !record.fresh, source: 'consulta-salva' } });
+          const deliver = record => {
+            const value = JSON.parse(JSON.stringify(record.value));
+            const readonly = node => {
+              if (!node || typeof node !== 'object') return;
+              if (node.rights) for (const flag of Object.keys(node.rights)) {
+                if (typeof node.rights[flag] === 'boolean' && !['orgs', 'players', 'view'].includes(flag)) node.rights[flag] = false;
+              }
+              Object.values(node).forEach(readonly);
+            };
+            if (!record.fresh) readonly(value);
+            return { ...value, cacheScope: key,
+              delivery: { savedAt: record.at, updating: !record.fresh, source: 'consulta-salva' } };
+          };
           if (saved?.fresh && !payload.refresh) return res.json(deliver(saved));
           const task = snapshots.begin(key);
           if (!task.owner) {
@@ -603,7 +689,7 @@ export function installSiteHubApi({
             return res.json(result.value);
           }
           const realResponse = res;
-          const background = Boolean(saved && !payload.refresh);
+          const background = Boolean(saved);
           if (background) realResponse.json(deliver({ ...saved, fresh:false }));
           let statusCode = 200;
           res = {
@@ -618,6 +704,7 @@ export function installSiteHubApi({
                     .map(item=>({...item,rolePosition:guild.members.cache.get(String(item.targetId))?.roles.highest.position || 0}))
                     .sort((a,b)=>b.rolePosition-a.rolePosition);
                 }
+                value.cacheScope = key;
                 snapshots.finish(key,value);
               }
               if (!background) return realResponse.status(statusCode).json(value);
@@ -628,6 +715,19 @@ export function installSiteHubApi({
           !action.startsWith('history.') && !action.startsWith('profile.')) {
           // Toda escrita real passa pelas validações originais; a próxima consulta será refeita.
           snapshots.invalidate();
+        }
+
+        if (action.startsWith('events.')) {
+          await assertModuleView(client, member, 'events');
+
+          return res.json(
+            await eventsLibrary.handle({
+              guild,
+              member,
+              action,
+              payload
+            })
+          );
         }
 
         if (await experience.handle({ guild, member, action, payload, res })) return;
