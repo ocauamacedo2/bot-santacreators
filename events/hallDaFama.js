@@ -2508,6 +2508,1040 @@ const processingApprovals = new Set();
 const processingHallModalSubmits = new Set();
 let hallScanRunning = false;
 
+// =====================================================
+// RECUPERAÇÃO DAS EDIÇÕES HUMANAS PELOS LOGS DE AUDITORIA
+// =====================================================
+
+const HALL_MANUAL_RECOVERY_VERSION =
+  "human-audit-recovery-v1";
+
+function hallRecoverySnapshotKey(snapshot) {
+  const attachmentKeys = (
+    snapshot?.attachments || []
+  )
+    .map(attachment => {
+      return getHallImageUrlKey(
+        attachment.url || ""
+      );
+    })
+    .filter(Boolean)
+    .sort();
+
+  return JSON.stringify({
+    content: String(
+      snapshot?.content || ""
+    ),
+    attachments: attachmentKeys
+  });
+}
+
+async function readHallRecoveryAuditRecords(client) {
+  const auditChannel =
+    await client.channels.fetch(
+      HALL_ACTION_AUDIT_LOG_CH_ID
+    );
+
+  if (
+    !auditChannel?.isTextBased?.() ||
+    !auditChannel.messages
+  ) {
+    throw new Error(
+      "Canal de auditoria do Hall indisponível."
+    );
+  }
+
+  const records = [];
+  const seenMessageIds = new Set();
+
+  const maximumPages = 200;
+
+  let beforeId = null;
+  let reachedEnd = false;
+
+  for (
+    let page = 0;
+    page < maximumPages;
+    page++
+  ) {
+    const messages =
+      await auditChannel.messages.fetch(
+        beforeId
+          ? {
+              limit: 100,
+              before: beforeId
+            }
+          : {
+              limit: 100
+            }
+      );
+
+    if (messages.size === 0) {
+      reachedEnd = true;
+      break;
+    }
+
+    let addedMessages = 0;
+
+    for (const message of messages.values()) {
+      if (
+        seenMessageIds.has(message.id)
+      ) {
+        continue;
+      }
+
+      seenMessageIds.add(message.id);
+      addedMessages++;
+
+      // Apenas registros enviados pelo próprio bot.
+      if (
+        message.author?.id !==
+        client.user.id
+      ) {
+        continue;
+      }
+
+      for (
+        const attachment of
+        message.attachments.values()
+      ) {
+        if (
+          !/^hall-audit-\d+-\d+\.json$/i.test(
+            attachment.name || ""
+          )
+        ) {
+          continue;
+        }
+
+        if (
+          attachment.size >
+          2 * 1024 * 1024
+        ) {
+          throw new Error(
+            `Auditoria ${attachment.name} excede o limite de leitura.`
+          );
+        }
+
+        const response =
+          await fetch(
+            attachment.url,
+            {
+              signal:
+                AbortSignal.timeout(
+                  15000
+                )
+            }
+          );
+
+        if (!response.ok) {
+          throw new Error(
+            `Falha ao ler ${attachment.name}: HTTP ${response.status}.`
+          );
+        }
+
+        const text =
+          await response.text();
+
+        if (
+          Buffer.byteLength(
+            text,
+            "utf8"
+          ) >
+          2 * 1024 * 1024
+        ) {
+          throw new Error(
+            `Auditoria ${attachment.name} excede o limite após download.`
+          );
+        }
+
+        // Se um JSON estiver inválido, interrompe antes
+        // de restaurar usando um histórico incompleto.
+        const record =
+          JSON.parse(text);
+
+        const snapshot =
+          record.after;
+
+        if (
+          !snapshot ||
+          String(
+            snapshot.channelId || ""
+          ) !==
+            String(
+              HALL_CHANNEL_ID
+            ) ||
+          !/^\d+$/.test(
+            String(
+              snapshot.messageId || ""
+            )
+          )
+        ) {
+          continue;
+        }
+
+        const status =
+          String(
+            record.status || ""
+          ).toUpperCase();
+
+        if (
+          status !== "CONCLUÍDO" &&
+          status !== "PUBLICADO"
+        ) {
+          continue;
+        }
+
+        const actionAt =
+          Number(
+            record.actionAt
+          );
+
+        if (
+          !Number.isFinite(actionAt) ||
+          actionAt <= 0 ||
+          typeof snapshot.content !==
+            "string" ||
+          !Array.isArray(
+            snapshot.attachments
+          )
+        ) {
+          throw new Error(
+            `Auditoria incompleta: ${attachment.name}.`
+          );
+        }
+
+        records.push({
+          ...record,
+          actionAt,
+          auditMessageId:
+            message.id
+        });
+      }
+    }
+
+    const oldest =
+      [...messages.values()]
+        .reduce(
+          (current, message) => {
+            if (!current) {
+              return message;
+            }
+
+            return BigInt(
+              message.id
+            ) <
+              BigInt(
+                current.id
+              )
+              ? message
+              : current;
+          },
+          null
+        );
+
+    const nextBeforeId =
+      oldest?.id;
+
+    if (
+      !nextBeforeId ||
+      nextBeforeId === beforeId ||
+      addedMessages === 0 ||
+      (
+        beforeId &&
+        BigInt(nextBeforeId) >=
+          BigInt(beforeId)
+      )
+    ) {
+      throw new Error(
+        "A leitura dos logs não avançou. Nenhum Hall foi restaurado."
+      );
+    }
+
+    beforeId =
+      nextBeforeId;
+
+    if (
+      messages.size < 100
+    ) {
+      reachedEnd = true;
+      break;
+    }
+  }
+
+  if (!reachedEnd) {
+    throw new Error(
+      "O histórico de auditoria ultrapassou 200 páginas. " +
+      "Nenhum Hall foi restaurado com histórico incompleto."
+    );
+  }
+
+  return records;
+}
+
+async function restoreHallManualEditsFromAudit(client, hallChannel) {
+  const locks =
+    globalThis.__SC_HALL_RECOVERY_LOCKS__ ??=
+      new Set();
+
+  const lockKey =
+    `${client.user.id}:${hallChannel.id}`;
+
+  if (locks.has(lockKey)) {
+    throw new Error(
+      "A recuperação dos Halls já está em andamento."
+    );
+  }
+
+  locks.add(lockKey);
+
+  try {
+    // Toda a leitura termina antes da primeira edição.
+    const records =
+      await readHallRecoveryAuditRecords(
+        client
+      );
+
+    const recordsByHall =
+      new Map();
+
+    for (const record of records) {
+      const hallId =
+        String(
+          record.after.messageId
+        );
+
+      if (
+        !recordsByHall.has(hallId)
+      ) {
+        recordsByHall.set(
+          hallId,
+          []
+        );
+      }
+
+      recordsByHall
+        .get(hallId)
+        .push(record);
+    }
+
+    let restored = 0;
+    let preserved = 0;
+    let pending = 0;
+
+    for (
+      const [hallId, hallRecords]
+      of recordsByHall
+    ) {
+      hallRecords.sort((a, b) => {
+        if (
+          a.actionAt !==
+          b.actionAt
+        ) {
+          return (
+            a.actionAt -
+            b.actionAt
+          );
+        }
+
+        return BigInt(
+          a.auditMessageId
+        ) <
+          BigInt(
+            b.auditMessageId
+          )
+          ? -1
+          : 1;
+      });
+
+      const latest =
+        hallRecords[
+          hallRecords.length - 1
+        ];
+
+      // A varredura manual também possui usuário.
+      // Por isso a classificação usa a ação registrada,
+      // e não apenas o actor.
+      const latestIsFaultyScan =
+        normalizeHallName(
+          latest.action || ""
+        ).includes(
+          "hall corrigido automaticamente"
+        );
+
+      if (!latestIsFaultyScan) {
+        preserved++;
+        continue;
+      }
+
+      const humanRecords =
+        hallRecords.filter(record => {
+          const actorId =
+            String(
+              record.actor?.id || ""
+            );
+
+          const isFaultyScan =
+            normalizeHallName(
+              record.action || ""
+            ).includes(
+              "hall corrigido automaticamente"
+            );
+
+          return (
+            !isFaultyScan &&
+            actorId.length > 0 &&
+            actorId !==
+              client.user.id &&
+            Boolean(
+              record.interaction?.id
+            ) &&
+            record.actionAt <=
+              latest.actionAt
+          );
+        });
+
+      const humanRecord =
+        humanRecords[
+          humanRecords.length - 1
+        ];
+
+      if (!humanRecord) {
+        pending++;
+
+        await sendHallScanLog(
+          client,
+          {
+            title:
+              "⚠️ Recuperação pendente: sem registro humano",
+            color: "#f1c40f",
+            description:
+              `Hall: \`${hallId}\`\n` +
+              "A última mudança foi automática, mas não foi encontrada " +
+              "uma edição humana ou publicação aprovada deste mesmo ID.",
+            phase:
+              "Recuperação pelos logs"
+          }
+        ).catch(() => {});
+
+        continue;
+      }
+
+      try {
+        const current =
+          await hallChannel.messages.fetch(
+            {
+              message: hallId,
+              force: true
+            }
+          );
+
+        if (
+          current.author?.id !==
+          client.user.id
+        ) {
+          preserved++;
+          continue;
+        }
+
+        const currentSnapshot =
+          buildHallAuditSnapshot(
+            current
+          );
+
+        // Só desfaz uma alteração automática comprovada.
+        // Mudanças posteriores, mesmo sem log, são preservadas.
+        if (
+          hallRecoverySnapshotKey(
+            currentSnapshot
+          ) !==
+          hallRecoverySnapshotKey(
+            latest.after
+          )
+        ) {
+          preserved++;
+          continue;
+        }
+
+        const target =
+          humanRecord.after;
+
+        if (
+          String(
+            target.guildId || ""
+          ) !==
+            String(
+              current.guildId
+            ) ||
+          String(
+            target.channelId || ""
+          ) !==
+            String(
+              current.channelId
+            ) ||
+          String(
+            target.messageId || ""
+          ) !==
+            String(
+              current.id
+            ) ||
+          target.content.length >
+            2000
+        ) {
+          throw new Error(
+            "O registro humano não corresponde à localização atual do Hall."
+          );
+        }
+
+        const targetAttachments =
+          target.attachments;
+
+        if (
+          targetAttachments.length >
+          4
+        ) {
+          throw new Error(
+            "O registro possui mais de 4 anexos. Requer recuperação específica."
+          );
+        }
+
+        const liveAttachments =
+          [
+            ...current.attachments.values()
+          ];
+
+        const retained = [];
+        const missingUrls = [];
+
+        for (
+          const attachment of
+          targetAttachments
+        ) {
+          const originalKey =
+            getHallImageUrlKey(
+              attachment.url || ""
+            );
+
+          if (!originalKey) {
+            throw new Error(
+              "O registro humano possui anexo sem URL recuperável."
+            );
+          }
+
+          const existing =
+            liveAttachments.find(item => {
+              return (
+                String(item.id) ===
+                  String(
+                    attachment.id
+                  ) ||
+                getHallImageUrlKey(
+                  item.url
+                ) ===
+                  originalKey
+              );
+            });
+
+          if (existing) {
+            retained.push({
+              id: existing.id
+            });
+          } else {
+            missingUrls.push(
+              attachment.url
+            );
+          }
+        }
+
+        if (
+          uniqueImageUrls(
+            missingUrls
+          ).length !==
+          missingUrls.length
+        ) {
+          throw new Error(
+            "O registro contém anexos repetidos ou ambíguos."
+          );
+        }
+
+        const files =
+          missingUrls.length > 0
+            ? await downloadHallImageAttachments(
+                missingUrls
+              )
+            : [];
+
+        if (
+          files.length !==
+          missingUrls.length
+        ) {
+          throw new Error(
+            "Nem todos os anexos da edição humana puderam ser recuperados. " +
+            "O Hall atual foi mantido."
+          );
+        }
+
+        // Reconfere depois dos downloads.
+        const fresh =
+          await hallChannel.messages.fetch(
+            {
+              message: hallId,
+              force: true
+            }
+          );
+
+        if (
+          hallRecoverySnapshotKey(
+            buildHallAuditSnapshot(
+              fresh
+            )
+          ) !==
+          hallRecoverySnapshotKey(
+            currentSnapshot
+          ) ||
+          Number(
+            fresh.editedTimestamp || 0
+          ) !==
+          Number(
+            current.editedTimestamp || 0
+          )
+        ) {
+          throw new Error(
+            "O Hall mudou durante a recuperação. A edição posterior foi preservada."
+          );
+        }
+
+        const payload = {
+          // Texto exato da última ação humana.
+          // Links de imagens do texto também são restaurados.
+          content:
+            target.content,
+
+          // Apenas os anexos da edição humana.
+          // Anexos acrescentados pela varredura são removidos.
+          attachments:
+            retained,
+
+          allowedMentions: {
+            parse: []
+          }
+        };
+
+        if (files.length > 0) {
+          payload.files =
+            files;
+        }
+
+        const restoredMessage =
+          await fresh.edit(
+            payload
+          );
+
+        restored++;
+
+        state.historicalRankingRebuildPending =
+          true;
+
+        saveState(state);
+
+        await sendHallCompleteActionLog(
+          client,
+          null,
+          {
+            action:
+              "♻️ Recuperação da última edição humana pelos logs",
+            status:
+              "CONCLUÍDO",
+            beforeSnapshot:
+              currentSnapshot,
+            afterSnapshot:
+              buildHallAuditSnapshot(
+                restoredMessage
+              ),
+            preserveImages:
+              true,
+            note:
+              `Registro humano: ${humanRecord.auditMessageId}. ` +
+              `Alteração automática desfeita: ${latest.auditMessageId}.`,
+            metadata: {
+              recoveryVersion:
+                HALL_MANUAL_RECOVERY_VERSION,
+              humanAuditMessageId:
+                humanRecord.auditMessageId,
+              faultyAuditMessageId:
+                latest.auditMessageId
+            }
+          }
+        );
+      } catch (error) {
+        pending++;
+
+        await sendHallScanLog(
+          client,
+          {
+            title:
+              "⚠️ Hall não restaurado automaticamente",
+            color: "#f1c40f",
+            description:
+              `Hall: \`${hallId}\`\n` +
+              `Motivo: ${String(
+                error?.message || error
+              ).slice(0, 1200)}`,
+            phase:
+              "Recuperação pelos logs"
+          }
+        ).catch(() => {});
+      }
+    }
+
+    await sendHallScanLog(
+      client,
+      {
+        title:
+          "♻️ Recuperação pelos logs finalizada",
+        color:
+          pending > 0
+            ? "#f1c40f"
+            : "#2ecc71",
+        description:
+          `Halls restaurados: **${restored}**\n` +
+          `Halls preservados: **${preserved}**\n` +
+          `Casos pendentes: **${pending}**`,
+        phase:
+          "Recuperação pelos logs"
+      }
+    ).catch(() => {});
+
+    return {
+      restored,
+      preserved,
+      pending
+    };
+  } finally {
+    locks.delete(lockKey);
+  }
+}
+
+// =====================================================
+// VARREDURA ATIVA: ANALISA SEM REESCREVER OS HALLS
+// =====================================================
+
+async function autoCorrectDuplications(channel, client, options = {}) {
+  const locks =
+    globalThis.__SC_HALL_ACTIVE_SCAN_LOCKS__ ??=
+      new Set();
+
+  const lockKey =
+    `${client.user.id}:${channel.id}`;
+
+  if (locks.has(lockKey)) {
+    throw new Error(
+      "Já existe uma varredura em andamento."
+    );
+  }
+
+  locks.add(lockKey);
+
+  const showProgress =
+    options.showProgress ?? true;
+
+  try {
+    const messagesById =
+      new Map();
+
+    let beforeId = null;
+    let reachedEnd = false;
+
+    for (
+      let page = 0;
+      page < 200;
+      page++
+    ) {
+      const batch =
+        await channel.messages.fetch(
+          beforeId
+            ? {
+                limit: 100,
+                before: beforeId
+              }
+            : {
+                limit: 100
+              }
+        );
+
+      if (batch.size === 0) {
+        reachedEnd = true;
+        break;
+      }
+
+      let added = 0;
+
+      for (
+        const message of
+        batch.values()
+      ) {
+        if (
+          !messagesById.has(
+            message.id
+          )
+        ) {
+          messagesById.set(
+            message.id,
+            message
+          );
+
+          added++;
+        }
+      }
+
+      const oldest =
+        [...batch.values()]
+          .reduce(
+            (current, message) => {
+              if (!current) {
+                return message;
+              }
+
+              return BigInt(
+                message.id
+              ) <
+                BigInt(
+                  current.id
+                )
+                ? message
+                : current;
+            },
+            null
+          );
+
+      const nextBeforeId =
+        oldest?.id;
+
+      if (
+        !nextBeforeId ||
+        nextBeforeId === beforeId ||
+        added === 0 ||
+        (
+          beforeId &&
+          BigInt(nextBeforeId) >=
+            BigInt(beforeId)
+        )
+      ) {
+        throw new Error(
+          "A paginação da varredura não avançou."
+        );
+      }
+
+      beforeId =
+        nextBeforeId;
+
+      if (
+        batch.size < 100
+      ) {
+        reachedEnd = true;
+        break;
+      }
+    }
+
+    if (!reachedEnd) {
+      throw new Error(
+        "Histórico acima de 200 páginas. Ranking anterior preservado."
+      );
+    }
+
+    const hallMessages =
+      [...messagesById.values()]
+        .filter(message => {
+          const normalized =
+            normalizeHallName(
+              getHallMessageText(
+                message
+              )
+            );
+
+          if (
+            !normalized.includes(
+              "hall da fama"
+            )
+          ) {
+            return false;
+          }
+
+          const excluded = [
+            "ranking de orgs",
+            "ranking de pessoas",
+            "top 10 organizacoes",
+            "top 10 pessoas",
+            "revisao manual",
+            "varredura hall da fama"
+          ];
+
+          if (
+            excluded.some(text => {
+              return normalized.includes(
+                text
+              );
+            })
+          ) {
+            return false;
+          }
+
+          return (
+            state.historicalHallMigrations?.[
+              message.id
+            ]?.status !==
+            "completed"
+          );
+        })
+        .sort((a, b) => {
+          return (
+            (a.createdTimestamp || 0) -
+            (b.createdTimestamp || 0)
+          );
+        });
+
+    if (
+      hallMessages.length === 0
+    ) {
+      return;
+    }
+
+    const rankings =
+      createEmptyHallRankingData(
+        loadHallRankings()
+      );
+
+    let processed = 0;
+
+    for (
+      const message of
+      hallMessages
+    ) {
+      const evidence =
+        await resolveHallEvidence(
+          client,
+          message,
+          getHallMessageText(
+            message
+          )
+        );
+
+      await addHallToRankings(
+        rankings,
+        message,
+        client,
+        evidence
+      );
+
+      processed++;
+
+      if (
+        showProgress &&
+        (
+          processed === 1 ||
+          processed % 10 === 0 ||
+          processed ===
+            hallMessages.length
+        )
+      ) {
+        await updateHallScanProgress(
+          client,
+          {
+            status:
+              "Analisando sem alterar publicações ou imagens.",
+            totalMessages:
+              messagesById.size,
+            totalHalls:
+              hallMessages.length,
+            processed,
+            edited: 0,
+            progressCurrent:
+              processed,
+            progressTotal:
+              hallMessages.length,
+            currentHallUrl:
+              getMessageJumpUrl(
+                message
+              ),
+            currentEvent:
+              evidence.eventName ||
+              "Evento",
+            currentCity:
+              evidence.cityName ||
+              CITIES[
+                evidence.cityKey
+              ]?.label ||
+              "Não identificada",
+            phase:
+              "Análise e ranking"
+          }
+        );
+      }
+    }
+
+    await addPaymentEventsToPlayerRankings(
+      rankings,
+      client
+    );
+
+    normalizeExistingPlayerRankingOverrides(
+      rankings
+    );
+
+    await sendPlayerIdentitySimilarityReviews(
+      client,
+      rankings
+    );
+
+    rankings.lastUpdatedAt =
+      Date.now();
+
+    saveHallRankings(rankings);
+
+    await publishHallRankings(
+      client,
+      rankings
+    );
+
+    if (showProgress) {
+      await updateHallScanProgress(
+        client,
+        {
+          status:
+            "Finalizado. Halls preservados e ranking atualizado.",
+          totalMessages:
+            messagesById.size,
+          totalHalls:
+            hallMessages.length,
+          processed,
+          edited: 0,
+          progressCurrent:
+            processed,
+          progressTotal:
+            hallMessages.length,
+          phase:
+            "Finalizado"
+        }
+      );
+    }
+  } catch (error) {
+    if (showProgress) {
+      await updateHallScanProgress(
+        client,
+        {
+          status:
+            "Varredura interrompida. Halls preservados.",
+          edited: 0,
+          phase:
+            "Erro"
+        }
+      ).catch(() => {});
+    }
+
+    throw error;
+  } finally {
+    locks.delete(lockKey);
+  }
+}
+
 async function safeDeferHallInteraction(interaction) {
   if (interaction.deferred || interaction.replied) return true;
 
@@ -14194,7 +15228,7 @@ async function findApprovalImagesForHall(
   };
 }
 
-  async function autoCorrectDuplications(channel, client, options = {}) {
+  async function legacyAutoCorrectDuplicationsDisabled(channel, client, options = {}) {
     const showProgress = options.showProgress ?? true;
     const scanStartedAt = Date.now();
 
@@ -16412,6 +17446,100 @@ const channel =
       await syncHistoricalReviewPanels(
         client
       );
+
+      if (
+        state.hallManualAuditRecovery?.version !==
+          HALL_MANUAL_RECOVERY_VERSION ||
+        state.hallManualAuditRecovery?.completed !==
+          true
+      ) {
+        if (hallScanRunning) {
+          console.warn(
+            "[HallDaFama] Recuperação adiada: existe uma varredura em andamento."
+          );
+
+          return;
+        }
+
+        hallScanRunning = true;
+
+        try {
+          await updateHallScanProgress(
+            client,
+            {
+              status:
+                "Recuperando últimas edições humanas pelos logs.",
+              edited: 0,
+              phase:
+                "Recuperação pelos logs"
+            }
+          ).catch(() => {});
+
+          const recovery =
+            await restoreHallManualEditsFromAudit(
+              client,
+              channel
+            );
+
+          state.hallManualAuditRecovery = {
+            version:
+              HALL_MANUAL_RECOVERY_VERSION,
+            completed:
+              recovery.pending === 0,
+            restored:
+              recovery.restored,
+            preserved:
+              recovery.preserved,
+            pending:
+              recovery.pending,
+            finishedAt:
+              Date.now()
+          };
+
+          saveState(state);
+        } catch (error) {
+          state.hallManualAuditRecovery = {
+            version:
+              HALL_MANUAL_RECOVERY_VERSION,
+            completed: false,
+            failedAt:
+              Date.now(),
+            error:
+              String(
+                error?.message || error
+              )
+          };
+
+          saveState(state);
+
+          console.error(
+            "[HallDaFama] Recuperação automática não concluída:",
+            error
+          );
+
+          await sendHallScanLog(
+            client,
+            {
+              title:
+                "❌ Recuperação automática não concluída",
+              color:
+                "#e74c3c",
+              description:
+                String(
+                  error?.message || error
+                ).slice(0, 1500),
+              phase:
+                "Recuperação pelos logs"
+            }
+          ).catch(() => {});
+
+          // Não inicia a análise geral depois de uma falha
+          // na leitura necessária para a recuperação.
+          return;
+        } finally {
+          hallScanRunning = false;
+        }
+      }
 
       if (
         (
