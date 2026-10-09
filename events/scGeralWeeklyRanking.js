@@ -2010,7 +2010,27 @@ function venda_getSellerId(emb) {
 }
 
 // ================== COLLECT (MESMA IDEIA DO TEU items[]) ==================
+const weeklyCollectionsInFlight = new WeakMap();
+
 async function collectAllPoints(client, mode = "light") {
+  let requests = weeklyCollectionsInFlight.get(client);
+
+  if (!requests) {
+    requests = new Map();
+    weeklyCollectionsInFlight.set(client, requests);
+  }
+
+  if (requests.has(mode)) return requests.get(mode);
+
+  const operation = collectAllPointsUnshared(client, mode).finally(() => {
+    if (requests.get(mode) === operation) requests.delete(mode);
+  });
+
+  requests.set(mode, operation);
+  return operation;
+}
+
+async function collectAllPointsUnshared(client, mode = "light") {
   const now = Date.now();
 
   const seenMessageIds = new Set();
