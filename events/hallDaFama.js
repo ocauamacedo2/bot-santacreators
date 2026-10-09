@@ -7470,51 +7470,27 @@ async function prepareHallImageEdit(
 }
 
 async function getSafeHallImageUrls(client, hallMessage, options = {}) {
+  // Quando imagens novas forem explicitamente informadas,
+  // elas substituem a seleção anterior. Não são somadas.
+  if (
+    Object.prototype.hasOwnProperty.call(options, "manualUrls")
+  ) {
+    return uniqueImageUrls(
+      Array.isArray(options.manualUrls)
+        ? options.manualUrls
+        : []
+    );
+  }
+
   const content =
     options.content ??
     getHallMessageText(hallMessage);
 
-  const manualUrls = uniqueImageUrls(
-    options.manualUrls || []
-  );
-
-  const contentUrls =
-    getImageUrlsFromContent(content);
-
-  const attachmentUrls =
-    getImageUrlsFromAttachments(hallMessage);
-
-  const approvalImageData =
-    await findApprovalImagesForHall(
-      client,
-      hallMessage,
-      {
-        eventName:
-          options.eventName ||
-          extractHallParts(content).eventName,
-
-        winnerNames:
-          options.winnerNames ||
-          extractWinnerNamesForApprovalMatch(content)
-      }
-    ).catch(() => ({
-      found: false,
-      messageId: null,
-      images: [],
-      reason:
-        "Erro ao procurar aprovação"
-    }));
-
-  const approvalUrls =
-    approvalImageData.found
-      ? approvalImageData.images
-      : [];
-
+  // A mensagem atual é a fonte das imagens.
+  // Aprovações antigas não participam da edição.
   return uniqueImageUrls([
-    ...manualUrls,
-    ...contentUrls,
-    ...attachmentUrls,
-    ...approvalUrls
+    ...getImageUrlsFromContent(content),
+    ...getImageUrlsFromAttachments(hallMessage)
   ]);
 }
 
@@ -10907,7 +10883,12 @@ rankings.paymentEventKeys[
     return rankings;
   }
 
-  async function addHallToRankings(rankings, message, client = null) {
+  async function addHallToRankings(
+    rankings,
+    message,
+    client = null,
+    resolvedEvidence = null
+  ) {
     const content = getHallMessageText(message);
     const normalizedContent = normalizeHallName(content);
 
@@ -10919,15 +10900,27 @@ rankings.paymentEventKeys[
     if (normalizedContent.includes("revisao manual")) return rankings;
     if (normalizedContent.includes("varredura hall da fama")) return rankings;
 
-    const evidence = client
-      ? await resolveHallEvidence(client, message, content)
-      : {
-          cityKey: detectHallCityKey(content),
-          cityName: detectHallCityName(content),
-          eventName: normalizeHallEventName(extractRawHallEventName(content), detectHallCityKey(content)),
-          source: "texto_do_hall",
-          confidence: 35
-        };
+    const evidence = resolvedEvidence ?? (
+      client
+        ? await resolveHallEvidence(
+            client,
+            message,
+            content
+          )
+        : {
+            cityKey:
+              detectHallCityKey(content),
+            cityName:
+              detectHallCityName(content),
+            eventName:
+              normalizeHallEventName(
+                extractRawHallEventName(content),
+                detectHallCityKey(content)
+              ),
+            source: "texto_do_hall",
+            confidence: 35
+          }
+    );
 
     const cityKey = evidence.cityKey || "nobre";
 
@@ -14641,11 +14634,438 @@ let correctionProcessed = 0;
         const needsContentUpdate =
           fixed !== msg.content;
 
-        const needsImageConversion =
-          canRestoreApprovedImages;
+async function autoCorrectDuplications(channel, client, options = {}) {
+  const showProgress = options.showProgress ?? true;
 
-        const needsAttachmentCleanup =
-          canRestoreApprovedImages;
+  // Proteção interna, além de hallScanRunning dos chamadores.
+  // Impede duas execuções desta função no mesmo processo.
+  const scanLocks =
+    globalThis.__SC_HALL_SCAN_LOCKS__ ??=
+      new Set();
+
+  const lockKey =
+    `${client.user.id}:${channel.id}`;
+
+  if (scanLocks.has(lockKey)) {
+    throw new Error(
+      "Já existe uma varredura deste Hall da Fama em andamento."
+    );
+  }
+
+  scanLocks.add(lockKey);
+
+  const startedAt = Date.now();
+
+  // Limites explícitos. Se ultrapassar, não publica ranking parcial.
+  const maximumPages = 200;
+  const maximumDurationMs = 30 * 60 * 1000;
+
+  const assertScanDeadline = () => {
+    if (
+      Date.now() - startedAt >
+      maximumDurationMs
+    ) {
+      throw new Error(
+        "A varredura ultrapassou 30 minutos. " +
+        "Os Halls não foram editados e o ranking anterior foi mantido."
+      );
+    }
+  };
+
+  try {
+    if (!channel?.isTextBased?.()) {
+      throw new Error(
+        "Canal do Hall da Fama inválido."
+      );
+    }
+
+    const messagesById = new Map();
+
+    let beforeId = null;
+    let reachedEnd = false;
+
+    if (showProgress) {
+      await updateHallScanProgress(client, {
+        status:
+          "Buscando Halls para análise, sem alterar publicações.",
+        forceNewApprovalPanel: true,
+        totalMessages: 0,
+        edited: 0,
+        processed: 0,
+        currentDate: "Preparando...",
+        currentEvent: "Preparando...",
+        currentCity: "Preparando..."
+      });
+    }
+
+    for (
+      let page = 0;
+      page < maximumPages;
+      page++
+    ) {
+      assertScanDeadline();
+
+      // Erro de fetch precisa interromper.
+      // Não pode ser interpretado como fim do histórico.
+      const batch = await channel.messages.fetch(
+        beforeId
+          ? { limit: 100, before: beforeId }
+          : { limit: 100 }
+      );
+
+      if (batch.size === 0) {
+        reachedEnd = true;
+        break;
+      }
+
+      let added = 0;
+
+      for (const message of batch.values()) {
+        if (!messagesById.has(message.id)) {
+          messagesById.set(
+            message.id,
+            message
+          );
+
+          added++;
+        }
+      }
+
+      const oldest = [...batch.values()].reduce(
+        (currentOldest, message) => {
+          if (!currentOldest) return message;
+
+          return BigInt(message.id) <
+            BigInt(currentOldest.id)
+            ? message
+            : currentOldest;
+        },
+        null
+      );
+
+      const nextBeforeId = oldest?.id;
+
+      if (
+        !nextBeforeId ||
+        nextBeforeId === beforeId ||
+        added === 0 ||
+        (
+          beforeId &&
+          BigInt(nextBeforeId) >= BigInt(beforeId)
+        )
+      ) {
+        throw new Error(
+          "A paginação não avançou. " +
+          "A varredura foi interrompida sem alterar os Halls."
+        );
+      }
+
+      beforeId = nextBeforeId;
+
+      if (
+        showProgress &&
+        (
+          page === 0 ||
+          (page + 1) % 5 === 0
+        )
+      ) {
+        await updateHallScanProgress(client, {
+          status:
+            "Buscando histórico, sem alterar imagens.",
+          totalMessages: messagesById.size,
+          edited: 0,
+          currentHallUrl:
+            getMessageJumpUrl(oldest),
+          currentHallPostedAt:
+            oldest.createdTimestamp
+              ? `<t:${Math.floor(
+                  oldest.createdTimestamp / 1000
+                )}:F>`
+              : "Não identificado"
+        });
+      }
+
+      if (batch.size < 100) {
+        reachedEnd = true;
+        break;
+      }
+    }
+
+    if (!reachedEnd) {
+      throw new Error(
+        `O histórico ultrapassou ${maximumPages} páginas. ` +
+        "O ranking anterior foi mantido para evitar uma reconstrução incompleta."
+      );
+    }
+
+    const allMessages = [
+      ...messagesById.values()
+    ];
+
+    const hallMessages = allMessages.filter(message => {
+      const normalized = normalizeHallName(
+        getHallMessageText(message)
+      );
+
+      if (
+        !normalized.includes("hall da fama")
+      ) {
+        return false;
+      }
+
+      const excludedTexts = [
+        "ranking de orgs",
+        "ranking de pessoas",
+        "top 10 organizacoes",
+        "top 10 pessoas",
+        "revisao manual",
+        "varredura hall da fama"
+      ];
+
+      if (
+        excludedTexts.some(text =>
+          normalized.includes(text)
+        )
+      ) {
+        return false;
+      }
+
+      const migration =
+        state.historicalHallMigrations?.[
+          message.id
+        ];
+
+      return migration?.status !== "completed";
+    });
+
+    if (hallMessages.length === 0) {
+      if (showProgress) {
+        await updateHallScanProgress(client, {
+          status:
+            "Nenhum Hall encontrado. Ranking anterior preservado.",
+          totalMessages: allMessages.length,
+          totalHalls: 0,
+          processed: 0,
+          edited: 0,
+          currentDate: "Finalizado",
+          currentEvent: "Nenhum",
+          currentCity: "Nenhuma"
+        });
+      }
+
+      return;
+    }
+
+    hallMessages.sort((a, b) => {
+      return (
+        (a.createdTimestamp || 0) -
+        (b.createdTimestamp || 0)
+      );
+    });
+
+    const previousRankings =
+      loadHallRankings();
+
+    const rankings =
+      createEmptyHallRankingData(
+        previousRankings
+      );
+
+    const botHallCount =
+      hallMessages.filter(message =>
+        message.author?.id === client.user.id
+      ).length;
+
+    let processed = 0;
+
+    if (showProgress) {
+      await updateHallScanProgress(client, {
+        status:
+          "Analisando Halls atuais. Publicações e imagens preservadas.",
+        totalMessages: allMessages.length,
+        totalHalls: hallMessages.length,
+        botHalls: botHallCount,
+        processed: 0,
+        edited: 0,
+        progressCurrent: 0,
+        progressTotal: hallMessages.length,
+        phase: "Análise e ranking"
+      });
+    }
+
+    for (const message of hallMessages) {
+      assertScanDeadline();
+
+      // Uma única resolução de evidências por Hall.
+      const text =
+        getHallMessageText(message);
+
+      const evidence =
+        await resolveHallEvidence(
+          client,
+          message,
+          text
+        );
+
+      await addHallToRankings(
+        rankings,
+        message,
+        client,
+        evidence
+      );
+
+      processed++;
+
+      if (
+        showProgress &&
+        (
+          processed === 1 ||
+          processed % 10 === 0 ||
+          processed === hallMessages.length
+        )
+      ) {
+        await updateHallScanProgress(client, {
+          status:
+            "Analisando Halls, sem editar texto ou imagens.",
+          totalMessages: allMessages.length,
+          totalHalls: hallMessages.length,
+          botHalls: botHallCount,
+          processed,
+          edited: 0,
+          progressCurrent: processed,
+          progressTotal: hallMessages.length,
+          pending:
+            Object.keys(
+              rankings.pendingReview || {}
+            ).length,
+          currentHallUrl:
+            getMessageJumpUrl(message),
+          currentHallPostedAt:
+            message.createdTimestamp
+              ? `<t:${Math.floor(
+                  message.createdTimestamp / 1000
+                )}:F>`
+              : "Não identificado",
+          currentHallAuthor:
+            message.author
+              ? `${message.author.tag || message.author.username} (${message.author.id})`
+              : "Não identificado",
+          currentEvent:
+            evidence.eventName || "Evento",
+          currentCity:
+            evidence.cityName ||
+            CITIES[evidence.cityKey]?.label ||
+            "Não identificada",
+          phase: "Análise e ranking"
+        });
+      }
+    }
+
+    assertScanDeadline();
+
+    await addPaymentEventsToPlayerRankings(
+      rankings,
+      client
+    );
+
+    normalizeExistingPlayerRankingOverrides(
+      rankings
+    );
+
+    await sendPlayerIdentitySimilarityReviews(
+      client,
+      rankings
+    );
+
+    assertScanDeadline();
+
+    rankings.lastUpdatedAt = Date.now();
+
+    saveHallRankings(rankings);
+
+    await publishHallRankings(
+      client,
+      rankings
+    );
+
+    const durationSeconds =
+      Math.floor(
+        (Date.now() - startedAt) / 1000
+      );
+
+    if (showProgress) {
+      await updateHallScanProgress(client, {
+        status:
+          `Finalizado em ${durationSeconds}s. ` +
+          "Halls preservados; ranking atualizado.",
+        totalMessages: allMessages.length,
+        totalHalls: hallMessages.length,
+        botHalls: botHallCount,
+        processed,
+        edited: 0,
+        progressCurrent: processed,
+        progressTotal: hallMessages.length,
+        pending:
+          Object.keys(
+            rankings.pendingReview || {}
+          ).length,
+        currentDate: "Finalizado",
+        currentEvent:
+          "Todos os Halls processados",
+        currentCity:
+          "Todas as cidades analisadas",
+        phase: "Finalizado"
+      });
+
+      await sendHallScanLog(client, {
+        title:
+          "✅ Varredura finalizada sem alterar Halls",
+        color: "#2ecc71",
+        description:
+          `Halls analisados: **${processed}**\n` +
+          "Halls editados pela varredura: **0**\n" +
+          `Duração: **${durationSeconds}s**\n\n` +
+          "Texto, anexos e links das publicações foram preservados.",
+        totalMessages: allMessages.length,
+        totalHalls: hallMessages.length,
+        processed,
+        edited: 0,
+        phase: "Finalizado"
+      });
+    }
+  } catch (error) {
+    console.error(
+      "[HallDaFama] Falha na varredura:",
+      error
+    );
+
+    if (showProgress) {
+      await updateHallScanProgress(client, {
+        status:
+          "Varredura interrompida por erro. Halls preservados.",
+        edited: 0,
+        phase: "Erro"
+      }).catch(() => {});
+
+      await sendHallScanLog(client, {
+        title:
+          "❌ Varredura interrompida",
+        color: "#e74c3c",
+        description:
+          String(
+            error?.stack || error
+          ).slice(0, 1500),
+        phase: "Erro"
+      }).catch(() => {});
+    }
+
+    // O chamador precisa saber que houve falha.
+    // Não marcar a varredura como concluída.
+    throw error;
+  } finally {
+    scanLocks.delete(lockKey);
+  }
+}
 
         const needsImageLinkRecovery =
           shouldKeepImagesAsLinks &&
@@ -17519,14 +17939,16 @@ const row = new ActionRowBuilder().addComponents(
           hallChannel,
           client,
           {
-            showProgress:
-              true,
-
-            auditInteraction:
-              interaction
+            showProgress: true,
+            auditInteraction: interaction
           }
         );
-        state.lastAutoCorrectScanKey = "";
+
+        state.historicalRankingRebuildPending =
+          false;
+
+        markHallScanDoneToday();
+
         saveState(state);
 
         await interaction.editReply({
@@ -18446,104 +18868,113 @@ ${formatHallClosingLine(
 
 ${mentionsLine}`;
 
-const manualImageFieldWasFilled =
-  manualImageUrlInput.length > 0;
+// Campo vazio significa remoção explícita.
+// Campo preenchido sem URLs válidas não pode apagar imagens.
+if (
+  manualImageUrlInput.length > 0 &&
+  manualImageUrls.length === 0
+) {
+  return interaction.editReply(
+    "❌ O campo de imagens foi preenchido, " +
+    "mas nenhum link válido foi reconhecido. " +
+    "O Hall foi mantido."
+  );
+}
+
+const requestedImageUrls =
+  uniqueImageUrls(
+    manualImageUrls
+  );
+
+if (requestedImageUrls.length > 4) {
+  return interaction.editReply(
+    "❌ Informe no máximo 4 imagens. " +
+    "Nenhuma alteração foi aplicada."
+  );
+}
+
+const manualImagesWereRemoved =
+  manualImageUrlInput.length === 0 &&
+  currentHallImageUrls.length > 0;
 
 const manualImagesWereChanged =
-  manualImageFieldWasFilled &&
+  !manualImagesWereRemoved &&
   !haveSameHallImageUrls(
-    manualImageUrls,
+    requestedImageUrls,
     currentHallImageUrls
   );
 
-const manualImagesWereRemoved =
-  !manualImageFieldWasFilled &&
-  currentHallImageUrls.length > 0;
+let imageFiles = [];
+let contentImageUrls = [];
 
-const replacingExistingImages =
-  manualImagesWereChanged ||
-  manualImagesWereRemoved;
-
-const imageEditData =
-  manualImagesWereChanged
-    ? await prepareHallImageEdit(
-        messageToEdit,
-        finalImageUrls,
-        {
-          replaceExisting: true
-        }
-      )
-    : {
-        attachments: manualImagesWereRemoved
-          ? []
-          : [
-              ...messageToEdit.attachments.values()
-            ].map(attachment => ({
-              id: attachment.id
-            })),
-        files: [],
-        shouldReplaceAttachments:
-          manualImagesWereRemoved,
-        reuploadedExisting: false,
-        hasImages:
-          !manualImagesWereRemoved &&
-          messageToEdit.attachments.size > 0
-      };
-
-  const editedTopCount =
-    countHallTopLines(
-      newWinnersText
+if (manualImagesWereRemoved) {
+  // Não reutiliza finalImageUrls: ele pode conter
+  // as imagens antigas recuperadas pelo código acima.
+  contentImageUrls = [];
+} else if (manualImagesWereChanged) {
+  // A seleção manual é exclusiva.
+  // Não mistura imagens antigas com as novas.
+  imageFiles =
+    await downloadHallImageAttachments(
+      requestedImageUrls
     );
-
-  const shouldKeepEditedImagesAsLinks =
-    finalImageUrls.length > 1 ||
-    editedTopCount > 1;
-
-  const finalMessageBase =
-    shouldKeepEditedImagesAsLinks &&
-    finalImageUrls.length > 0
-      ? `${finalMessageWithUrls.trim()}\n\n${finalImageUrls.join("\n")}`
-      : finalMessageWithUrls;
-
-  const finalMessage =
-    shouldKeepEditedImagesAsLinks
-      ? finalMessageBase
-      : (
-          imageEditData.hasImages
-            ? removeHallImageUrlsFromContent(
-                finalMessageBase,
-                finalImageUrls
-              )
-            : finalMessageBase
-        );
-
-  if (finalMessage.length > 2000) {
-    return interaction.editReply(
-      "❌ O conteúdo editado é muito longo (mais de 2000 caracteres) e não pode ser salvo. Por favor, reduza o texto dos vencedores."
-    );
-  }
-
-  const editPayload = {
-    content: finalMessage
-  };
-
-  if (shouldKeepEditedImagesAsLinks) {
-    editPayload.attachments = [];
-  } else if (
-    replacingExistingImages ||
-    imageEditData.attachments.length > 0
-  ) {
-    editPayload.attachments =
-      imageEditData.attachments;
-  }
 
   if (
-    !shouldKeepEditedImagesAsLinks &&
-    imageEditData.files.length > 0
+    imageFiles.length !==
+    requestedImageUrls.length
   ) {
-    editPayload.files =
-      imageEditData.files;
+    return interaction.editReply(
+      "❌ Não foi possível baixar todas as imagens novas. " +
+      "O Hall e suas imagens anteriores foram mantidos."
+    );
   }
+
+  // As novas imagens serão anexadas.
+  // Não publica os mesmos arquivos também como links.
+  contentImageUrls = [];
+} else {
+  // Sem troca de imagem:
+  // conserva os links que já existiam no texto,
+  // e mantém todos os anexos pelo comportamento de edit().
+  contentImageUrls =
+    getImageUrlsFromContent(
+      oldContent
+    );
+}
+
+const finalMessage =
+  contentImageUrls.length > 0
+    ? (
+        `${finalMessageWithUrls.trim()}\n\n` +
+        contentImageUrls.join("\n")
+      )
+    : finalMessageWithUrls;
+
+if (finalMessage.length > 2000) {
+  return interaction.editReply(
+    "❌ O conteúdo editado ultrapassa 2000 caracteres. " +
+    "Reduza o texto dos vencedores. " +
+    "Nenhuma alteração foi aplicada."
+  );
+}
+
+const editPayload = {
+  content: finalMessage,
+  allowedMentions: {
+    parse: []
+  }
+};
+
+if (manualImagesWereRemoved) {
+  editPayload.attachments = [];
+} else if (manualImagesWereChanged) {
+  // Substituição completa somente quando solicitada.
+  editPayload.attachments = [];
+  editPayload.files = imageFiles;
+}
+
+// Quando as imagens não mudaram, não envia
+// attachments nem files: os anexos atuais permanecem.
 
   const editedHallMessage = await messageToEdit.edit(editPayload);
 
