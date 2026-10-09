@@ -490,9 +490,20 @@ export function installSiteHubApi({
 
   const snapshotKey = (guild, member, action, payload = {}) => {
     const moduleKey = action === 'history.snapshot' ? payload.module : action.split('.')[0];
-    const cleanPayload = { ...payload }; delete cleanPayload.refresh;
+    const cleanPayload = { ...payload };
+    delete cleanPayload.refresh;
+    delete cleanPayload.requireFresh;
+    const permissionChannels = new Set(CHANNELS[moduleKey] || []);
+    if (moduleKey === 'events') {
+      permissionChannels.add('1457577651152883797');
+      const cds = String(process.env.SANTA_EVENTS_CDS_CHANNEL_ID || '').trim();
+      if (cds) permissionChannels.add(cds);
+      for (const channel of guild.channels.cache.values()) {
+        if (channel.parentId === '1457577651152883797') permissionChannels.add(channel.id);
+      }
+    }
     const permissionKey = [member.roles.cache.map(role => role.id).sort(),
-      member.permissions.bitfield.toString(), (CHANNELS[moduleKey] || []).map(id => {
+      member.permissions.bitfield.toString(), [...permissionChannels].sort().map(id => {
         const channel = guild.channels.cache.get(id);
         return [id, channel?.permissionsFor(member)?.bitfield.toString() || ''];
       })];
@@ -683,13 +694,13 @@ export function installSiteHubApi({
           if (saved?.fresh && !payload.refresh) return res.json(deliver(saved));
           const task = snapshots.begin(key);
           if (!task.owner) {
-            if (saved) return res.json(deliver({ ...saved, fresh:false }));
+            if (saved && !payload.requireFresh) return res.json(deliver({ ...saved, fresh:false }));
             const result = await task.promise;
             if (result.error) throw result.error;
             return res.json(result.value);
           }
           const realResponse = res;
-          const background = Boolean(saved);
+          const background = Boolean(saved && !payload.requireFresh);
           if (background) realResponse.json(deliver({ ...saved, fresh:false }));
           let statusCode = 200;
           res = {

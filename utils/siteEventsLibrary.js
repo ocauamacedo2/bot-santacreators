@@ -7,14 +7,13 @@ const MAIN = '1457573495952248883';
 const MENUS = '1457577651152883797';
 
 const EDIT_ROLES = [
-  '1262262852949905408',
   '1352408327983861844',
   '1262262852949905409',
   '1352407252216184833',
   '1388976314253312100'
 ];
 
-const SECTIONS = ['links', 'adms', 'audios', 'org', 'cds'];
+const SECTIONS = ['links', 'uniforms', 'adms', 'audios', 'org', 'daily', 'rules', 'cds'];
 
 const fail = (status, message) =>
   Object.assign(new Error(message), { status });
@@ -23,7 +22,13 @@ const digest = value =>
   createHash('sha256').update(JSON.stringify(value)).digest('hex');
 
 export function eventMediaUrl(value) {
-  const url = new URL(String(value || '').trim());
+  let url;
+
+  try {
+    url = new URL(String(value || '').trim());
+  } catch {
+    throw fail(400, 'Use um link HTTPS válido.');
+  }
 
   if (url.protocol !== 'https:' || url.username || url.password) {
     throw fail(400, 'Use um link HTTPS válido.');
@@ -121,13 +126,25 @@ export function createSiteEventsLibrary({ client }) {
       state = { evt3Events: {} };
     }
 
-    const events = Object.entries(state.evt3Events || {}).map(
-      ([id, value]) => ({
-        id,
-        name: value.eventName || 'Evento',
-        areas: value.areas || {}
-      })
-    );
+    const grouped = new Map();
+    for (const [id, value] of Object.entries(state.evt3Events || {})) {
+      const name = String(value.eventName || 'Evento')
+        .replace(/^[#\s]+/, '').replace(/[*_`]/g, '').trim();
+      const key = name.normalize('NFKD').replace(/[\u0300-\u036f]/g, '')
+        .toLocaleLowerCase('pt-BR').replace(/\s+/g, ' ');
+      let event = grouped.get(key);
+      if (!event) {
+        event = { id, name, aliasIds: [], areas: {} };
+        grouped.set(key, event);
+      }
+      event.aliasIds.push(id);
+      for (const [section, area] of Object.entries(value.areas || {})) {
+        const ids = event.areas[section]?.threadIds || [];
+        if (area.threadId && !ids.includes(area.threadId)) ids.push(area.threadId);
+        event.areas[section] = { ...area, threadId: ids[0], threadIds: ids };
+      }
+    }
+    const events = [...grouped.values()];
 
     const cds = String(
       process.env.SANTA_EVENTS_CDS_CHANNEL_ID || ''
@@ -152,28 +169,42 @@ export function createSiteEventsLibrary({ client }) {
     return events;
   }
 
+  async function eventSources(guild, member, event, section) {
+    if (!SECTIONS.includes(section)) throw fail(400, 'Seção inválida.');
+    const state = await read();
+    const saved = state.targets?.[guild.id + ':' + event.id + ':' + section];
+    const ids = section === 'cds'
+      ? [String(process.env.SANTA_EVENTS_CDS_CHANNEL_ID || '')]
+      : [saved, ...(event.areas[section]?.threadIds || []), event.areas[section]?.threadId];
+    const result = [];
+    for (const id of new Set(ids.filter(Boolean))) {
+      try {
+        result.push(await channel(guild, member, id, section === 'cds' ? null : MENUS));
+      } catch (error) {
+        if (Number(error.code) !== 10003) throw error;
+      }
+    }
+    return result;
+  }
+
   async function target(guild, member, event, section) {
-    if (!SECTIONS.includes(section)) {
-      throw fail(400, 'Seção inválida.');
-    }
-
-    const id = section === 'cds'
-      ? String(process.env.SANTA_EVENTS_CDS_CHANNEL_ID || '')
-      : event.areas[section]?.threadId;
-
-    if (!id) {
-      throw fail(
-        409,
-        'Abra esta área pelo painel do evento no Discord antes de adicionar conteúdo pelo site.'
-      );
-    }
-
-    return channel(
-      guild,
-      member,
-      id,
-      section === 'cds' ? null : MENUS
-    );
+    return serial(async () => {
+      const existing = await eventSources(guild, member, event, section);
+      if (existing.length) return existing[0];
+      if (section === 'cds') throw fail(409, 'Configure o canal de CDS antes de editar.');
+      const parent = await channel(guild, member, MENUS);
+      const created = await parent.threads.create({
+        name: (event.name + ' • ' + section).slice(0, 100),
+        type: 11,
+        autoArchiveDuration: 1440,
+        reason: 'Biblioteca de eventos da Santa Creators'
+      });
+      const state = await read();
+      state.targets ||= {};
+      state.targets[guild.id + ':' + event.id + ':' + section] = created.id;
+      await save(state);
+      return created;
+    });
   }
 
   function mediaOf(message) {
@@ -264,7 +295,16 @@ export function createSiteEventsLibrary({ client }) {
     const result = {
       events: events.map(event => ({
         ...event,
-        cover: state.covers[guild.id + ':' + event.id] || ''
+        name: state.names?.[guild.id + ':' + event.id] || event.name,
+        metadataRevision: digest([
+          state.names?.[guild.id + ':' + event.id] || event.name,
+          Object.hasOwn(state.covers, guild.id + ':' + event.id)
+          ? state.covers[guild.id + ':' + event.id]
+          : (event.aliasIds || [event.id]).map(id => state.covers[guild.id + ':' + id]).find(Boolean) || ''
+        ]),
+        cover: Object.hasOwn(state.covers, guild.id + ':' + event.id)
+          ? state.covers[guild.id + ':' + event.id]
+          : (event.aliasIds || [event.id]).map(id => state.covers[guild.id + ':' + id]).find(Boolean) || ''
       })),
       rights: { edit: mayEdit(member) },
       sections: {},
@@ -278,7 +318,7 @@ export function createSiteEventsLibrary({ client }) {
     if (!event) throw fail(404, 'Evento não encontrado.');
 
     const all = Object.values(state.items).filter(
-      item => item.guildId === guild.id && item.eventId === event.id
+      item => item.guildId === guild.id && (event.aliasIds || [event.id]).includes(item.eventId)
     );
 
     const mirrored = new Set(
@@ -289,11 +329,15 @@ export function createSiteEventsLibrary({ client }) {
       if (event.id === 'cds' && section !== 'cds') continue;
       if (event.id !== 'cds' && section === 'cds') continue;
 
-      result.sections[section] = [];
+           result.sections[section] = [];
+      if (payload.section && payload.section !== section) continue;
 
-      if (event.areas[section]?.threadId || section === 'cds') {
+    
+
+      {
         try {
-          const source = await target(guild, member, event, section);
+          const sources = await eventSources(guild, member, event, section);
+          for (const source of sources) {
           const page = await messages(source);
 
           if (page.truncated) {
@@ -343,7 +387,9 @@ export function createSiteEventsLibrary({ client }) {
               source: true
             });
           }
+          }
         } catch (error) {
+          if (error.status === 403 || error.status === 401) throw error;
           result.warnings.push(error.message);
         }
       }
@@ -379,12 +425,12 @@ export function createSiteEventsLibrary({ client }) {
       !SECTIONS.includes(value.section) ||
       !value.title ||
       value.title.length > 120 ||
-      value.text.length > 10000 ||
+      value.text.length > (value.section === 'rules' ? 25000 : 10000) ||
       value.media.length > 12
     ) {
       throw fail(
         400,
-        'Informe título de até 120 caracteres, texto de até 10000 e no máximo 12 links.'
+        'Use título de até 120 caracteres, texto de até 10000 (25000 nas regras) e no máximo 12 links.'
       );
     }
 
@@ -402,6 +448,27 @@ export function createSiteEventsLibrary({ client }) {
         403,
         'Somente responsáveis e Coord. Creators podem editar eventos.'
       );
+    }
+
+    if (action === 'events.metadata') {
+      return serial(async () => {
+        const current = await snapshot(guild, member, {});
+        const event = current.events.find(item => item.id === payload.eventId);
+        if (!event) throw fail(404, 'Evento não encontrado.');
+        if (event.metadataRevision !== payload.revision) throw fail(409, 'O evento mudou. Atualize antes de editar.');
+        if (!['name', 'cover'].includes(payload.field)) throw fail(400, 'Campo de evento inválido.');
+        const value = String(payload.value || '').trim();
+        if (payload.field === 'name' && (!value || value.length > 120)) throw fail(400, 'Use um nome de até 120 caracteres.');
+        const state = await read();
+        if (payload.field === 'name') {
+          state.names ||= {};
+          state.names[guild.id + ':' + event.id] = value;
+        } else {
+          state.covers[guild.id + ':' + event.id] = value ? eventMediaUrl(value) : '';
+        }
+        await save(state);
+        return { ok: true };
+      });
     }
 
     const value = input(payload);
@@ -473,7 +540,7 @@ export function createSiteEventsLibrary({ client }) {
         old &&
         (
           old.guildId !== guild.id ||
-          old.eventId !== value.eventId ||
+          !(event.aliasIds || [event.id]).includes(old.eventId) ||
           old.section !== value.section
         )
       ) {
@@ -482,7 +549,7 @@ export function createSiteEventsLibrary({ client }) {
 
       if (value.id) {
         const current = old || (
-          await snapshot(guild, member, { eventId: value.eventId })
+          await snapshot(guild, member, { eventId: value.eventId, section: value.section })
         ).sections[value.section]?.find(item => item.id === value.id);
 
         if (!current || current.revision !== value.revision) {
@@ -519,6 +586,17 @@ export function createSiteEventsLibrary({ client }) {
         }
 
         return { ok: true, warnings };
+      }
+
+      if (value.section === 'audios') {
+        const current = await snapshot(guild, member, { eventId: event.id, section: 'audios' });
+        const count = (current.sections.audios || [])
+          .filter(record => record.id !== value.id)
+          .reduce((total, record) => total + record.media.filter(media => media.kind === 'audio').length, 0);
+        const added = value.media.filter(media => media.kind === 'audio').length;
+        if (!added || count + added > 10) {
+          throw fail(400, 'Cada evento permite até 10 áudios. Edite ou remova um áudio existente.');
+        }
       }
 
       const item = {
@@ -562,7 +640,9 @@ export function createSiteEventsLibrary({ client }) {
         }
 
         state.items[item.id] = item;
-        state.covers[guild.id + ':' + event.id] = value.cover;
+        if (!Object.hasOwn(state.covers, guild.id + ':' + event.id)) {
+          state.covers[guild.id + ':' + event.id] = value.cover;
+        }
 
         for (const id of old?.messageIds || []) {
           state.hidden[guild.id + ':' + source.id + ':' + id] = true;

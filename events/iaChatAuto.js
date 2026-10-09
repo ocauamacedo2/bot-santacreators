@@ -21024,8 +21024,23 @@ for (
               model:
                 modelName,
 
-              contents:
-                [...conversation, ...standaloneContents],
+              contents: [
+                ...conversation,
+                {
+                  role: "user",
+                  parts: typeof standaloneContents === "string"
+                    ? [{ text: standaloneContents }]
+                    : Array.isArray(standaloneContents)
+                      ? standaloneContents.flatMap(part =>
+                          typeof part === "string"
+                            ? [{ text: part }]
+                            : Array.isArray(part?.parts)
+                              ? part.parts
+                              : [part]
+                        )
+                      : standaloneContents.parts
+                }
+              ],
 
               config: {
                 temperature,
