@@ -19,6 +19,55 @@ const STATE_FILE = path.join(
 const MAX_REQUESTS = 5000;
 const MAX_EXPECTATIONS = 1500;
 
+export {
+  recordExpectedOperationFromPublicApi as recordExpectedOperation,
+  recordApprovalCreatedFromPublicApi as recordApprovalCreated,
+  recordApprovalDecisionFromPublicApi as recordApprovalDecision,
+  markExpectedOperationPostedFromPublicApi as markExpectedOperationPosted,
+};
+
+function executeOperationalPublicWrite(operation, callback) {
+  try {
+    return callback();
+  } catch (error) {
+    console.error(
+      `[Approval Intelligence] ${operation} falhou. ` +
+      "Não repita uma aprovação ou publicação já realizada para recuperar apenas este registro.",
+      error
+    );
+
+    return false;
+  }
+}
+
+function recordExpectedOperationFromPublicApi(options = {}) {
+  return executeOperationalPublicWrite(
+    "Registro de operação esperada",
+    () => recordExpectedOperationInternal(options)
+  );
+}
+
+function recordApprovalCreatedFromPublicApi(options = {}) {
+  return executeOperationalPublicWrite(
+    "Registro de solicitação",
+    () => recordApprovalCreatedInternal(options)
+  );
+}
+
+function recordApprovalDecisionFromPublicApi(options = {}) {
+  return executeOperationalPublicWrite(
+    "Registro de decisão",
+    () => recordApprovalDecisionInternal(options)
+  );
+}
+
+function markExpectedOperationPostedFromPublicApi(options = {}) {
+  return executeOperationalPublicWrite(
+    "Registro de publicação",
+    () => markExpectedOperationPostedInternal(options)
+  );
+}
+
 // ============================================================================
 // PERSISTÊNCIA
 // ============================================================================
