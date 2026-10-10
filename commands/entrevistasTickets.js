@@ -6495,6 +6495,36 @@ console.log(
 
     const ATENDENTE_ID_FINAL = atendenteId || idAssumido || CLOSED_BY_ID;
 
+    // =====================================================
+    // PARTICIPAÇÃO REAL DOS CREATORS
+    // =====================================================
+    //
+    // Usa somente mensagens humanas reconhecidas
+    // pela verificação de equipe já executada.
+    //
+    // Não considera bots nem o autor do ticket.
+    // Não faz novas chamadas à API do Discord.
+    // =====================================================
+
+    const participantesDoAtendimento = [
+      ...contagemAtendentes.entries()
+    ]
+      .sort(
+        (a, b) =>
+          b[1].count - a[1].count
+      )
+      .map(
+        ([userId, dados]) =>
+          `<@${userId}>: ${dados.count} mensagem(ns)`
+      );
+
+    const resumoParticipantes =
+      participantesDoAtendimento.length
+        ? participantesDoAtendimento
+            .slice(0, 15)
+            .join('\n')
+        : 'Nenhum integrante autorizado teve participação identificada nas mensagens.';
+
     const horarioAbertura   =
       sorted.at(0)?.createdAt ||
       new Date();
@@ -6642,23 +6672,47 @@ console.log(
           mensagensParaAnalise,
       });
 
-    const ticketOperationalRecord =
-      await withTimeout(
-        ticketOperationalPromise,
-        8_000,
-        "analyzeAndRecordTicket"
-      )
-        .catch(
-          error => {
-            console.error(
-              '[TICKET IA/NPS] A análise não terminou a tempo ou falhou. O fechamento continuará normalmente:',
-              error?.message ||
-                error
-            );
+    // =====================================================
+    // SANTA CREATORS — ANÁLISE ANTES DO FECHAMENTO
+    // =====================================================
+    //
+    // A função analyzeAndRecordTicket já possui:
+    // - tentativas de modelos Gemini;
+    // - timeout individual por modelo;
+    // - avaliação determinística de fallback;
+    // - persistência do registro operacional.
+    //
+    // Não interrompemos a espera após 8 segundos,
+    // pois isso descarta o resultado para o log.
+    // =====================================================
 
-            return null;
-          }
-        );
+    const inicioAnaliseOperacional = Date.now();
+
+    let ticketOperationalRecord = null;
+
+    try {
+      ticketOperationalRecord =
+        await ticketOperationalPromise;
+
+      console.log(
+        `[TICKET IA/NPS] Canal ${canalId} | ` +
+        `Análise concluída em ` +
+        `${Date.now() - inicioAnaliseOperacional}ms | ` +
+        `Fonte: ${
+          ticketOperationalRecord?.evaluation?.source ||
+          'não informada'
+        }`
+      );
+
+    } catch (error) {
+      console.error(
+        `[TICKET IA/NPS] Falha na análise operacional ` +
+        `do ticket ${canalId}:`,
+        error?.stack ||
+        error?.message ||
+        error
+      );
+    }
 
     // =====================================================
     // 🎫 FORMS / GI
@@ -7604,6 +7658,29 @@ console.log(
 // TEXTOS AMIGÁVEIS DA AVALIAÇÃO DO TICKET
 // ============================================================================
 
+// =====================================================
+// SANTA CREATORS — ORIGEM DA ANÁLISE
+// =====================================================
+
+const fonteAnalise =
+  String(
+    ticketOperationalRecord
+      ?.evaluation
+      ?.source ||
+    ''
+  );
+
+const origemAnaliseAmigavel =
+  fonteAnalise.startsWith('gemini:')
+    ? `🧠 Gemini (${fonteAnalise.replace('gemini:', '')})`
+    : fonteAnalise === 'fallback'
+      ? '⚠️ Avaliação automática de emergência'
+      : '❌ Análise não concluída';
+
+// =====================================================
+// TEXTOS AMIGÁVEIS DA AVALIAÇÃO DO TICKET
+// =====================================================
+
 const resultadoBruto =
   ticketOperationalRecord
     ?.evaluation
@@ -7781,6 +7858,11 @@ const embedLog = new EmbedBuilder()
         { name: "📨 Ticket aberto por:",  value: idAberto ? `<@${idAberto}>` : "Desconhecido", inline: true },
         { name: "✅ Ticket fechado por:", value: closedByLabel, inline: true },
         { name: "🎨 Creator que atendeu:", value: `<@${ATENDENTE_ID_FINAL}>`, inline: true },
+        {
+          name: "👥 Creators que participaram:",
+          value: resumoParticipantes.slice(0, 1024),
+          inline: false
+        },
         { name: "🆔 Canal do ticket:",    value: `\`${canalId}\``, inline: false },
         { name: "🕒 Abertura:",           value: `<t:${Math.floor(horarioAbertura.getTime() / 1000)}:f>`, inline: true },
         { name: "🕓 Fechamento:",         value: `<t:${Math.floor(horarioFechamento.getTime() / 1000)}:f>`, inline: true },
@@ -7822,7 +7904,8 @@ const embedLog = new EmbedBuilder()
 
     `**Tempo total do atendimento:** ${tempoTotalAmigavel}\n` +
 
-    `**Confiança da análise:** ${confiancaAmigavel}`
+    `**Confiança da análise:** ${confiancaAmigavel}\n` +
+`**Origem da análise:** ${origemAnaliseAmigavel}`
 }
       )
       .setFooter({ text: "SantaCreators", iconURL: guild.iconURL() });
