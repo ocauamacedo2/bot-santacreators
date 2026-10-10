@@ -702,7 +702,7 @@ const AI_LEADER_SUPPORT_CATEGORY_IDS = new Set([
 ]);
 
 const AI_HUMAN_TEAM_SILENCE_MS =
-  5 * 60 * 1000;
+  4 * 60 * 60 * 1000;
 
 // =====================================================
 // IA — FOLLOW-UP DE TICKET SEM RESPOSTA
@@ -716,7 +716,7 @@ const AI_HUMAN_TEAM_SILENCE_MS =
 // =====================================================
 
 const AI_TICKET_IDLE_FOLLOWUP_MS =
-  10 * 60 * 1000;
+  4 * 60 * 60 * 1000;
 
 const AI_TICKET_ASSIST_ACTIVE = new Map();
 
@@ -726,6 +726,72 @@ const AI_TICKET_ASSIST_PENDING_MESSAGES =
   new Map();
 
 const AI_TICKET_IDLE_TIMERS = new Map();
+
+// =====================================================
+// SANTA CREATORS — ESCALONAMENTO DE SOLICITAÇÕES
+// =====================================================
+
+const AI_TICKET_ESCALATION_DELAY_MS =
+  2 * 60 * 1000;
+
+const AI_TICKET_ESCALATION_TIMERS =
+  new Map();
+
+const AI_TICKET_ESCALATION_ROLE_PRIORITY = [
+  {
+    name: "Coordenação Creators",
+    roleId: "1352385500614234134",
+  },
+  {
+    name: "Responsável Líder",
+    roleId: "1352407252216184833",
+  },
+  {
+    name: "Responsável Influência",
+    roleId: "1262262852949905409",
+  },
+  {
+    name: "Responsável Creators",
+    roleId: "1352408327983861844",
+  },
+  {
+    name: "Owner",
+    roleId: "1262262852949905408",
+  },
+];
+
+const AI_TICKET_ESCALATION_MACEDO_ID =
+  "660311795327828008";
+
+function isAiTicketEscalationCandidate(message) {
+  const content = String(
+    message?.content || ""
+  )
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim();
+
+  if (!content || content.length < 12) {
+    return false;
+  }
+
+  return (
+    /\b(preciso de ajuda|preciso de autorizacao|preciso de aprovacao|solicito ajuda|solicito aprovacao|solicito autorizacao|preciso falar com|preciso de um responsavel|alguem da coordenacao|quero falar com um superior|pode encaminhar|poderia encaminhar|preciso reportar|quero denunciar)\b/i.test(content)
+  );
+}
+
+function cancelAiTicketEscalation(channelId) {
+  const key = String(channelId || "");
+
+  const timer =
+    AI_TICKET_ESCALATION_TIMERS.get(key);
+
+  if (timer) {
+    clearTimeout(timer);
+    AI_TICKET_ESCALATION_TIMERS.delete(key);
+  }
+}
 
 const AI_LEADER_SUPPORT_HUMAN_ACTIVITY = new Map();
 
@@ -25463,21 +25529,25 @@ async function handleAiTicketAssistMessage(
       : false;
 
   const repliedToAI =
-    personalTicketMode
-      ? await messageRepliesToCurrentAI(
-          message,
-          client
-        )
-      : false;
+    await messageRepliesToCurrentAI(
+      message,
+      client
+    );
 
   const creatorExplicitlyCalledAI =
     isAuthorizedStaff &&
     !isOpener &&
-    mentionedBot;
+    (
+      mentionedBot ||
+      repliedToAI
+    );
 
   const openerExplicitlyCalledAI =
     isOpener &&
-    mentionedBot;
+    (
+      mentionedBot ||
+      repliedToAI
+    );
 
   const personalExplicitAiCall =
     personalTicketMode &&
@@ -25494,6 +25564,106 @@ async function handleAiTicketAssistMessage(
 
   const now =
     Date.now();
+
+  // =====================================================
+  // SANTA CREATORS — PRIORIDADE ABSOLUTA À CONVERSA HUMANA
+  // =====================================================
+  //
+  // Uma mensagem normal no ticket não é automaticamente
+  // uma pergunta para a inteligência artificial.
+  //
+  // Menção direta ou reply para a IA permite resposta.
+  //
+  // Mensagens comuns permanecem registradas, mas não
+  // são respondidas imediatamente.
+  // =====================================================
+
+  if (!explicitAiCall) {
+    if (
+      isAuthorizedStaff &&
+      !isOpener
+    ) {
+      clearAiTicketIdleFollowUp(
+        message.channelId
+      );
+
+      saveAiTicketAssistState(
+        message.channelId,
+        {
+          ...state,
+          active: false,
+          pausedByStaff: true,
+          pausedBy: message.author.id,
+          pausedAt: now,
+          lastHumanHelperId: message.author.id,
+          lastHumanHelperAt: now,
+          handoffNoticeSent: true,
+        }
+      );
+
+      console.log(
+        `[IA TICKET] Atendimento humano detectado: ` +
+        `${message.channelId} | ` +
+        `Creator: ${message.author.id}`
+      );
+
+      return true;
+    }
+
+    if (isOpener) {
+      // Registra a atividade sem iniciar resposta da IA.
+      saveAiTicketAssistState(
+        message.channelId,
+        {
+          ...state,
+          openerId,
+          lastCandidateMessageAt: now,
+          lastHumanMessageAt: now,
+        }
+      );
+
+      // Se já existe atendimento humano, a IA não
+      // programa uma nova intervenção automática.
+      if (!state.pausedByStaff) {
+        scheduleAiTicketIdleFollowUp(
+          message.channel,
+          openerId,
+          client
+        );
+      } else {
+        clearAiTicketIdleFollowUp(
+          message.channelId
+        );
+      }
+
+      console.log(
+        `[IA TICKET] Mensagem comum registrada sem resposta: ` +
+        `${message.channelId} | ` +
+        `Autor: ${message.author.id}`
+      );
+
+      return true;
+    }
+
+    // Terceiros não acionam a IA automaticamente.
+    clearAiTicketIdleFollowUp(
+      message.channelId
+    );
+
+    return true;
+  }
+
+  // =====================================================
+  // CHAMADA DIRETA DA IA
+  // =====================================================
+  //
+  // Somente mensagens direcionadas ao bot continuam
+  // pelo fluxo normal de geração de resposta.
+  // =====================================================
+
+  clearAiTicketIdleFollowUp(
+    message.channelId
+  );
 
   // =====================================================
   // CREATOR / RESPONSÁVEL PARTICIPOU DO TICKET
