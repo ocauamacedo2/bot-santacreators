@@ -280,6 +280,7 @@ export function createSiteTeamRequests({
   canApproveCreators,
   canRejectCreators,
   handleCreators,
+  canManageStaff,
 }) {
   async function categoryAccess(guild, member, key) {
     const definition = DEFINITIONS[key];
@@ -354,20 +355,28 @@ export function createSiteTeamRequests({
   }
 
   async function canView(guild, member) {
-    for (const key of Object.keys(DEFINITIONS)) {
+    for (const [key, definition] of Object.entries(DEFINITIONS)) {
       try {
-        if (await categoryAccess(guild, member, key)) {
-          return true;
-        }
-      } catch (error) {
-        if (error?.status === 403 || error?.status === 503) {
+        if (key === 'staff' && typeof canManageStaff === 'function') {
+          const channel = guild.channels.cache.get(definition.channelId) ||
+            await guild.channels.fetch(definition.channelId);
+          const permissions = channel?.permissionsFor(member);
+          if (
+            channel?.isTextBased() && channel.messages &&
+            channel.guildId === guild.id &&
+            permissions?.has(['ViewChannel', 'ReadMessageHistory']) &&
+            canManageStaff(member)
+          ) {
+            return true;
+          }
           continue;
         }
-
+        if (await categoryAccess(guild, member, key)) return true;
+      } catch (error) {
+        if (error?.status === 403 || error?.status === 503) continue;
         throw error;
       }
     }
-
     return false;
   }
 

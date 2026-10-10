@@ -465,6 +465,9 @@ export function installSiteHubApi({
   const teamRequests = createSiteTeamRequests({
     client,
 
+    canManageStaff:
+      canManageSetStaffFromSite,
+
     getStaffSnapshot:
       getSetStaffSiteSnapshot,
 
@@ -674,13 +677,59 @@ const experience = createSiteHubExperience({
     maxBytes: 2 * 1024 * 1024,
     maxTotalBytes: 32 * 1024 * 1024,
   });
-  for (const event of ['guildMemberUpdate','guildMemberRemove','channelUpdate','channelDelete','roleUpdate','roleDelete'])
-    client.on(event, () => snapshots.invalidate());
+  const memberReads = new Map();
+
+  async function resolveSiteMember(guild, actorId, force = false) {
+    const id = guild.id + ':' + actorId;
+    const previous = memberReads.get(id);
+    if (!force && previous && Date.now() - previous.at < 30000) {
+      return previous.promise;
+    }
+    const record = { at: Date.now(), promise: null };
+    record.promise = guild.members.fetch({ user: actorId, force: true })
+      .then(member => {
+        record.at = Date.now();
+        return member;
+      })
+      .catch(error => {
+        if (memberReads.get(id) === record) memberReads.delete(id);
+        if (Number(error.code) === 10007) return null;
+        throw Object.assign(new Error('Não foi possível verificar seu vínculo com o Discord.'), { status: 503 });
+      });
+    memberReads.delete(id);
+    memberReads.set(id, record);
+    while (memberReads.size > 256) {
+      memberReads.delete(memberReads.keys().next().value);
+    }
+    return record.promise;
+  }
+
+  for (const event of ['guildMemberUpdate', 'guildMemberRemove']) {
+    client.on(event, (first, second) => {
+      const member = second || first;
+      memberReads.delete(member.guild.id + ':' + member.id);
+      snapshots.invalidate();
+    });
+  }
+  for (const event of ['channelUpdate', 'channelDelete', 'roleUpdate', 'roleDelete']) {
+    client.on(event, () => {
+      permissionsRefreshedAt = 0;
+      snapshots.invalidate();
+    });
+  }
   for (const event of ['messageCreate', 'messageUpdate', 'messageDelete', 'messageDeleteBulk']) {
     client.on(event, (first, second) => {
       const messages = event === 'messageDeleteBulk' ? [...first.values()] : [second || first];
-      if (messages.some(message => Object.values(CHANNELS).flat().includes(message?.channelId) ||
-        Object.values(CHANNELS).flat().includes(message?.channel?.parentId))) snapshots.invalidate();
+      for (const [module, channels] of Object.entries(CHANNELS)) {
+        const watched = module === 'staff' ? [...channels,
+          '1428003736671883405', '1352706078621696030',
+          String(process.env.SETSTAFF_V2_CANAL_REGISTRO || '1379024704957841509').trim()
+        ] : channels;
+        if (messages.some(message => watched.includes(message?.channelId) ||
+          watched.includes(message?.channel?.parentId))) {
+          snapshots.invalidate(module);
+        }
+      }
     });
   }
 
@@ -719,7 +768,7 @@ const experience = createSiteHubExperience({
         quizRankingSignature =
           signature;
 
-        snapshots.invalidate();
+        snapshots.invalidate('quiz');
       }
     } catch (error) {
       console.warn(
@@ -760,7 +809,18 @@ const experience = createSiteHubExperience({
     delete cleanPayload.refresh;
     delete cleanPayload.requireFresh;
     delete cleanPayload.poll;
-    const permissionChannels = new Set(CHANNELS[moduleKey] || []);
+    const permissionChannels = new Set(
+      action === 'bootstrap' ? Object.values(CHANNELS).flat() :
+      action === 'teamRequests.list' ? CHANNELS.staff || [] :
+      CHANNELS[moduleKey] || []
+    );
+    if (action === 'bootstrap' || action === 'teamRequests.list') {
+      permissionChannels.add('1428003736671883405');
+      permissionChannels.add('1352706078621696030');
+      permissionChannels.add(String(
+        process.env.SETSTAFF_V2_CANAL_REGISTRO || '1379024704957841509'
+      ).trim());
+    }
     if (moduleKey === 'events') {
       permissionChannels.add('1457577651152883797');
       const cds = String(process.env.SANTA_EVENTS_CDS_CHANNEL_ID || '').trim();
@@ -930,6 +990,7 @@ const experience = createSiteHubExperience({
           action === 'ai.ask' ||
           action.endsWith('.snapshot') ||
           [
+            'cache.authorize',
             'teamRequests.list',
             'workflow.catalog',
             'workflow.list',
@@ -963,12 +1024,11 @@ const experience = createSiteHubExperience({
           }
           return res.status(403).json({ error: 'Esta área exige login ou acesso ao canal do Discord.' });
         }
-        const member =
-          await guild.members
-            .fetch({ user: actorId, force: action !== 'changes.snapshot' })
-            .catch(
-              () => null
-            );
+        const member = await resolveSiteMember(
+          guild,
+          actorId,
+          !permissionRead
+        );
 
         if (!member) {
           return res
@@ -1063,21 +1123,39 @@ const experience = createSiteHubExperience({
         }
 
         if (action === 'changes.snapshot') return res.json({ revision: snapshots.revision() });
+        const authorizeStoredRead = async (requested, requestedPayload = {}) => {
+          if (requested === 'bootstrap') return;
+          if (requested === 'teamRequests.list') {
+            if (
+              (!isOfficialSantaCreatorsTeamMember(member) && member.id !== '660311795327828008') ||
+              !await teamRequests.canView(guild, member)
+            ) {
+              throw Object.assign(new Error('Você não possui acesso aos pedidos da equipe.'), { status: 403 });
+            }
+            return;
+          }
+          const module = requested === 'history.snapshot'
+            ? requestedPayload.module : requested.split('.')[0];
+          if (!requested.endsWith('.snapshot') || !CHANNELS[module]) {
+            throw Object.assign(new Error('Consulta de cache inválida.'), { status: 400 });
+          }
+          await assertModuleView(client, member, module);
+        };
+
         if (action === 'cache.authorize') {
           const requested = String(payload.action || '');
           const requestedPayload = payload.payload || {};
-          const module = requested === 'history.snapshot' ? requestedPayload.module : requested.split('.')[0];
-          if (!requested.endsWith('.snapshot') || !CHANNELS[module]) {
-            return res.status(400).json({ error: 'Consulta de cache inválida.' });
-          }
-          await assertModuleView(client, member, module);
+          await authorizeStoredRead(requested, requestedPayload);
           return res.json({ scope: snapshotKey(guild, member, requested, requestedPayload) });
         }
 
         // Autorizar ANTES de ler qualquer consulta persistida, inclusive em atualização manual.
-        const moduleKey = action.split('.')[0];
-        if (action.endsWith('.snapshot') && CHANNELS[moduleKey]) {
-          await assertModuleView(client, member, moduleKey);
+        const moduleKey = action === 'teamRequests.list' ? 'staff' : action.split('.')[0];
+        if (
+          action === 'bootstrap' || action === 'teamRequests.list' ||
+          (action.endsWith('.snapshot') && CHANNELS[moduleKey])
+        ) {
+          await authorizeStoredRead(action, payload);
           const key = snapshotKey(guild, member, action, payload);
           const saved = snapshots.get(key);
           const deliver = record => {
@@ -1093,6 +1171,13 @@ const experience = createSiteHubExperience({
             return { ...value, cacheScope: key,
               delivery: { savedAt: record.at, updating: !record.fresh, source: 'consulta-salva' } };
           };
+          const previousError = snapshots.error(key);
+          if (previousError) {
+            if (saved && !payload.requireFresh) {
+              return res.json(deliver({ ...saved, fresh: false }));
+            }
+            throw previousError;
+          }
           if (
             saved?.fresh &&
             (!payload.refresh || payload.poll)
@@ -1100,7 +1185,7 @@ const experience = createSiteHubExperience({
             return res.json(deliver(saved));
           }
 
-          const task = snapshots.begin(key);
+          const task = snapshots.begin(key, moduleKey);
 
           if (!task.owner) {
             if (saved && !payload.requireFresh) {
@@ -1112,27 +1197,13 @@ const experience = createSiteHubExperience({
               );
             }
 
-            if (
-              ['weekly', 'quiz'].includes(moduleKey)
-            ) {
-              return res.status(202).json({
-                pending: true
-              });
-            }
-
-            const result = await task.promise;
-
-            if (result.error) {
-              throw result.error;
-            }
-
-            return res.json(result.value);
+            return res.status(202).json({
+              pending: true
+            });
           }
           const realResponse = res;
 
-          const background =
-            Boolean(saved && !payload.requireFresh) ||
-            ['weekly', 'quiz'].includes(moduleKey);
+          const background = true;
 
           if (background) {
             if (saved && !payload.requireFresh) {
@@ -1165,7 +1236,19 @@ const experience = createSiteHubExperience({
                 value.cacheScope = key;
                 snapshots.finish(key,value);
               }
-              if (!background) return realResponse.status(statusCode).json(value);
+              const stored = snapshots.get(key);
+              if (statusCode < 400 && !value?.error && !stored) {
+                statusCode = 413;
+                value = { error: 'Não foi possível armazenar esta consulta: o resultado excedeu o limite permitido.' };
+              }
+              if (!background) {
+                return realResponse.status(statusCode).json(
+                  statusCode < 400 && stored ? deliver(stored) : value
+                );
+              }
+              if (statusCode >= 400) {
+                console.warn('[SITE CONSULTAS]', moduleKey, statusCode, value?.error);
+              }
               return value;
             }
           };
