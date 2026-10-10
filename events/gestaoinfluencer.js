@@ -13528,6 +13528,239 @@ dashOn(
 // SITE HUB • CONTROLE GI
 // =====================================================
 
+function canManageGISiteTarget(
+  actor,
+  target,
+  targetId,
+  extraAllowedRoleIds = []
+) {
+  if (!hasScopedGIActionAuth(actor, extraAllowedRoleIds)) {
+    return false;
+  }
+
+  if (isHierarchyBypassMember(actor)) {
+    return true;
+  }
+
+  if (String(actor.id) === String(targetId || '')) {
+    return false;
+  }
+
+  if (!target) {
+    return true;
+  }
+
+  if (typeof getOfficialSantaCreatorsAuthorityLevel !== 'function') {
+    return false;
+  }
+
+  const actorLevel =
+    getOfficialSantaCreatorsAuthorityLevel(actor);
+
+  const targetLevel =
+    getOfficialSantaCreatorsAuthorityLevel(target);
+
+  if (!Number.isFinite(actorLevel)) {
+    return false;
+  }
+
+  return !Number.isFinite(targetLevel) ||
+    actorLevel < targetLevel;
+}
+
+async function getGISiteVisibleChannelUrl(
+  guild,
+  actor,
+  channelId
+) {
+  if (!/^\d{17,20}$/.test(String(channelId || ''))) {
+    return null;
+  }
+
+  const channel = await guild.channels
+    .fetch(String(channelId))
+    .catch(() => null);
+
+  if (
+    !channel ||
+    String(channel.guildId || channel.guild?.id) !== String(guild.id)
+  ) {
+    return null;
+  }
+
+  const permissions = channel.permissionsFor(actor);
+
+  if (
+    !permissions?.has([
+      PermissionFlagsBits.ViewChannel,
+      PermissionFlagsBits.ReadMessageHistory,
+    ])
+  ) {
+    return null;
+  }
+
+  if (
+    channel.type === ChannelType.PrivateThread &&
+    !permissions.has(PermissionFlagsBits.ManageThreads)
+  ) {
+    const membership = await channel.members
+      .fetch(actor.id)
+      .catch(() => null);
+
+    if (!membership) {
+      return null;
+    }
+  }
+
+  return `https://discord.com/channels/${guild.id}/${channel.id}`;
+}
+
+async function enrichGISiteRecords(guild, actor, records) {
+  const targets = new Map();
+  const links = new Map();
+
+  let next = 0;
+
+  const targetFor = id => {
+    const key = String(id);
+
+    if (!targets.has(key)) {
+      targets.set(
+        key,
+        guild.members.fetch(key).catch(() => null)
+      );
+    }
+
+    return targets.get(key);
+  };
+
+  const linksFor = rec => {
+    const key =
+      `${rec.targetId}:${rec.personalTicketChannelId || ''}`;
+
+    if (!links.has(key)) {
+      links.set(
+        key,
+        (async () => {
+          const personal = await resolvePersonalTicketInfo(
+            guild.id,
+            rec.targetId,
+            rec.personalTicketChannelId
+          ).catch(() => null);
+
+          let formsId = null;
+
+          if (
+            typeof findFormsCreatorThreadLinkByUserId === 'function'
+          ) {
+            const formsUrl =
+              await findFormsCreatorThreadLinkByUserId(
+                client,
+                rec.targetId,
+                guild.id
+              ).catch(() => null);
+
+            const match = String(formsUrl || '').match(
+              /^https:\/\/discord\.com\/channels\/(\d{17,20})\/(\d{17,20})$/
+            );
+
+            if (match?.[1] === String(guild.id)) {
+              formsId = match[2];
+            }
+          }
+
+          if (
+            !formsId &&
+            typeof findFormsCreatorThreadIdFastByUserId === 'function'
+          ) {
+            formsId =
+              findFormsCreatorThreadIdFastByUserId(rec.targetId);
+          }
+
+          const [
+            personalTicketUrl,
+            formsUrl,
+          ] = await Promise.all([
+            getGISiteVisibleChannelUrl(
+              guild,
+              actor,
+              personal?.channelId
+            ),
+
+            getGISiteVisibleChannelUrl(
+              guild,
+              actor,
+              formsId
+            ),
+          ]);
+
+          return {
+            personalTicketUrl,
+            formsUrl,
+          };
+        })()
+      );
+    }
+
+    return links.get(key);
+  };
+
+  const worker = async () => {
+    while (next < records.length) {
+      const item = records[next++];
+      const rec = SC_GI_STATE.registros.get(item.messageId);
+
+      const target = await targetFor(item.targetId);
+
+      const scoped = [
+        SC_GI_CFG.ROLE_COORD_CREATORS,
+      ];
+
+      item.rights = {
+        toggle: canManageGISiteTarget(
+          actor,
+          target,
+          item.targetId,
+          scoped
+        ),
+
+        refresh: canManageGISiteTarget(
+          actor,
+          target,
+          item.targetId,
+          [
+            ...scoped,
+            SC_GI_CFG.ROLE_GESTOR_CREATORS,
+          ]
+        ),
+
+        disconnect: canManageGISiteTarget(
+          actor,
+          target,
+          item.targetId,
+          scoped
+        ),
+      };
+
+      item.links = rec
+        ? await linksFor(rec)
+        : {
+            personalTicketUrl: null,
+            formsUrl: null,
+          };
+    }
+  };
+
+  await Promise.all(
+    Array.from(
+      { length: Math.min(4, records.length) },
+      worker
+    )
+  );
+
+  return records;
+}
+
 globalThis.__SC_GI_SITE_API__ = {
   async snapshot({
     actorId,
@@ -13544,9 +13777,10 @@ globalThis.__SC_GI_SITE_API__ = {
 
     const actor =
       await guild.members
-        .fetch(
-          String(actorId)
-        )
+        .fetch({
+          user: String(actorId),
+          force: true,
+        })
         .catch(
           () => null
         );
@@ -13659,7 +13893,11 @@ globalThis.__SC_GI_SITE_API__ = {
           ),
       },
 
-      records,
+      records: await enrichGISiteRecords(
+        guild,
+        actor,
+        records
+      ),
     };
   },
 

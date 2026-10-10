@@ -2593,28 +2593,177 @@ export function getSetStaffSiteOptions() {
   };
 }
 
+async function recoverSetStaffPendingFromDiscord(channel) {
+  if (!channel?.messages?.fetch) {
+    return;
+  }
+
+  const known = new Set(
+    collectSetStaffRequests().map(
+      item => String(item.msgId || '')
+    )
+  );
+
+  let before;
+  const recovered = [];
+
+  for (let pageIndex = 0; pageIndex < 5; pageIndex++) {
+    const page = await channel.messages.fetch({
+      limit: 100,
+      ...(before ? { before } : {}),
+    });
+
+    if (!page.size) {
+      break;
+    }
+
+    const messages = [...page.values()].sort(
+      (a, b) => b.createdTimestamp - a.createdTimestamp
+    );
+
+    for (const message of messages) {
+      if (
+        known.has(String(message.id)) ||
+        message.author?.id !== channel.client.user.id
+      ) {
+        continue;
+      }
+
+      const buttons = message.components.flatMap(
+        row => row.components || []
+      );
+
+      const approve = buttons.find(
+        button =>
+          !button.disabled &&
+          /^ss2_aprovar_\d{17,20}$/.test(
+            button.customId || ''
+          )
+      );
+
+      const reject = buttons.find(
+        button =>
+          !button.disabled &&
+          button.customId ===
+            approve?.customId.replace(
+              'ss2_aprovar_',
+              'ss2_reprovar_'
+            )
+      );
+
+      if (!approve || !reject) {
+        continue;
+      }
+
+      const userId = approve.customId.slice(
+        'ss2_aprovar_'.length
+      );
+
+      const request = reconstruirPedidoDoEmbed(
+        message.embeds[0],
+        userId
+      );
+
+      if (!request) {
+        continue;
+      }
+
+      recovered.push({
+        ...request,
+        msgId: message.id,
+        createdAt: message.createdTimestamp,
+      });
+
+      known.add(String(message.id));
+    }
+
+    before = messages.at(-1).id;
+
+    if (page.size < 100) {
+      break;
+    }
+  }
+
+  if (recovered.length) {
+    const all = loadAll();
+
+    for (const request of recovered) {
+      if (all.byMsgId[request.msgId]) {
+        continue;
+      }
+
+      all.byMsgId[request.msgId] = request;
+      all.users[request.userId] ??= [];
+
+      const alreadyInHistory = all.users[
+        request.userId
+      ].some(
+        item =>
+          String(item.msgId) === request.msgId
+      );
+
+      if (!alreadyInHistory) {
+        all.users[request.userId].push(request);
+      }
+    }
+
+    saveAll(all);
+  }
+
+  return recovered.length;
+}
+
 export async function getSetStaffSiteSnapshot({
   guild,
   actorId,
 }) {
-  const actor =
-    await guild.members
-      .fetch(
-        String(actorId)
-      )
-      .catch(
-        () => null
-      );
+  const actor = await guild.members
+    .fetch({
+      user: String(actorId),
+      force: true,
+    })
+    .catch(() => null);
 
-  const channel = guild.channels.cache.get(CFG.CANAL_REGISTRO) ||
-    await guild.channels.fetch(CFG.CANAL_REGISTRO).catch(() => null);
-  if (!actor || !channel?.permissionsFor(actor)?.has('ViewChannel')) {
-    throw Object.assign(new Error('Você não possui acesso ao canal de Set Staff.'), { status: 403 });
+  const channel = await guild.channels
+    .fetch(CFG.CANAL_REGISTRO)
+    .catch(() => null);
+
+  if (
+    !actor ||
+    channel?.guildId !== guild.id ||
+    !channel?.messages ||
+    !channel.permissionsFor(actor)?.has([
+      'ViewChannel',
+      'ReadMessageHistory',
+    ])
+  ) {
+    throw Object.assign(
+      new Error(
+        'Você não possui acesso ao histórico de Set Staff.'
+      ),
+      {
+        status: 403,
+      }
+    );
   }
 
-  const requests = collectSetStaffRequests().sort(
-    (a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0)
+  await recoverSetStaffPendingFromDiscord(channel);
+
+  const canDecide = canApproveMember(
+    actor,
+    actor.id
   );
+
+  const requests = collectSetStaffRequests()
+    .filter(request =>
+      canDecide ||
+      String(request.userId) === actor.id
+    )
+    .sort(
+      (a, b) =>
+        Number(b.createdAt || 0) -
+        Number(a.createdAt || 0)
+    );
 
   const now =
     new Date();
@@ -2661,7 +2810,7 @@ export async function getSetStaffSiteSnapshot({
         true,
 
       decide:
-        canApproveMember(actor, actorId),
+        canDecide,
     },
 
     stats: {

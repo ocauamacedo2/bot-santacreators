@@ -1,6 +1,22 @@
+import { createSiteTeamRequests } from "../utils/siteTeamRequests.js";
+
+import {
+  createSiteNotifications,
+} from "../utils/siteNotifications.js";
+
+import {
+  pedirSetHandleInteraction,
+  canApproveCreatorsSetFromSite,
+  canRejectCreatorsSetFromSite,
+} from "./pedirset.js";
+
 import { createSiteSnapshotStore } from "../utils/siteSnapshotStore.js";
 import { createSiteEventsLibrary } from "../utils/siteEventsLibrary.js";
 import { getCronogramaSiteData } from "../utils/cronogramaSiteRead.js";
+
+import {
+  createQuizRemoteClient,
+} from '../utils/quizSiteBridge.js';
 import { fileURLToPath as snapshotPath } from "node:url";
 import express from "express";
 import { timingSafeEqual } from "node:crypto";
@@ -23,7 +39,27 @@ import {
 
 import {
   getHallSiteSnapshot,
+  hallSiteWorkflow,
 } from "./hallDaFama.js";
+
+import {
+  dailySiteWorkflow,
+} from "./eventosDiarios.js";
+
+import {
+  alignmentSiteWorkflow,
+} from "./alinhamentos.js";
+
+import {
+  installApprovalAudit,
+} from "../utils/approvalAudit.js";
+
+import {
+  getChecklistSiteCatalog,
+  getChecklistSiteSnapshot,
+  checklistSiteAction,
+  getChecklistSitePendingNotifications,
+} from "./logChecklistSemanal.js";
 
 import {
   getHierarchySiteSnapshot,
@@ -81,6 +117,7 @@ import {
 
 import {
   getPagamentoSocialSiteSnapshot,
+  getPagamentoSocialSitePendingNotifications,
   refreshPagamentoSocialFromSite,
   pagamentoSocialSiteDecision,
 } from "./pagamentosocial.js";
@@ -104,6 +141,8 @@ const CHANNELS = {
 
   staff: [
     String(process.env.SETSTAFF_V2_CANAL_REGISTRO || "1379024704957841509").trim(),
+    "1428003736671883405",
+    "1352706078621696030",
   ],
 
   hall: [
@@ -293,6 +332,15 @@ async function canAccessSiteModule(
 ) {
   if (member?.id === '660311795327828008' && CHANNELS[moduleKey]) return true;
 
+  if (
+    moduleKey === 'events' &&
+    !isOfficialSantaCreatorsTeamMember(
+      member
+    )
+  ) {
+    return false;
+  }
+
   const channelIds =
     CHANNELS[
       moduleKey
@@ -356,14 +404,29 @@ async function assertModuleView(
 
 
 let permissionRefresh = null, permissionsRefreshedAt = 0;
-async function refreshDiscordPermissions(guild) {
-  if (guild.channels.cache.size && guild.roles.cache.has(guild.id)) return;
-  if (Date.now() - permissionsRefreshedAt < 30000) return;
-  if (!permissionRefresh) {
-    permissionRefresh = Promise.all([guild.channels.fetch(), guild.roles.fetch()])
-      .then(() => { permissionsRefreshedAt = Date.now(); })
-      .finally(() => { permissionRefresh = null; });
+async function refreshDiscordPermissions(guild, force = false) {
+  if (
+    !force &&
+    Date.now() - permissionsRefreshedAt < 30000 &&
+    guild.channels.cache.size &&
+    guild.roles.cache.has(guild.id)
+  ) {
+    return;
   }
+
+  if (!permissionRefresh) {
+    permissionRefresh = Promise.all([
+      guild.channels.fetch(),
+      guild.roles.fetch(),
+    ])
+      .then(() => {
+        permissionsRefreshedAt = Date.now();
+      })
+      .finally(() => {
+        permissionRefresh = null;
+      });
+  }
+
   await permissionRefresh;
 }
 
@@ -399,7 +462,137 @@ export function installSiteHubApi({
     return false;
   }
 
-  const experience = createSiteHubExperience({
+  const teamRequests = createSiteTeamRequests({
+    client,
+
+    getStaffSnapshot:
+      getSetStaffSiteSnapshot,
+
+    decideStaff:
+      decideSetStaffFromSite,
+
+    canApproveCreators:
+      canApproveCreatorsSetFromSite,
+
+    canRejectCreators:
+      canRejectCreatorsSetFromSite,
+
+    handleCreators:
+      pedirSetHandleInteraction,
+  });
+
+  installApprovalAudit(client);
+
+const workflowProviders = {
+  hall:
+    hallSiteWorkflow,
+
+  daily:
+    dailySiteWorkflow,
+
+  alignment:
+    alignmentSiteWorkflow,
+};
+
+const notifications = createSiteNotifications({
+  client,
+  teamRequests,
+  workflowProviders,
+
+  paymentPending:
+    getPagamentoSocialSitePendingNotifications,
+
+  checklistPending:
+    getChecklistSitePendingNotifications,
+
+  isTeamMember:
+    isOfficialSantaCreatorsTeamMember,
+});
+
+async function workflowCatalog(
+  guild,
+  member
+) {
+  if (
+    member.id !== '660311795327828008' &&
+    !isOfficialSantaCreatorsTeamMember(
+      member
+    )
+  ) {
+    return {
+      modules: [],
+      warnings: [],
+    };
+  }
+
+  const results =
+    await Promise.allSettled(
+      Object.entries(
+        workflowProviders
+      ).map(
+        async ([key, provider]) => ({
+          key,
+
+          data:
+            await provider.site({
+              client,
+              guild,
+              member,
+              action: 'catalog',
+            }),
+        })
+      )
+    );
+
+  const modules = [];
+
+  const warnings = [];
+
+  for (
+    let index = 0;
+    index < results.length;
+    index++
+  ) {
+    const result =
+      results[index];
+
+    if (
+      result.status === 'fulfilled'
+    ) {
+      modules.push(
+        result.value.data
+      );
+
+      continue;
+    }
+
+    if (
+      result.reason?.status !== 403
+    ) {
+      const key =
+        Object.keys(
+          workflowProviders
+        )[index];
+
+      console.error(
+        '[SITE HUB] Catálogo de publicações:',
+        key,
+        result.reason
+      );
+
+      warnings.push(
+        `Não foi possível consultar ${key}.`
+      );
+    }
+  }
+
+  return {
+    modules,
+    warnings,
+  };
+}
+
+const experience = createSiteHubExperience({
     client, channels: CHANNELS,
     isTeamMember: isOfficialSantaCreatorsTeamMember,
     getContext: async ({ guild, member, prompt }) => {
@@ -471,6 +664,9 @@ export function installSiteHubApi({
 
   const eventsLibrary = createSiteEventsLibrary({ client });
 
+  globalThis.__SC_QUIZ_SITE_API__ =
+    createQuizRemoteClient();
+
   const snapshots = createSiteSnapshotStore({
     directory: snapshotPath(new URL('../data/site-consultas/', import.meta.url)),
     freshMs: 30000,
@@ -487,6 +683,76 @@ export function installSiteHubApi({
         Object.values(CHANNELS).flat().includes(message?.channel?.parentId))) snapshots.invalidate();
     });
   }
+
+  let quizPollBusy = false;
+  let quizRankingSignature = null;
+
+  async function refreshQuizBridge() {
+    if (
+      quizPollBusy ||
+      !process.env.SANTA_QUIZ_API_URL
+    ) {
+      return;
+    }
+
+    quizPollBusy =
+      true;
+
+    try {
+      const result =
+        await globalThis
+          .__SC_QUIZ_SITE_API__
+          .snapshot({
+            refresh:
+              true,
+          });
+
+      const signature =
+        JSON.stringify(
+          result.ranking || []
+        );
+
+      if (
+        signature !==
+          quizRankingSignature
+      ) {
+        quizRankingSignature =
+          signature;
+
+        snapshots.invalidate();
+      }
+    } catch (error) {
+      console.warn(
+        '[SITE QUIZ SYNC]',
+        error.status ||
+          error.code ||
+          error.name
+      );
+    } finally {
+      quizPollBusy =
+        false;
+    }
+  }
+
+  const quizRefreshTimer =
+    setInterval(
+      () => {
+        void refreshQuizBridge();
+      },
+      30000
+    );
+
+  quizRefreshTimer.unref?.();
+
+  const quizInitialRefresh =
+    setTimeout(
+      () => {
+        void refreshQuizBridge();
+      },
+      1000
+    );
+
+  quizInitialRefresh.unref?.();
 
   const snapshotKey = (guild, member, action, payload = {}) => {
     const moduleKey = action === 'history.snapshot' ? payload.module : action.split('.')[0];
@@ -587,6 +853,39 @@ export function installSiteHubApi({
         }
 
         if (
+          action ===
+            'quiz.archive.read'
+        ) {
+          if (
+            actorId
+          ) {
+            return res
+              .status(403)
+              .json({
+                error:
+                  'Esta leitura é exclusiva do servidor do site.',
+              });
+          }
+
+          const snapshot =
+            await globalThis
+              .__SC_QUIZ_SITE_API__
+              .snapshot({
+                refresh:
+                  true,
+              });
+
+          return res.json({
+            ...snapshot,
+
+            rights: {
+              reset:
+                false,
+            },
+          });
+        }
+
+        if (
           !action.startsWith('public.') &&
           !/^\d{17,20}$/.test(actorId)
         ) {
@@ -623,7 +922,27 @@ export function installSiteHubApi({
         const guild = client.guilds.cache.get(GUILD_ID) ||
           await client.guilds.fetch(GUILD_ID);
 
-        await refreshDiscordPermissions(guild);
+        const permissionRead =
+          action === 'bootstrap' ||
+          action === 'profile-options' ||
+          action === 'identity.batch' ||
+          action === 'ai.ask' ||
+          action.endsWith('.snapshot') ||
+          [
+            'teamRequests.list',
+            'workflow.catalog',
+            'workflow.list',
+            'workflow.schema',
+            'events.published',
+          ].includes(action) ||
+          action.startsWith('history.') ||
+          action.startsWith('public.');
+
+        await refreshDiscordPermissions(
+          guild,
+          !permissionRead
+        );
+
         if (action.startsWith('public.')) {
           const modules = {};
           for (const key of ['hall', 'quiz']) {
@@ -659,6 +978,88 @@ export function installSiteHubApi({
             });
         }
 
+        if (
+          action === 'notifications.snapshot' ||
+          action === 'notifications.seen'
+        ) {
+          return res.json(
+            await notifications.handle({
+              guild,
+              member,
+              action,
+              payload,
+            })
+          );
+        }
+
+        if (
+          action.startsWith('notifications.')
+        ) {
+          return res.status(404).json({
+            error:
+              'Ação de notificação não encontrada.',
+          });
+        }
+
+        if (action === 'checklist.snapshot') {
+          return res.json(
+            await getChecklistSiteSnapshot({
+              guild,
+              member,
+            })
+          );
+        }
+
+        if (action === 'checklist.set') {
+          return res.json(
+            await checklistSiteAction({
+              client,
+              guild,
+              member,
+              payload,
+            })
+          );
+        }
+
+        if (action.startsWith('checklist.')) {
+          return res.status(404).json({
+            error:
+              'Ação de checklist não encontrada.',
+          });
+        }
+
+        if (
+          action ===
+            'events.published'
+        ) {
+          const allowed =
+            isOfficialSantaCreatorsTeamMember(
+              member
+            ) ||
+            isCreatorsCommunityMember(
+              member
+            );
+
+          if (
+            !allowed
+          ) {
+            return res
+              .status(403)
+              .json({
+                error:
+                  'Conclua seu acesso como cidadão para visualizar as regras.',
+              });
+          }
+
+          return res.json(
+            await eventsLibrary.handle({
+              guild,
+              member,
+              action,
+              payload,
+            })
+          );
+        }
 
         if (action === 'changes.snapshot') return res.json({ revision: snapshots.revision() });
         if (action === 'cache.authorize') {
@@ -722,8 +1123,18 @@ export function installSiteHubApi({
               return value;
             }
           };
-        } else if (!['bootstrap','profile-options','identity.batch','ai.ask'].includes(action) &&
-          !action.startsWith('history.') && !action.startsWith('profile.')) {
+} else if (![
+  'bootstrap',
+  'profile-options',
+  'identity.batch',
+  'ai.ask',
+  'teamRequests.list',
+  'workflow.catalog',
+  'workflow.list',
+  'workflow.schema',
+].includes(action) &&
+  !action.startsWith('history.') &&
+  !action.startsWith('profile.')) {
           // Toda escrita real passa pelas validações originais; a próxima consulta será refeita.
           snapshots.invalidate();
         }
@@ -741,7 +1152,121 @@ export function installSiteHubApi({
           );
         }
 
-        if (await experience.handle({ guild, member, action, payload, res })) return;
+        if (
+          action === 'teamRequests.list' ||
+          action === 'teamRequests.decide'
+        ) {
+          if (
+            !isOfficialSantaCreatorsTeamMember(member) &&
+            member.id !== '660311795327828008'
+          ) {
+            throw Object.assign(
+              new Error(
+                'Esta área é exclusiva da equipe autorizada.'
+              ),
+              { status: 403 }
+            );
+          }
+
+          return res.json(
+            action === 'teamRequests.list'
+              ? await teamRequests.list({
+                guild,
+                member,
+                payload,
+              })
+              : await teamRequests.decide({
+                guild,
+                member,
+                payload,
+              })
+          );
+        }
+
+        if (
+  action.startsWith('workflow.')
+) {
+  if (
+    member.id !== '660311795327828008' &&
+    !isOfficialSantaCreatorsTeamMember(
+      member
+    )
+  ) {
+    return res
+      .status(403)
+      .json({
+        error:
+          'Esta área é exclusiva da Central Creators.',
+      });
+  }
+
+  if (
+    action === 'workflow.catalog'
+  ) {
+    return res.json(
+      await workflowCatalog(
+        guild,
+        member
+      )
+    );
+  }
+
+  const workflowAction =
+    action.slice(
+      'workflow.'.length
+    );
+
+  if (
+    ![
+      'schema',
+      'create',
+      'list',
+      'prepare',
+      'decide',
+    ].includes(
+      workflowAction
+    )
+  ) {
+    return res
+      .status(404)
+      .json({
+        error:
+          'Ação de publicação não encontrada.',
+      });
+  }
+
+  const module =
+    String(
+      payload.module || ''
+    );
+
+  const provider =
+    workflowProviders[module];
+
+  if (!provider) {
+    return res
+      .status(400)
+      .json({
+        error:
+          'Escolha Hall da Fama, eventos diários ou alinhamentos.',
+      });
+  }
+
+  return res.json(
+    await provider.site({
+      client,
+      guild,
+      member,
+
+      action:
+        workflowAction,
+
+      payload,
+    })
+  );
+}
+
+if (await experience.handle({ guild, member, action, payload, res })) return;
 
         // ==========================================
         // BOOTSTRAP
@@ -767,6 +1292,60 @@ export function installSiteHubApi({
         ]
       )
     );
+
+  const eventsEntry =
+    entries.find(
+      ([key]) =>
+        key === 'events'
+    );
+
+  if (
+    eventsEntry &&
+    isCreatorsCommunityMember(
+      member
+    )
+  ) {
+    eventsEntry[1] =
+      true;
+  }
+
+  const isCentralMember =
+    member.id === '660311795327828008' ||
+    isOfficialSantaCreatorsTeamMember(member);
+
+  if (isCentralMember) {
+    const staffEntry = entries.find(
+      ([key]) => key === 'staff'
+    );
+
+    if (staffEntry) {
+      staffEntry[1] = await teamRequests.canView(
+        guild,
+        member
+      );
+    }
+  }
+
+  const workflowData = await workflowCatalog(
+    guild,
+    member
+  );
+
+  entries.push([
+    'workflow',
+    workflowData.modules.length > 0,
+  ]);
+
+  const checklistCatalog =
+    await getChecklistSiteCatalog({
+      guild,
+      member,
+    });
+
+  entries.push([
+    'checklist',
+    checklistCatalog.allowed,
+  ]);
 
   return res.json({
     modules:

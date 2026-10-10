@@ -239,8 +239,15 @@ export function createSiteHubExperience({ client, channels, isTeamMember, genera
         auditWarning = 'A conversa foi salva, mas não consegui gravar a fila das logs.';
         console.error('[SITE AI AUDIT]', error.code || error.message);
       }
-      return { answer: String(answer), discordSynced, discordWarning, threadUrl,
-        auditQueued, auditWarning, profile: context.profile };
+      return {
+        answer: String(answer),
+        discordSynced: false,
+        discordWarning: 'A conversa do site é privada.',
+        threadUrl: null,
+        auditQueued,
+        auditWarning,
+        profile: context.profile,
+      };
     } finally { aiLocks.delete(actor); }
   }
   async function preferences(guild, member) {

@@ -4,6 +4,14 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
 
+import {
+  hallVictoryTimestamp,
+  currentOrgItems,
+  orgSeasonItems,
+  createOrgResetPreview,
+  applyOrgResetPreview,
+} from "../utils/hallOrgPeriods.js";
+
 import { generateSantaCreatorsStandaloneText } from "./iaChatAuto.js";
 
 import {
@@ -21,7 +29,11 @@ import {
   AttachmentBuilder
 } from "discord.js";
 
-  import { dashEmit } from "../utils/dashHub.js";
+import { dashEmit } from "../utils/dashHub.js";
+
+import {
+  createApprovalWorkflow,
+} from "../utils/approvalWorkflow.js";
 
 import {
   recordApprovalCreated,
@@ -10143,6 +10155,15 @@ const eventName = normalizeHallEventName(hallMeta.eventName, cityKey);
       eventName,
       cityKey,
       cityName,
+      channelId: hallMeta.channelId || "",
+      guildId: hallMeta.guildId || "",
+      jumpUrl: hallMeta.jumpUrl || "",
+      historicalVictoryTimestamp: Number(
+        hallMeta.historicalVictoryTimestamp || 0
+      ),
+      createdTimestamp: Number(
+        hallMeta.createdTimestamp || 0
+      ),
       at: hallMeta.createdTimestamp || Date.now()
     });
   }
@@ -12401,10 +12422,670 @@ function applyDominantCityToRankingItems(
 }
 
 function getRankingLastWinAt(item = {}) {
-  return Math.max(
-    0,
-    ...(item.halls || []).map(hall => Number(hall.at || hall.createdTimestamp || hall.createdAt || 0))
+  return (item.halls || []).reduce(
+    (latest, hall) =>
+      Math.max(
+        latest,
+        hallVictoryTimestamp(hall)
+      ),
+    0
   );
+}
+
+const orgResetPreviews = new Map();
+
+function getDiscordOrgRankingItems(rankings) {
+  return mergeDuplicateOrgRankingItems(
+    applyDominantCityToRankingItems(
+      currentOrgItems(
+        rankings,
+        normalizeHallEventName
+      )
+    )
+  )
+    .filter(
+      org =>
+        !isInvalidWinnerName(org.name) &&
+        !looksLikePrizeOnly(org.name)
+    )
+    .sort(sortRankingByTotalAndRecent);
+}
+
+function getLifetimeHallOrgs(rankings) {
+  return mergeDuplicateOrgRankingItems(
+    applyDominantCityToRankingItems(
+      Object.values(rankings.orgs || {})
+    )
+  )
+    .filter(
+      org =>
+        !isInvalidWinnerName(org.name) &&
+        !looksLikePrizeOnly(org.name)
+    )
+    .sort(sortRankingByTotalAndRecent);
+}
+
+function getHallOrgSeasons(rankings) {
+  return orgSeasonItems(
+    rankings,
+    normalizeHallEventName
+  ).map(season => ({
+    id: season.id,
+    cityKey: season.cityKey,
+    cityName: CITIES[season.cityKey].label,
+    label: `Temporada ${season.number}`,
+    startAt: season.startAt,
+    endAt: season.endAt,
+    current: season.current,
+
+    ranking: mergeDuplicateOrgRankingItems(
+      season.items
+    )
+      .sort(sortRankingByTotalAndRecent)
+      .map((item, index) => ({
+        ...item,
+        position: index + 1,
+        cityKey: season.cityKey,
+        cityName: CITIES[season.cityKey].label,
+        lastWinAt: getRankingLastWinAt(item),
+      })),
+  }));
+}
+
+async function resolveOrgResetPreviewLinks(
+  client,
+  preview
+) {
+  const channel = await client.channels
+    .fetch(HALL_CHANNEL_ID)
+    .catch(() => null);
+
+  await Promise.all(
+    [
+      ...preview.removedExamples,
+      ...preview.keptExamples,
+    ].map(async sample => {
+      if (
+        sample.url ||
+        !channel?.isTextBased() ||
+        !/^\d{17,20}$/.test(sample.messageId)
+      ) {
+        return;
+      }
+
+      const message = await channel.messages
+        .fetch(sample.messageId)
+        .catch(() => null);
+
+      if (message?.guildId === preview.guildId) {
+        sample.url = message.url;
+      }
+    })
+  );
+}
+
+function orgResetPreviewPayload(preview) {
+  const examples = rows =>
+    rows.length
+      ? rows.map(row => {
+          const title = (
+            `${String(row.org).slice(0, 80)} • ` +
+            `${String(row.event).slice(0, 80)}`
+          ).replace(/[\[\]]/g, '');
+
+          const when =
+            `<t:${Math.floor(row.at / 1000)}:f>`;
+
+          const validLink =
+            /^https:\/\/discord\.com\/channels\/\d{17,20}\/\d{17,20}\/\d{17,20}$/
+              .test(row.url);
+
+          return (
+            validLink
+              ? `[${title}](${row.url})`
+              : title
+          ) + ` — ${when}`;
+        }).join('\n')
+      : 'Nenhum registro nesta faixa.';
+
+  const embed = new EmbedBuilder()
+    .setTitle('Confirmar reset de ORGs')
+    .setColor('#e67e22')
+    .setDescription(
+      `**${CITIES[preview.cityKey].label}**\n\n` +
+      `Sairão do painel do Discord as vitórias anteriores a **${preview.dateKey}**, no horário de São Paulo.\n\n` +
+      'As vitórias do dia escolhido e posteriores continuam. O total histórico do site e os Halls originais são preservados.'
+    )
+    .addFields(
+      {
+        name: 'Vitórias de ORGs que sairão do painel',
+        value: String(preview.removedWins),
+        inline: true,
+      },
+      {
+        name: 'Vitórias de ORGs que continuarão',
+        value: String(preview.keptWins),
+        inline: true,
+      },
+      {
+        name: 'Exemplos anteriores ao corte',
+        value: examples(
+          preview.removedExamples
+        ).slice(0, 1024),
+      },
+      {
+        name: 'Exemplos do corte em diante',
+        value: examples(
+          preview.keptExamples
+        ).slice(0, 1024),
+      },
+      {
+        name: 'Confirmação',
+        value:
+          'Somente quem abriu esta prévia pode confirmar. Ela expira em 2 minutos.',
+      }
+    )
+    .setTimestamp();
+
+  const buttons = new ActionRowBuilder()
+    .addComponents(
+      new ButtonBuilder()
+        .setCustomId(
+          `hf_orgreset_confirm:${preview.id}`
+        )
+        .setLabel('Confirmar reset')
+        .setStyle(ButtonStyle.Danger),
+
+      new ButtonBuilder()
+        .setCustomId(
+          `hf_orgreset_cancel:${preview.id}`
+        )
+        .setLabel('Cancelar')
+        .setStyle(ButtonStyle.Secondary)
+    );
+
+  return {
+    embeds: [embed],
+    components: [buttons],
+    allowedMentions: {
+      parse: [],
+    },
+  };
+}
+
+function rememberOrgResetPreview(
+  preview,
+  message
+) {
+  for (
+    const [id, saved]
+    of orgResetPreviews
+  ) {
+    if (saved.expiresAt < Date.now()) {
+      orgResetPreviews.delete(id);
+    }
+  }
+
+  orgResetPreviews.set(preview.id, {
+    ...preview,
+    messageId: message.id,
+    channelId: message.channelId,
+  });
+}
+
+async function sendOrgResetAudit(
+  client,
+  interaction,
+  result
+) {
+  const channel = await client.channels
+    .fetch(HALL_ACTION_AUDIT_LOG_CH_ID)
+    .catch(() => null);
+
+  if (
+    !channel?.isTextBased() ||
+    channel.guildId !== interaction.guildId
+  ) {
+    throw new Error(
+      'Canal de auditoria das ações indisponível.'
+    );
+  }
+
+  const avatar =
+    interaction.user.displayAvatarURL();
+
+  const embed = new EmbedBuilder()
+    .setTitle('Reset por data • ORGs')
+    .setColor('#e67e22')
+    .setAuthor({
+      name:
+        interaction.user.tag ||
+        interaction.user.username,
+
+      iconURL: avatar,
+
+      url:
+        `https://discord.com/users/` +
+        interaction.user.id,
+    })
+    .setThumbnail(avatar)
+    .addFields(
+      {
+        name: 'Executor',
+        value:
+          `<@${interaction.user.id}> • ` +
+          interaction.user.id,
+      },
+      {
+        name: 'Cidade',
+        value:
+          CITIES[result.preview.cityKey].label,
+        inline: true,
+      },
+      {
+        name: 'Corte inclusivo',
+        value:
+          `${result.preview.dateKey} • São Paulo`,
+        inline: true,
+      },
+      {
+        name: 'Antes: vitórias ativas da cidade',
+        value: String(
+          result.preview.removedWins +
+          result.preview.keptWins
+        ),
+        inline: true,
+      },
+      {
+        name: 'Depois: vitórias ativas da cidade',
+        value: String(
+          result.preview.keptWins
+        ),
+        inline: true,
+      },
+      {
+        name: 'Histórico geral',
+        value:
+          'Preservado integralmente. O anexo contém o antes e depois dos cortes e a prévia confirmada.',
+      }
+    )
+    .setTimestamp();
+
+  await channel.send({
+    embeds: [embed],
+
+    files: [
+      {
+        attachment: Buffer.from(
+          JSON.stringify(
+            result,
+            null,
+            2
+          )
+        ),
+
+        name:
+          `org-reset-${result.preview.id}.json`,
+      },
+    ],
+
+    allowedMentions: {
+      parse: [],
+    },
+  });
+}
+
+async function handleOrgRankingResetCommand(
+  message,
+  client
+) {
+  if (
+    !message.guild ||
+    message.author.bot ||
+    !/^!resetarorgs(?:\s|$)/i.test(
+      message.content.trim()
+    )
+  ) {
+    return false;
+  }
+
+  try {
+    const actor = await message.guild.members
+      .fetch({
+        user: message.author.id,
+        force: true,
+      })
+      .catch(() => null);
+
+    if (
+      !canResetPlayerRanking(
+        actor,
+        message.author.id
+      )
+    ) {
+      throw new Error(
+        'Esse comando é exclusivo para Owner, Resp. Creators e Macedo.'
+      );
+    }
+
+    const match = message.content
+      .trim()
+      .match(
+        /^!resetarorgs\s+(.+?)\s+(\d{2}\/\d{2}\/\d{4}|\d{4}-\d{2}-\d{2})$/i
+      );
+
+    if (!match) {
+      throw new Error(
+        'Use: !resetarorgs nobre 09/10/2026. Também são aceitas Santa, Grande e Maresia.'
+      );
+    }
+
+    const preview = createOrgResetPreview(
+      loadHallRankings(),
+      {
+        cityKey: match[1],
+        date: match[2],
+        actorId: actor.id,
+        guildId: message.guild.id,
+      },
+      normalizeHallEventName
+    );
+
+    await resolveOrgResetPreviewLinks(
+      client,
+      preview
+    );
+
+    const sent = await message.reply(
+      orgResetPreviewPayload(preview)
+    );
+
+    rememberOrgResetPreview(
+      preview,
+      sent
+    );
+  } catch (error) {
+    await message.reply({
+      content: `❌ ${error.message}`,
+
+      allowedMentions: {
+        parse: [],
+      },
+    }).catch(() => {});
+  }
+
+  return true;
+}
+
+async function handleOrgRankingResetInteraction(
+  interaction,
+  client
+) {
+  const id = String(
+    interaction.customId || ''
+  );
+
+  if (
+    !/^(hf_orgreset_open:|hf_orgreset_modal:|hf_orgreset_confirm:|hf_orgreset_cancel:)/
+      .test(id)
+  ) {
+    return false;
+  }
+
+  try {
+    const actor =
+      await interaction.guild.members
+        .fetch({
+          user: interaction.user.id,
+          force: true,
+        })
+        .catch(() => null);
+
+    if (
+      !canResetPlayerRanking(
+        actor,
+        interaction.user.id
+      )
+    ) {
+      throw new Error(
+        'Essa ação é exclusiva para Owner, Resp. Creators e Macedo.'
+      );
+    }
+
+    if (
+      interaction.isButton() &&
+      id.startsWith('hf_orgreset_open:')
+    ) {
+      const scope = id.slice(
+        'hf_orgreset_open:'.length
+      );
+
+      const city = CITIES[scope]
+        ? scope
+        : 'nobre';
+
+      const modal = new ModalBuilder()
+        .setCustomId(
+          'hf_orgreset_modal:submit'
+        )
+        .setTitle(
+          'Reset de ORGs por data'
+        )
+        .addComponents(
+          new ActionRowBuilder()
+            .addComponents(
+              new TextInputBuilder()
+                .setCustomId('city')
+                .setLabel(
+                  'Cidade: Nobre, Santa, Grande ou Maresia'
+                )
+                .setStyle(TextInputStyle.Short)
+                .setValue(city)
+                .setRequired(true)
+                .setMaxLength(30)
+            ),
+
+          new ActionRowBuilder()
+            .addComponents(
+              new TextInputBuilder()
+                .setCustomId('date')
+                .setLabel(
+                  'Manter vitórias desde DD/MM/AAAA'
+                )
+                .setPlaceholder(
+                  '09/10/2026'
+                )
+                .setStyle(TextInputStyle.Short)
+                .setRequired(true)
+                .setMaxLength(10)
+            )
+        );
+
+      await interaction.showModal(modal);
+
+      return true;
+    }
+
+    if (
+      interaction.isModalSubmit() &&
+      id === 'hf_orgreset_modal:submit'
+    ) {
+      await interaction.deferReply({
+        ephemeral: true,
+      });
+
+      const preview = createOrgResetPreview(
+        loadHallRankings(),
+        {
+          cityKey:
+            interaction.fields.getTextInputValue(
+              'city'
+            ),
+
+          date:
+            interaction.fields.getTextInputValue(
+              'date'
+            ),
+
+          actorId: actor.id,
+          guildId: interaction.guildId,
+        },
+        normalizeHallEventName
+      );
+
+      await resolveOrgResetPreviewLinks(
+        client,
+        preview
+      );
+
+      const sent = await interaction.editReply(
+        orgResetPreviewPayload(preview)
+      );
+
+      rememberOrgResetPreview(
+        preview,
+        sent
+      );
+
+      return true;
+    }
+
+    if (!interaction.isButton()) {
+      return false;
+    }
+
+    const token = id.slice(
+      id.indexOf(':') + 1
+    );
+
+    const preview =
+      orgResetPreviews.get(token);
+
+    if (
+      !preview ||
+      preview.expiresAt < Date.now()
+    ) {
+      throw new Error(
+        'A prévia expirou ou o bot reiniciou. Gere outra antes de confirmar.'
+      );
+    }
+
+    if (
+      preview.actorId !== actor.id ||
+      preview.guildId !== interaction.guildId ||
+      preview.messageId !== interaction.message.id ||
+      preview.channelId !== interaction.channelId
+    ) {
+      throw new Error(
+        'Essa prévia pertence a outro usuário ou a outra mensagem.'
+      );
+    }
+
+    if (
+      id.startsWith('hf_orgreset_cancel:')
+    ) {
+      orgResetPreviews.delete(token);
+
+      await interaction.update({
+        content:
+          'Reset cancelado. Nenhum corte foi aplicado.',
+
+        embeds: [],
+        components: [],
+      });
+
+      return true;
+    }
+
+    await interaction.deferReply({
+      ephemeral: true,
+    });
+
+    const latestPreview =
+      orgResetPreviews.get(token);
+
+    if (!latestPreview) {
+      throw new Error(
+        'Essa prévia já foi utilizada. Gere outra consulta.'
+      );
+    }
+
+    orgResetPreviews.delete(token);
+
+    const result = applyOrgResetPreview(
+      loadHallRankings(),
+      latestPreview,
+      actor.id
+    );
+
+    await interaction.message.edit({
+      content:
+        '✅ Reset confirmado. O total histórico do site foi preservado.',
+
+      embeds: [],
+      components: [],
+    }).catch(() => {});
+
+    let auditWarning = '';
+
+    try {
+      await sendOrgResetAudit(
+        client,
+        interaction,
+        result
+      );
+    } catch (error) {
+      console.error(
+        '[ORG RESET] Auditoria pendente:',
+        error
+      );
+
+      auditWarning =
+        '\n⚠️ O corte foi salvo, mas a log não pôde ser entregue ao Discord.';
+    }
+
+    try {
+      await publishHallRankings(
+        client,
+        loadHallRankings()
+      );
+    } catch (error) {
+      console.error(
+        '[ORG RESET] Atualização do painel pendente:',
+        error
+      );
+
+      auditWarning +=
+        '\n⚠️ O corte foi salvo, mas a atualização do painel do Discord falhou.';
+    }
+
+    await interaction.editReply(
+      `✅ Corte salvo para ${CITIES[result.preview.cityKey].label}. ` +
+      `As vitórias de ${result.preview.dateKey} em diante continuam no Discord. ` +
+      `O total geral do site foi preservado.${auditWarning}`
+    );
+  } catch (error) {
+    const payload = {
+      content: `❌ ${error.message}`,
+      ephemeral: true,
+    };
+
+    if (interaction.deferred) {
+      await interaction.editReply(
+        payload
+      ).catch(() => {});
+    } else if (interaction.replied) {
+      await interaction.followUp(
+        payload
+      ).catch(() => {});
+    } else {
+      await interaction.reply(
+        payload
+      ).catch(() => {});
+    }
+  }
+
+  return true;
 }
 
 function sortRankingByTotalAndRecent(a, b) {
@@ -12418,11 +13099,13 @@ function sortRankingByTotalAndRecent(a, b) {
 }
 
 function buildOrgsRankingMessage(rankings) {
-  const topOrgs = applyDominantCityToRankingItems(Object.values(rankings.orgs || {}))
-    .sort(sortRankingByTotalAndRecent)
-    .slice(0, 10);
+  const topOrgs = getDiscordOrgRankingItems(
+    rankings
+  ).slice(0, 10);
 
-    const totalOrgs = Object.keys(rankings.orgs || {}).length;
+    const totalOrgs = getDiscordOrgRankingItems(
+      rankings
+    ).length;
     const totalHalls = Object.keys(rankings.reviewedMessages || {}).length;
     const pending = Object.keys(rankings.pendingReview || {}).length;
 
@@ -12617,11 +13300,9 @@ function mergeDuplicateOrgRankingItems(items = []) {
 }
 
 function buildOrgsRankingEmbed(rankings) {
-  const topOrgs = mergeDuplicateOrgRankingItems(applyDominantCityToRankingItems(Object.values(rankings.orgs || {})))
-    .filter(org => !isInvalidWinnerName(org.name))
-    .filter(org => !looksLikePrizeOnly(org.name))
-    .sort(sortRankingByTotalAndRecent)
-    .slice(0, 10);
+  const topOrgs = getDiscordOrgRankingItems(
+    rankings
+  ).slice(0, 10);
 
     const lines = topOrgs.map((org, index) => {
       const pos = index + 1;
@@ -12636,7 +13317,7 @@ function buildOrgsRankingEmbed(rankings) {
     return buildRankingEmbed(
       "🏆 Ranking de ORGs — Hall da Fama",
       "TOP 10 organizações que mais venceram eventos oficiais.",
-      `🏢 ORGs no ranking: **${Object.keys(rankings.orgs || {}).length}**
+      `🏢 ORGs no ranking: **${getDiscordOrgRankingItems(rankings).length}**
   📜 Halls analisados: **${Object.keys(rankings.reviewedMessages || {}).length}**
   ⚠️ Revisões pendentes: **${Object.keys(rankings.pendingReview || {}).length}**`,
       lines,
@@ -12657,15 +13338,11 @@ function buildOrgsCityRankingEmbed(rankings, cityKey) {
     );
   }
 
-  const cityOrgs = mergeDuplicateOrgRankingItems(
-    applyDominantCityToRankingItems(
-      Object.values(rankings.orgs || {})
-    )
-  )
-    .filter(org => !isInvalidWinnerName(org.name))
-    .filter(org => !looksLikePrizeOnly(org.name))
-    .filter(org => org.cityKey === cityKey)
-    .sort(sortRankingByTotalAndRecent);
+  const cityOrgs = getDiscordOrgRankingItems(
+    rankings
+  ).filter(
+    org => org.cityKey === cityKey
+  );
 
   const topOrgs = cityOrgs.slice(0, 10);
 
@@ -12825,15 +13502,7 @@ function buildPlayersRankingEmbed(rankings) {
       }
     );
 
-  const seasonSummary =
-    activeSeasonLines.length > 0
-      ? (
-          `\n🆕 **Temporadas ativas de players:**\n` +
-          activeSeasonLines.join(
-            "\n"
-          )
-        )
-      : "";
+  const seasonSummary = "";
 
   return buildRankingEmbed(
     "👑 Ranking de Pessoas — Hall da Fama",
@@ -13007,19 +13676,38 @@ function rankingButtons(type, page = 0, cityKey = null) {
         .setLabel(isOrg ? "Pesquisar ORG" : "Pesquisar Pessoa")
         .setEmoji("🔎")
         .setStyle(ButtonStyle.Primary),
+
       new ButtonBuilder()
         .setCustomId(nextCustomId)
         .setLabel("Próxima página")
         .setEmoji("➡️")
-        .setStyle(ButtonStyle.Secondary)
+        .setStyle(ButtonStyle.Secondary),
+
+      ...(isOrg
+        ? [
+            new ButtonBuilder()
+              .setCustomId(
+                `hf_orgreset_open:${orgScope}`
+              )
+              .setLabel("Resetar ORGs")
+              .setEmoji("♻️")
+              .setStyle(ButtonStyle.Danger)
+          ]
+        : [])
     )
   ];
 }
 
 function getSortedRankingList(rankings, type) {
-  const source = type === "org" ? rankings.orgs : rankings.players;
+  if (type === "org") {
+    return getDiscordOrgRankingItems(
+      rankings
+    );
+  }
 
-  return applyDominantCityToRankingItems(Object.values(source || {}))
+  return applyDominantCityToRankingItems(
+    Object.values(rankings.players || {})
+  )
     .filter(Boolean)
     .sort(sortRankingByTotalAndRecent);
 }
@@ -16594,7 +17282,10 @@ await publishHallRankings(client, rankings);
     }
 
     const creatorMember = await interaction.guild?.members
-      .fetch(creatorId)
+      .fetch({
+        user: creatorId,
+        force: true,
+      })
       .catch(() => null);
 
     if (!creatorMember) {
@@ -17401,6 +18092,15 @@ export async function hallDaFamaHandleMessage(
   message,
   client
 ) {
+  if (
+    await handleOrgRankingResetCommand(
+      message,
+      client
+    )
+  ) {
+    return true;
+  }
+
   return handlePlayerRankingResetCommand(
     message,
     client
@@ -17586,8 +18286,145 @@ const channel =
     }
   }
 
+export const hallSiteWorkflow = createApprovalWorkflow({
+  key: 'hall',
+
+  label: 'Hall da Fama',
+
+  channelId:
+    APPROVAL_CHANNEL_ID,
+
+  sourceChannelId:
+    HALL_CHANNEL_ID,
+
+  auditChannelId:
+    '1554381360200683581',
+
+  approvePrefix:
+    BTN_APPROVE_PREFIX,
+
+  rejectPrefix:
+    BTN_REJECT_PREFIX,
+
+  cities:
+    CITIES,
+
+  canCreate:
+    member =>
+      hasPermission(
+        member,
+        member.id
+      ),
+
+  canDecide:
+    member =>
+      canApprove(
+        member,
+        member.id
+      ) ||
+      isCoordHallApprover(
+        member,
+        member.id
+      ),
+
+  getRequest:
+    reqId =>
+      state.pendingRequests?.[reqId] ||
+      null,
+
+  validate:
+    (
+      interaction,
+      data,
+      action
+    ) =>
+      validateHallApprovalHierarchy(
+        interaction,
+        data,
+        action === 'approve'
+          ? 'aprovar'
+          : 'recusar'
+      ),
+
+  isCreateModal:
+    id =>
+      String(id).startsWith(
+        `${MODAL_SUBMIT}:`
+      ),
+
+  modal(payload) {
+    const city =
+      String(
+        payload.city || 'nobre'
+      );
+
+    if (!CITIES[city]) {
+      throw new Error(
+        'Cidade inválida.'
+      );
+    }
+
+    const event =
+      payload.eventKey
+        ? getTodayEventData(
+            payload.eventKey
+          )
+        : getNextTodayEventData(
+            'hallDaFama'
+          );
+
+    if (
+      payload.eventKey &&
+      !event
+    ) {
+      throw new Error(
+        'Evento do cronograma não encontrado.'
+      );
+    }
+
+    return buildHallDaFamaModal(
+      city,
+
+      event?.eventName || '',
+
+      event?.eventKey || 'auto'
+    );
+  },
+
+  status:
+    message =>
+      /RECUSADO/i.test(
+        message.embeds[0]?.title || ''
+      )
+        ? 'reprovado'
+        : /APROVADO/i.test(
+            message.embeds[0]?.title || ''
+          )
+          ? 'aprovado'
+          : 'pendente',
+
+  handler:
+    hallDaFamaHandleInteractionOriginal,
+});
+
 export async function hallDaFamaHandleInteraction(interaction, client) {
+  return hallSiteWorkflow.handle(
+    interaction,
+    client
+  );
+}
+
+async function hallDaFamaHandleInteractionOriginal(interaction, client) {
   if (!interaction.guild) return false;
+
+  if (
+    await handleOrgRankingResetInteraction(
+      interaction,
+      client
+    )
+  ) {
+    return true;
+  }
 
   // ✅ Auditoria geral: registra TODOS os cliques de botões deste módulo hf_.
   // Não bloqueia a interação caso o canal de log esteja indisponível.
@@ -20258,7 +21095,15 @@ if (manualImagesWereRemoved) {
     if (interaction.isModalSubmit() && interaction.customId.startsWith(MODAL_SUBMIT)) {
       await interaction.deferReply({ ephemeral: true });
 
-  const [, cityKey, eventKeyFromModal] = interaction.customId.split(":");
+  const [
+  ,
+  cityKey,
+  ...eventKeyParts
+] = interaction.customId.split(":");
+
+const eventKeyFromModal =
+  eventKeyParts.join(":") ||
+  "auto";
   if (!cityKey || !CITIES[cityKey]) return interaction.editReply("❌ Erro: Cidade não identificada.");
 
       // Pega inputs
@@ -21402,10 +22247,13 @@ dashEmit(
       
     markTodayEventPosted(data.eventKey, "hallDaFama");
 
-  delete state.pendingRequests[reqId];
-  saveState(state);
-  processingApprovals.delete(reqId);
-  await interaction.editReply(
+delete state.pendingRequests[reqId];
+saveState(state);
+processingApprovals.delete(reqId);
+
+interaction.__approvalWorkflowApplied = true;
+
+await interaction.editReply(
     data.historicalMigration
       ? (
           historicalOldHallDeleted
@@ -21623,6 +22471,8 @@ delete state.pendingRequests[
 
 saveState(state);
 
+interaction.__approvalWorkflowApplied = true;
+
 await interaction.reply({
   content:
     "❌ Solicitação recusada.",
@@ -21639,6 +22489,224 @@ return true;
 // =====================================================
 // SITE HUB • HALL DA FAMA
 // =====================================================
+
+function getLifetimeHallPlayers(rankings) {
+  const sources = [
+    ...Object.values(
+      rankings.players || {}
+    ),
+
+    ...Object.values(
+      rankings.playerRankingHistory || {}
+    ).flatMap(
+      seasons =>
+        (
+          Array.isArray(seasons)
+            ? seasons
+            : []
+        ).flatMap(
+          season =>
+            Object.values(
+              season.players || {}
+            )
+        )
+    ),
+  ];
+
+  const groups =
+    new Map();
+
+  for (
+    const source of sources
+  ) {
+    const playerId =
+      String(
+        source.playerId || ''
+      ).trim();
+
+    const key =
+      playerId
+        ? 'id:' + playerId
+        : (
+            'name:' +
+            String(
+              source.cityKey || ''
+            ) +
+            ':' +
+            normalizeHallKey(
+              source.name || ''
+            )
+          );
+
+    let entry =
+      groups.get(key);
+
+    if (
+      !entry
+    ) {
+      entry = {
+        ...source,
+
+        key,
+
+        total:
+          0,
+
+        events:
+          {},
+
+        halls:
+          [],
+
+        seen:
+          new Set(),
+
+        lastWinAt:
+          0,
+      };
+
+      groups.set(
+        key,
+        entry
+      );
+    }
+
+    const lastWinAt =
+      getRankingLastWinAt(
+        source
+      );
+
+    if (
+      lastWinAt >=
+        entry.lastWinAt
+    ) {
+      entry.name =
+        source.name ||
+        entry.name;
+
+      entry.cityKey =
+        source.cityKey ||
+        entry.cityKey;
+
+      entry.cityName =
+        source.cityName ||
+        entry.cityName;
+
+      entry.lastWinAt =
+        lastWinAt;
+    }
+
+    entry.total +=
+      Number(
+        source.total || 0
+      );
+
+    for (
+      const [
+        eventName,
+        count,
+      ] of
+      Object.entries(
+        source.events || {}
+      )
+    ) {
+      entry.events[eventName] =
+        Number(
+          entry.events[
+            eventName
+          ] || 0
+        ) +
+        Number(
+          count || 0
+        );
+    }
+
+    for (
+      const hall of
+      source.halls || []
+    ) {
+      const evidenceKey =
+        hall.messageId
+          ? [
+              hall.messageId,
+              hall.eventName || '',
+              hall.cityKey ||
+                source.cityKey ||
+                '',
+            ].join(':')
+          : null;
+
+      if (
+        evidenceKey &&
+        entry.seen.has(
+          evidenceKey
+        )
+      ) {
+        entry.total -=
+          1;
+
+        const eventName =
+          hall.eventName;
+
+        if (
+          eventName &&
+          entry.events[
+            eventName
+          ]
+        ) {
+          entry.events[
+            eventName
+          ] -= 1;
+        }
+
+        continue;
+      }
+
+      if (
+        evidenceKey
+      ) {
+        entry.seen.add(
+          evidenceKey
+        );
+      }
+
+      entry.halls.push(
+        hall
+      );
+    }
+  }
+
+  return applyDominantCityToRankingItems(
+    [
+      ...groups.values(),
+    ].map(
+      ({
+        seen,
+        ...entry
+      }) => ({
+        ...entry,
+
+        total:
+          Math.max(
+            0,
+            entry.total
+          ),
+
+        lastWinAt:
+          getRankingLastWinAt(
+            entry
+          ),
+      })
+    )
+  )
+    .filter(
+      item =>
+        item.total > 0
+    )
+    .sort(
+      sortRankingByTotalAndRecent
+    );
+}
 
 export async function getHallSiteSnapshot({
   guild,
@@ -21659,11 +22727,24 @@ export async function getHallSiteSnapshot({
   const rankings =
     loadHallRankings();
 
-  const orgs = orgsVisible ? getSortedRankingList(rankings, 'org') : [];
-  const players = playersVisible ? getSortedRankingList(rankings, 'player') : [];
+  const orgs = orgsVisible
+    ? getLifetimeHallOrgs(rankings)
+    : [];
+
+  const players =
+    playersVisible
+      ? getLifetimeHallPlayers(
+          rankings
+        )
+      : [];
 
   return {
     rights: { orgs: !!orgsVisible, players: !!playersVisible },
+
+    orgSeasons: orgsVisible
+      ? getHallOrgSeasons(rankings)
+      : [],
+
     updatedAt:
       Number(
         rankings.lastUpdatedAt ||
@@ -21684,6 +22765,16 @@ export async function getHallSiteSnapshot({
               item
             )
           ),
+
+          lastWinAt:
+            getRankingLastWinAt(
+              item
+            ),
+
+          lastWinAt:
+            getRankingLastWinAt(
+              item
+            ),
         })
       ),
 
@@ -21701,6 +22792,11 @@ export async function getHallSiteSnapshot({
               item
             )
           ),
+
+          lastWinAt:
+            getRankingLastWinAt(
+              item
+            ),
         })
       ),
   };

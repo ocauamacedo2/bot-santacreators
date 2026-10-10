@@ -17,6 +17,10 @@ import {
 // ✅ HUB (pra contar no scGeralDash)
 import { dashEmit } from "../utils/dashHub.js";
 
+import {
+  createApprovalWorkflow,
+} from "../utils/approvalWorkflow.js";
+
 // ✅ Integração com FormsCreator
 import {
   findFormsCreatorThreadIdByUserId,
@@ -640,7 +644,231 @@ export async function alinhamentosHandleMessage(message, client) {
 // =====================================================
 // ✅ 3) INTERACTIONS: botão + modal submit + validação
 // =====================================================
+export const alignmentSiteWorkflow = createApprovalWorkflow({
+  key: 'alignment',
+
+  label: 'Alinhamentos',
+
+  channelId:
+    ALINV1_MENU_CHANNEL_ID,
+
+  sourceChannelId:
+    ALINV1_MENU_CHANNEL_ID,
+
+  auditChannelId:
+    ALINV1_FULL_AUDIT_CH_ID,
+
+  canCreate:
+    hasPerm,
+
+  canDecide:
+    hasPerm,
+
+  decode(id, message) {
+    if (
+      id === ALINV1_BTN_VALID_ID
+    ) {
+      return {
+        action: 'approve',
+        reqId: message.id,
+      };
+    }
+
+    if (
+      id === ALINV1_BTN_INVALID_ID
+    ) {
+      return {
+        action: 'reject',
+        reqId: message.id,
+      };
+    }
+
+    return null;
+  },
+
+  buttonId:
+    action =>
+      action === 'approve'
+        ? ALINV1_BTN_VALID_ID
+        : ALINV1_BTN_INVALID_ID,
+
+  getRequest(reqId, message) {
+    const embed =
+      message?.embeds?.[0];
+
+    if (
+      !embed ||
+      !isRegistroEmbed(embed) ||
+      getRegistroStatus(embed) !== 'PENDENTE'
+    ) {
+      return null;
+    }
+
+    return {
+      userId:
+        extractRegistradorIdFromEmbed(
+          embed
+        ),
+
+      title:
+        'Registro de alinhamento',
+
+      createdAt:
+        message.createdTimestamp,
+
+      description:
+        readEmbedFields(embed)
+          .map(
+            field =>
+              `${field.name}\n${field.value}`
+          )
+          .join('\n\n'),
+    };
+  },
+
+  async validate(
+    interaction,
+    data
+  ) {
+    const member =
+      interaction.member;
+
+    const bypass =
+      ALINV1_SELF_APPROVE_BYPASS.has(
+        member.id
+      ) ||
+      member.roles.cache.some(
+        role =>
+          ALINV1_SELF_APPROVE_BYPASS.has(
+            role.id
+          )
+      );
+
+    if (bypass) {
+      return {
+        allowed: true,
+      };
+    }
+
+    if (
+      !data.userId ||
+      data.userId === member.id
+    ) {
+      return {
+        allowed: false,
+
+        reason:
+          'Você não pode decidir seu próprio alinhamento.',
+      };
+    }
+
+    const creator =
+      await interaction.guild.members
+        .fetch({
+          user: data.userId,
+          force: true,
+        })
+        .catch(() => null);
+
+    return {
+      allowed:
+        Boolean(
+          creator &&
+          canValidateByHierarchy(
+            member,
+            creator
+          )
+        ),
+
+      reason:
+        'Registrador com cargo igual ou superior, ou hierarquia indisponível.',
+    };
+  },
+
+  isCreateModal:
+    id =>
+      id === ALINV1_MODAL_ID,
+
+  modal() {
+    return new ModalBuilder()
+      .setCustomId(
+        ALINV1_MODAL_ID
+      )
+      .setTitle(
+        'Registro de Alinhamento'
+      )
+      .addComponents(
+        new ActionRowBuilder()
+          .addComponents(
+            new TextInputBuilder()
+              .setCustomId(
+                ALINV1_FOIALINHADO
+              )
+              .setLabel(
+                'Quem foi alinhado? (Nome ou ID)'
+              )
+              .setStyle(
+                TextInputStyle.Short
+              )
+              .setRequired(true)
+          ),
+
+        new ActionRowBuilder()
+          .addComponents(
+            new TextInputBuilder()
+              .setCustomId(
+                ALINV1_QUEMALINHOU
+              )
+              .setLabel(
+                'Quem alinhou? (vazio = você)'
+              )
+              .setStyle(
+                TextInputStyle.Short
+              )
+              .setRequired(false)
+          ),
+
+        new ActionRowBuilder()
+          .addComponents(
+            new TextInputBuilder()
+              .setCustomId(
+                ALINV1_SOBRE
+              )
+              .setLabel(
+                'Sobre o que foi o alinhamento?'
+              )
+              .setStyle(
+                TextInputStyle.Paragraph
+              )
+              .setRequired(true)
+          )
+      );
+  },
+
+  status:
+    message =>
+      getRegistroStatus(
+        message.embeds[0]
+      ) === 'VALIDO'
+        ? 'aprovado'
+        : getRegistroStatus(
+            message.embeds[0]
+          ) === 'INVALIDO'
+          ? 'reprovado'
+          : 'pendente',
+
+  handler:
+    alinhamentosHandleInteractionOriginal,
+});
+
 export async function alinhamentosHandleInteraction(interaction, client) {
+  return alignmentSiteWorkflow.handle(
+    interaction,
+    client
+  );
+}
+
+async function alinhamentosHandleInteractionOriginal(interaction, client) {
   try {
     // ---------- Botão abre modal ----------
     if (interaction.isButton?.() && interaction.customId === ALINV1_BTN_OPEN_ID) {
@@ -900,7 +1128,16 @@ const quando = brNow();
 const registradorId = extractRegistradorIdFromEmbed(emb);
 
 // ✅ verifica se é alguém com permissão especial
-const bypassSelfApprove = ALINV1_SELF_APPROVE_BYPASS.has(validatorId);
+const bypassSelfApprove =
+  ALINV1_SELF_APPROVE_BYPASS.has(
+    validatorId
+  ) ||
+  interaction.member.roles.cache.some(
+    role =>
+      ALINV1_SELF_APPROVE_BYPASS.has(
+        role.id
+      )
+  );
 
 // ❌ não pode validar o próprio registro (exceto cargos especiais)
 if (registradorId === validatorId && !bypassSelfApprove) {
@@ -968,12 +1205,15 @@ const fields = readEmbedFields(freshEmb).filter((f) => {
   await interaction.deferReply({ ephemeral: true }).catch(() => {});
 
   const ok = await msg.edit({ embeds: [newEmb], components: rows }).then(() => true).catch(() => false);
-  if (!ok) {
-    await interaction.editReply("⚠️ Não consegui editar esse registro. Tenta de novo.").catch(() => {});
-    return true;
-  }
 
-  let evolutionResult = null;
+if (!ok) {
+  await interaction.editReply("⚠️ Não consegui editar esse registro. Tenta de novo.").catch(() => {});
+  return true;
+}
+
+interaction.__approvalWorkflowApplied = true;
+
+let evolutionResult = null;
 
   if (isValid) {
     const targetId = extractId(getFieldValueByNameIncludes(freshEmb, "quem foi alinhado"));

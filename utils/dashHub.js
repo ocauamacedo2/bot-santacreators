@@ -38,7 +38,19 @@ if (!hub.__anyHooked) {
 
     for (const handler of anyHandlers) {
       try {
-        handler(eventName, payload);
+        const result = handler(
+          eventName,
+          payload
+        );
+
+        Promise.resolve(result).catch(
+          error => {
+            console.error(
+              `[dashHub] Erro assíncrono em observador global do evento "${eventName}":`,
+              error
+            );
+          }
+        );
       } catch (error) {
         console.error(
           `[dashHub] Erro em observador global do evento "${eventName}":`,
@@ -67,6 +79,12 @@ export function dashEmit(eventName, payload = {}) {
     // NORMALIZA A INFORMAÇÃO
     // =================================================
 
+    const emittedAt = Date.now();
+
+    const originalAt = Number(
+      payload?.__at
+    );
+
     const eventPayload = {
       ...(
         payload &&
@@ -75,7 +93,13 @@ export function dashEmit(eventName, payload = {}) {
           : {}
       ),
 
-      __at: Date.now(),
+      __at:
+        Number.isFinite(originalAt) &&
+        originalAt > 0
+          ? originalAt
+          : emittedAt,
+
+      __emittedAt: emittedAt,
     };
 
     // =================================================
@@ -152,46 +176,89 @@ export function dashEmit(eventName, payload = {}) {
 // REGISTRO SEGURO DE LISTENERS
 // =====================================================
 
+if (!globalThis.__SC_DASH_SAFE_LISTENERS__) {
+  globalThis.__SC_DASH_SAFE_LISTENERS__ = new Map();
+}
+
+const safeListeners =
+  globalThis.__SC_DASH_SAFE_LISTENERS__;
+
 export function dashOn(eventName, handler) {
-
   try {
-
     if (
       typeof handler !== "function"
     ) {
       return;
     }
 
-    // =================================================
-    // EVITA REGISTRAR A MESMA FUNÇÃO NOVAMENTE
-    // =================================================
-
-    const alreadyRegistered =
-      hub.listeners(eventName)
-        .includes(handler);
-
-    if (alreadyRegistered) {
+    if (
+      hub.listeners(eventName).includes(handler)
+    ) {
       return;
     }
 
-    // =================================================
-    // REGISTRA O LISTENER
-    // =================================================
+    let handlers = safeListeners.get(
+      eventName
+    );
 
-    hub.on(
-      eventName,
+    if (!handlers) {
+      handlers = new WeakMap();
+
+      safeListeners.set(
+        eventName,
+        handlers
+      );
+    }
+
+    const existing = handlers.get(
       handler
     );
 
-  } catch (error) {
+    if (
+      existing &&
+      hub.listeners(eventName).includes(existing)
+    ) {
+      return;
+    }
 
+    const safeHandler = function (...args) {
+      try {
+        const result = handler.apply(
+          this,
+          args
+        );
+
+        Promise.resolve(result).catch(
+          error => {
+            console.error(
+              `[dashHub] Erro assíncrono no consumidor do evento "${eventName}":`,
+              error
+            );
+          }
+        );
+      } catch (error) {
+        console.error(
+          `[dashHub] Erro no consumidor do evento "${eventName}":`,
+          error
+        );
+      }
+    };
+
+    handlers.set(
+      handler,
+      safeHandler
+    );
+
+    hub.on(
+      eventName,
+      safeHandler
+    );
+  } catch (error) {
     console.error(
       `[dashHub] Erro ao registrar o evento "${eventName}":`,
       error
     );
-
   }
-
 }
 
 // =====================================================

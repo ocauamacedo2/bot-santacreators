@@ -91,10 +91,179 @@ const USUARIOS_AUTORIZADOS_APROVACAO = [
 
 // ✅ Somente estes cargos podem aprovar/reprovar
 const CARGOS_AUTORIZADOS_APROVACAO = [
+  '1262262852949905408', // owner
   '1262262852949905409', // resp influ
   '1352408327983861844', // resp creators
   '1352407252216184833'  // resp lider
 ];
+
+const creatorsSetDecisionLocks = new Set();
+
+export function canApproveCreatorsSetFromSite(member) {
+  return Boolean(
+    member &&
+    (
+      USUARIOS_AUTORIZADOS_APROVACAO.includes(member.id) ||
+      CARGOS_AUTORIZADOS_APROVACAO.some(
+        id => member.roles.cache.has(id)
+      ) ||
+      member.roles.cache.has('1388976314253312100') ||
+      member.roles.cache.has('1388975939161161728')
+    )
+  );
+}
+
+export function canRejectCreatorsSetFromSite(member) {
+  return Boolean(
+    member &&
+    (
+      USUARIOS_AUTORIZADOS_APROVACAO.includes(member.id) ||
+      CARGOS_AUTORIZADOS_APROVACAO.some(
+        id => member.roles.cache.has(id)
+      )
+    )
+  );
+}
+
+export async function pedirSetHandleInteraction(interaction, client) {
+  const customId = String(interaction.customId || '');
+
+  const isApprove = customId.startsWith('aprovar_set_');
+  const isReject = customId.startsWith('reprovar_set_');
+
+  if (
+    !interaction.isButton() ||
+    (!isApprove && !isReject)
+  ) {
+    return pedirSetHandleInteractionUnlocked(
+      interaction,
+      client
+    );
+  }
+
+  await interaction.deferUpdate().catch(() => {});
+
+  const key =
+    `${interaction.guildId}:${interaction.message.id}`;
+
+  if (creatorsSetDecisionLocks.has(key)) {
+    await interaction.followUp({
+      content: '⏳ Este pedido já está sendo processado.',
+      flags: MessageFlags.Ephemeral,
+    });
+
+    return true;
+  }
+
+  creatorsSetDecisionLocks.add(key);
+
+  try {
+    const [member, message] = await Promise.all([
+      interaction.guild.members.fetch({
+        user: interaction.user.id,
+        force: true,
+      }),
+
+      interaction.message.fetch(),
+    ]);
+
+    const allowed = isApprove
+      ? canApproveCreatorsSetFromSite(member)
+      : canRejectCreatorsSetFromSite(member);
+
+    if (!allowed) {
+      await interaction.followUp({
+        content: '❌ Você não possui permissão para esta decisão.',
+        flags: MessageFlags.Ephemeral,
+      });
+
+      return true;
+    }
+
+    const active = message.components.some(
+      row => row.components.some(
+        button =>
+          button.customId === customId &&
+          !button.disabled
+      )
+    );
+
+    if (
+      message.author.id !== client.user.id ||
+      !active
+    ) {
+      await interaction.followUp({
+        content: 'ℹ️ Este pedido já foi finalizado ou está em processamento.',
+        flags: MessageFlags.Ephemeral,
+      });
+
+      return true;
+    }
+
+    const currentInteraction = new Proxy(interaction, {
+      get(target, property) {
+        if (property === 'member') {
+          return member;
+        }
+
+        if (property === 'message') {
+          return message;
+        }
+
+        if (property === 'deferUpdate') {
+          return async () => {
+            if (!target.deferred && !target.replied) {
+              await target.deferUpdate();
+            }
+          };
+        }
+
+        if (property === 'reply') {
+          return payload =>
+            target.deferred || target.replied
+              ? target.followUp(payload)
+              : target.reply(payload);
+        }
+
+        if (property === 'update') {
+          return payload =>
+            target.deferred
+              ? target.editReply(payload)
+              : target.update(payload);
+        }
+
+        const value = Reflect.get(
+          target,
+          property,
+          target
+        );
+
+        return typeof value === 'function'
+          ? value.bind(target)
+          : value;
+      },
+    });
+
+    return await pedirSetHandleInteractionUnlocked(
+      currentInteraction,
+      client
+    );
+  } catch (error) {
+    console.error(
+      '[PedirSet] Falha ao processar decisão:',
+      error
+    );
+
+    await interaction.followUp({
+      content: '❌ Não foi possível concluir esta decisão. Confira a mensagem do pedido antes de tentar novamente.',
+      flags: MessageFlags.Ephemeral,
+    }).catch(() => {});
+
+    return true;
+  } finally {
+    creatorsSetDecisionLocks.delete(key);
+  }
+}
 
 // ================================
 // ✅ PERSISTÊNCIA (NÃO PERDE REGISTROS)
@@ -381,7 +550,7 @@ export async function pedirSetHandleMessage(message, client) {
 // ================================
 // ✅ INTERACTION (chamado pelo teu index)
 // ================================
-export async function pedirSetHandleInteraction(interaction, client) {
+async function pedirSetHandleInteractionUnlocked(interaction, client) {
 
   // BOTÃO → Abrir modal
   if (interaction.isButton() && interaction.customId === 'abrir_modal_set') {
@@ -599,8 +768,8 @@ if (!podeAprovarSet) {
       embeds: [embedProcessando]
     }).catch(() => {});
 
-    // --- 🛠️ PROCESSAMENTO EM BACKGROUND (Não bloqueia o clique) ---
-    (async () => {
+    // Aguarda o resultado do fluxo; o clique já recebeu deferUpdate.
+    await (async () => {
       try {
         // =====================================================
         // 1. CARGOS E NICK
@@ -612,13 +781,7 @@ if (!podeAprovarSet) {
           CARGO_EQUIPE_CREATOR_ADD
         ];
 
-        await membro.roles
-          .add(
-            rolesToAdd
-          )
-          .catch(
-            () => {}
-          );
+        await membro.roles.add(rolesToAdd);
 
         await membro.roles
           .remove(
@@ -852,18 +1015,16 @@ if (!podeAprovarSet) {
                 .setDisabled(true)
             );
 
-        await interaction.message
-          .edit({
-            components:
-              [rowAprovada],
+        await interaction.message.edit({
+          components: [rowAprovada],
+          embeds: [embedAprovado],
+        });
 
-            embeds:
-              [embedAprovado],
-          })
-          .catch(() => {});
+        interaction.__scSetDecisionApplied = true;
 
         // Só remove o pedido persistido depois que
-        // FormsCreator e Controle GI realmente existem.
+        // FormsCreator e Controle GI realmente existem
+        // e a mensagem foi marcada como aprovada.
         pedidosSet.delete(
           idUnico
         );
@@ -942,6 +1103,15 @@ if (!podeAprovarSet) {
       } catch (
         flowError
       ) {
+        if (interaction.__scSetDecisionApplied) {
+          console.error(
+            '[PedirSet] Set já aprovado; falha em aviso posterior:',
+            flowError
+          );
+
+          return;
+        }
+
         console.error(
           `[PedirSet] Falha no fluxo completo de aprovação para ${userId}:`,
           flowError
@@ -1043,10 +1213,13 @@ if (!podeReprovarSet) {
     await interaction.update({
       components: [],
       embeds: [embedAtualizado]
-    }).catch(() => {});
+    });
 
     pedidosSet.delete(idUnico);
     savePedidosSet();
+
+    interaction.__scSetDecisionApplied = true;
+
     return true;
   }
 

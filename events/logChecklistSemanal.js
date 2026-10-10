@@ -1,5 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
+
+import {
+  createHash,
+  randomUUID,
+} from "node:crypto";
+
 import cron from "node-cron";
 import { fileURLToPath } from "node:url";
 import {
@@ -822,7 +828,13 @@ function parseChecklistAuditEmbed(message, weekKey) {
 
   return {
     messageId: message.id,
-    createdTimestamp: Number(message.createdTimestamp || Date.now()),
+
+    createdTimestamp: Number(
+      Date.parse(embed.timestamp || "") ||
+      message.createdTimestamp ||
+      Date.now()
+    ),
+
     respId,
     memberId,
     actorId,
@@ -1183,6 +1195,873 @@ fields.push({
   return { embeds: [embed], components: [row] };
 }
 
+const CHECKLIST_CHANGE_LOCKS = new Set();
+const CHECKLIST_AUDIT_CLIENTS = new WeakSet();
+
+let checklistAuditRunning = false;
+let checklistPanelTimer = null;
+let checklistPanelRunning = false;
+let checklistPanelDirty = false;
+
+function checklistError(message, status = 400) {
+  return Object.assign(
+    new Error(message),
+    { status }
+  );
+}
+
+function checklistReadStrict() {
+  if (!fs.existsSync(CHECKLIST_FILE)) {
+    return { weeks: {} };
+  }
+
+  const data = JSON.parse(
+    fs.readFileSync(CHECKLIST_FILE, 'utf8')
+  );
+
+  if (
+    !data.weeks ||
+    typeof data.weeks !== 'object' ||
+    Array.isArray(data.weeks)
+  ) {
+    throw checklistError(
+      'O arquivo do checklist está inválido. Nenhum dado foi alterado.',
+      503
+    );
+  }
+
+  return data;
+}
+
+function checklistWriteStrict(data) {
+  fs.mkdirSync(
+    path.dirname(CHECKLIST_FILE),
+    { recursive: true }
+  );
+
+  const temporary =
+    `${CHECKLIST_FILE}.${randomUUID()}.tmp`;
+
+  fs.writeFileSync(
+    temporary,
+    JSON.stringify(data, null, 2),
+    'utf8'
+  );
+
+  fs.renameSync(
+    temporary,
+    CHECKLIST_FILE
+  );
+}
+
+function checklistRevision(
+  weekKey,
+  responsibleId,
+  memberId,
+  record
+) {
+  return createHash('sha256')
+    .update(
+      JSON.stringify([
+        weekKey,
+        responsibleId,
+        memberId,
+        record,
+      ])
+    )
+    .digest('hex');
+}
+
+async function checklistAccess(guild, actorId) {
+  if (guild.id !== '1262262852782129183') {
+    throw checklistError(
+      'Checklist indisponível neste servidor.',
+      403
+    );
+  }
+
+  const member = await guild.members.fetch({
+    user: actorId,
+    force: true,
+  }).catch(() => null);
+
+  if (!member || !hasPermission(member)) {
+    throw checklistError(
+      'Sem permissão para o checklist.',
+      403
+    );
+  }
+
+  await guild.channels.fetch();
+
+  const panelState = loadJSON(
+    PANEL_CONFIG.STATE_FILE,
+    {}
+  );
+
+  const channelId =
+    panelState.guildId === guild.id &&
+    panelState.channelId
+      ? panelState.channelId
+      : PANEL_CONFIG.CHANNEL_ID;
+
+  const channel =
+    guild.channels.cache.get(channelId);
+
+  if (
+    channel?.guildId !== guild.id ||
+    !channel.permissionsFor(member)?.has([
+      'ViewChannel',
+      'ReadMessageHistory',
+    ])
+  ) {
+    throw checklistError(
+      'Você não possui acesso ao canal do checklist.',
+      403
+    );
+  }
+
+  const windowOpen =
+    hasChecklistFullOverride(member) ||
+    isLogWindowOpenSP();
+
+  return {
+    member,
+    channel,
+    windowOpen,
+  };
+}
+
+function checklistPerson(guild, id) {
+  const member =
+    guild.members.cache.get(id);
+
+  return {
+    id,
+
+    name:
+      member?.displayName ||
+      member?.user?.username ||
+      `Usuário ${id}`,
+
+    avatar:
+      member?.user?.displayAvatarURL({
+        size: 128,
+      }) || null,
+  };
+}
+
+export async function getChecklistSiteCatalog({
+  guild,
+  member,
+}) {
+  try {
+    await checklistAccess(
+      guild,
+      member.id
+    );
+
+    return { allowed: true };
+  } catch (error) {
+    if (error.status === 403) {
+      return { allowed: false };
+    }
+
+    throw error;
+  }
+}
+
+export async function getChecklistSiteSnapshot({
+  guild,
+  member,
+}) {
+  const access = await checklistAccess(
+    guild,
+    member.id
+  );
+
+  const weekKey = weekKeyFromDateSP();
+  const initial = checklistReadStrict();
+  const ids = new Set();
+
+  for (
+    const [responsibleId, group]
+    of Object.entries(
+      initial.weeks[weekKey]?.responsaveis || {}
+    )
+  ) {
+    ids.add(responsibleId);
+
+    for (
+      const [id, item]
+      of Object.entries(group.members || {})
+    ) {
+      ids.add(id);
+
+      if (item.checkedBy) {
+        ids.add(item.checkedBy);
+      }
+    }
+  }
+
+  const memberIds = [...ids];
+  const resolved = new Set();
+  let next = 0;
+
+  await Promise.all(
+    Array.from(
+      { length: Math.min(4, memberIds.length) },
+      async () => {
+        while (next < memberIds.length) {
+          const id = memberIds[next++];
+
+          const found = await guild.members.fetch({
+            user: id,
+            force: true,
+          }).catch(() => null);
+
+          if (found) {
+            resolved.add(id);
+          }
+        }
+      }
+    )
+  );
+
+  const currentAccess = await checklistAccess(
+    guild,
+    member.id
+  );
+
+  if (weekKey !== weekKeyFromDateSP()) {
+    throw checklistError(
+      'A semana mudou. Atualize a tela.',
+      409
+    );
+  }
+
+  const current = checklistReadStrict();
+  const groups = [];
+
+  for (
+    const [responsibleId, group]
+    of Object.entries(
+      current.weeks[weekKey]?.responsaveis || {}
+    )
+  ) {
+    const records = [];
+
+    for (
+      const [memberId, item]
+      of Object.entries(group.members || {})
+    ) {
+      if (
+        !resolved.has(memberId) ||
+        !canManageChecklistTarget(
+          currentAccess.member,
+          guild.members.cache.get(memberId)
+        )
+      ) {
+        continue;
+      }
+
+      records.push({
+        memberId,
+        responsibleId,
+
+        person:
+          checklistPerson(guild, memberId),
+
+        area:
+          String(item.area || 'Geral'),
+
+        checked:
+          item.checked === true,
+
+        checkedAt:
+          item.checkedAt || null,
+
+        checkedBy:
+          item.checkedBy
+            ? checklistPerson(guild, item.checkedBy)
+            : null,
+
+        revision:
+          checklistRevision(
+            weekKey,
+            responsibleId,
+            memberId,
+            item
+          ),
+
+        rights: {
+          check:
+            currentAccess.windowOpen &&
+            item.checked !== true,
+
+          uncheck:
+            currentAccess.windowOpen &&
+            item.checked === true,
+        },
+      });
+    }
+
+    if (records.length) {
+      groups.push({
+        responsible:
+          checklistPerson(guild, responsibleId),
+
+        records,
+      });
+    }
+  }
+
+  const records = groups.flatMap(
+    group => group.records
+  );
+
+  return {
+    weekKey,
+    weekLabel: getWeekRangeLabel(weekKey),
+    groups,
+
+    windowOpen:
+      currentAccess.windowOpen,
+
+    snapshotLocked:
+      current.weeks[weekKey]?.snapshotLocked === true,
+
+    rights: {
+      view: true,
+    },
+
+    stats: {
+      total:
+        records.length,
+
+      checked:
+        records.filter(item => item.checked).length,
+
+      pending:
+        records.filter(item => !item.checked).length,
+    },
+
+    url:
+      `https://discord.com/channels/${guild.id}/${access.channel.id}`,
+
+    generatedAt:
+      Date.now(),
+  };
+}
+
+function scheduleChecklistPanel(client, guild) {
+  checklistPanelDirty = true;
+  clearTimeout(checklistPanelTimer);
+
+  checklistPanelTimer = setTimeout(async () => {
+    checklistPanelTimer = null;
+
+    if (checklistPanelRunning) {
+      return;
+    }
+
+    checklistPanelRunning = true;
+
+    try {
+      while (checklistPanelDirty) {
+        checklistPanelDirty = false;
+
+        await refreshMainPanel(
+          client,
+          guild
+        );
+      }
+    } catch (error) {
+      console.error(
+        '[ChecklistLogs] Painel:',
+        error
+      );
+    } finally {
+      checklistPanelRunning = false;
+    }
+  }, 300);
+
+  checklistPanelTimer.unref?.();
+}
+
+async function flushChecklistAudit(client) {
+  if (
+    checklistAuditRunning ||
+    !client.isReady()
+  ) {
+    return;
+  }
+
+  checklistAuditRunning = true;
+
+  try {
+    const jobs = (
+      checklistReadStrict().siteAuditOutbox || []
+    )
+      .filter(
+        job =>
+          Number(job.nextAt || 0) <= Date.now()
+      )
+      .slice(0, 20);
+
+    for (const job of jobs) {
+      try {
+        await logAudit(
+          client,
+          job.actor,
+          job.responsibleId,
+          job.memberId,
+          job.after.checked,
+          job.weekKey,
+          false,
+          job
+        );
+
+        const current = checklistReadStrict();
+
+        current.siteAuditOutbox = (
+          current.siteAuditOutbox || []
+        ).filter(
+          item => item.id !== job.id
+        );
+
+        checklistWriteStrict(current);
+      } catch (error) {
+        console.error(
+          '[ChecklistLogs] Auditoria pendente:',
+          job.id,
+          error
+        );
+
+        const current = checklistReadStrict();
+
+        const pending = (
+          current.siteAuditOutbox || []
+        ).find(
+          item => item.id === job.id
+        );
+
+        if (pending) {
+          pending.attempts =
+            Number(pending.attempts || 0) + 1;
+
+          pending.nextAt =
+            Date.now() +
+            Math.min(
+              300000,
+              5000 * 2 ** Math.min(
+                pending.attempts,
+                6
+              )
+            );
+
+          checklistWriteStrict(current);
+        }
+      }
+    }
+  } finally {
+    checklistAuditRunning = false;
+  }
+}
+
+function installChecklistAudit(client) {
+  if (CHECKLIST_AUDIT_CLIENTS.has(client)) {
+    return;
+  }
+
+  CHECKLIST_AUDIT_CLIENTS.add(client);
+
+  const timer = setInterval(() => {
+    void flushChecklistAudit(client).catch(error => {
+      console.error(
+        '[ChecklistLogs] Fila de auditoria:',
+        error
+      );
+    });
+  }, 10000);
+
+  timer.unref?.();
+
+  void flushChecklistAudit(client).catch(error => {
+    console.error(
+      '[ChecklistLogs] Fila inicial:',
+      error
+    );
+  });
+}
+
+async function applyChecklistChange({
+  client,
+  guild,
+  actorId,
+  weekKey,
+  responsibleId,
+
+  memberId = null,
+  checked = null,
+  revision = null,
+  bulk = false,
+  reason = '',
+  origin = 'Discord',
+}) {
+  if (CHECKLIST_CHANGE_LOCKS.has(guild.id)) {
+    throw checklistError(
+      'Há uma conferência em processamento. Atualize e tente novamente.',
+      409
+    );
+  }
+
+  CHECKLIST_CHANGE_LOCKS.add(guild.id);
+
+  try {
+    if (weekKey !== weekKeyFromDateSP()) {
+      throw checklistError(
+        'Esta semana não está mais aberta para alterações.',
+        409
+      );
+    }
+
+    if (
+      !/^\d{17,20}$/.test(responsibleId) ||
+      (
+        !bulk &&
+        !/^\d{17,20}$/.test(memberId)
+      )
+    ) {
+      throw checklistError(
+        'Vínculo de checklist inválido.'
+      );
+    }
+
+    if (
+      bulk &&
+      typeof checked !== 'boolean'
+    ) {
+      throw checklistError(
+        'Ação em massa inválida.'
+      );
+    }
+
+    if (
+      checked !== null &&
+      typeof checked !== 'boolean'
+    ) {
+      throw checklistError(
+        'Status inválido.'
+      );
+    }
+
+    reason = String(reason || '').trim();
+
+    if (reason.length > 1000) {
+      throw checklistError(
+        'O motivo deve ter até 1000 caracteres.'
+      );
+    }
+
+    const access = await checklistAccess(
+      guild,
+      actorId
+    );
+
+    if (!access.windowOpen) {
+      throw checklistError(
+        'Conferências disponíveis de domingo até quarta-feira, às 23:59 de São Paulo.',
+        403
+      );
+    }
+
+    const initial = checklistReadStrict();
+
+    const initialGroup =
+      initial.weeks[weekKey]
+        ?.responsaveis?.[responsibleId];
+
+    if (!initialGroup?.members) {
+      throw checklistError(
+        'Vínculo semanal não encontrado.',
+        404
+      );
+    }
+
+    const targets =
+      bulk
+        ? Object.keys(initialGroup.members)
+        : [memberId];
+
+    const freshTargets = new Map();
+
+    for (const id of targets) {
+      const target = await guild.members.fetch({
+        user: id,
+        force: true,
+      }).catch(() => null);
+
+      if (target) {
+        freshTargets.set(id, target);
+      }
+    }
+
+    const finalAccess = await checklistAccess(
+      guild,
+      actorId
+    );
+
+    if (
+      !finalAccess.windowOpen ||
+      weekKey !== weekKeyFromDateSP()
+    ) {
+      throw checklistError(
+        'O período de conferência mudou. Atualize a tela.',
+        409
+      );
+    }
+
+    const current = checklistReadStrict();
+
+    const group =
+      current.weeks[weekKey]
+        ?.responsaveis?.[responsibleId];
+
+    if (!group?.members) {
+      throw checklistError(
+        'O grupo foi alterado. Atualize a tela.',
+        409
+      );
+    }
+
+    const allowed = targets.filter(id =>
+      group.members[id] &&
+      canManageChecklistTarget(
+        finalAccess.member,
+        freshTargets.get(id)
+      )
+    );
+
+    if (!allowed.length) {
+      throw checklistError(
+        'Você não pode conferir a própria log nem membros sem autorização hierárquica.',
+        403
+      );
+    }
+
+    if (
+      !bulk &&
+      origin === 'Site'
+    ) {
+      if (
+        typeof revision !== 'string' ||
+        !/^[a-f0-9]{64}$/.test(revision)
+      ) {
+        throw checklistError(
+          'Atualize o registro antes de confirmar.',
+          409
+        );
+      }
+
+      if (
+        group.members[memberId].checked === checked
+      ) {
+        return {
+          ok: true,
+          unchanged: true,
+          changed: 0,
+        };
+      }
+
+      if (
+        revision !== checklistRevision(
+          weekKey,
+          responsibleId,
+          memberId,
+          group.members[memberId]
+        )
+      ) {
+        throw checklistError(
+          'Este registro foi alterado no Discord ou no site. Confira novamente.',
+          409
+        );
+      }
+    }
+
+    const previousAt =
+      Number(current.siteDecisionAt || 0);
+
+    const at = Math.max(
+      Date.now(),
+      Number.isFinite(previousAt)
+        ? previousAt + 1
+        : 0
+    );
+
+    current.siteDecisionAt = at;
+
+    let changed = 0;
+    current.siteAuditOutbox ??= [];
+
+    for (const id of allowed) {
+      const record = group.members[id];
+
+      const desired =
+        checked === null
+          ? record.checked !== true
+          : checked;
+
+      if (
+        (record.checked === true) === desired
+      ) {
+        continue;
+      }
+
+      const before =
+        structuredClone(record);
+
+      record.checked = desired;
+      record.checkedAt = desired ? at : null;
+      record.checkedBy = desired ? actorId : null;
+
+      current.siteAuditOutbox.push({
+        id: randomUUID(),
+        guildId: guild.id,
+        weekKey,
+        responsibleId,
+        memberId: id,
+        at,
+        origin,
+        reason,
+
+        actor: {
+          id: actorId,
+
+          name:
+            finalAccess.member.displayName,
+
+          tag:
+            finalAccess.member.user.tag,
+
+          avatar:
+            finalAccess.member.user.displayAvatarURL({
+              size: 128,
+            }),
+        },
+
+        before,
+        after: structuredClone(record),
+        attempts: 0,
+        nextAt: 0,
+      });
+
+      changed++;
+    }
+
+    if (changed) {
+      checklistWriteStrict(current);
+    }
+
+    installChecklistAudit(client);
+
+    scheduleChecklistPanel(
+      client,
+      guild
+    );
+
+    return {
+      ok: true,
+      changed,
+      skipped:
+        targets.length - allowed.length,
+    };
+  } finally {
+    CHECKLIST_CHANGE_LOCKS.delete(guild.id);
+  }
+}
+
+export async function checklistSiteAction({
+  client,
+  guild,
+  member,
+  payload = {},
+}) {
+  if (typeof payload.checked !== 'boolean') {
+    throw checklistError(
+      'Informe conferir ou reabrir o registro.'
+    );
+  }
+
+  return applyChecklistChange({
+    client,
+    guild,
+    actorId: member.id,
+
+    weekKey:
+      String(payload.weekKey || ''),
+
+    responsibleId:
+      String(payload.responsibleId || ''),
+
+    memberId:
+      String(payload.memberId || ''),
+
+    checked:
+      payload.checked,
+
+    revision:
+      payload.revision,
+
+    reason:
+      payload.reason,
+
+    origin:
+      'Site',
+  });
+}
+
+export async function getChecklistSitePendingNotifications({
+  guild,
+  member,
+}) {
+  const data = await getChecklistSiteSnapshot({
+    guild,
+    member,
+  });
+
+  return {
+    allowed:
+      data.windowOpen,
+
+    records: data.groups.flatMap(group =>
+      group.records
+        .filter(item => item.rights.check)
+        .map(item => ({
+          id:
+            `${data.weekKey}:${item.responsibleId}:${item.memberId}`,
+
+          title:
+            `Conferir logs • ${item.person.name}`,
+
+          createdAt:
+            getWeekSnapshotCutoffMs(data.weekKey),
+
+          text:
+            `Responsável: ${group.responsible.name}\n` +
+            `Área: ${item.area}\n` +
+            `Semana: ${data.weekLabel}`,
+
+          url:
+            data.url,
+
+          destination:
+            'checklist',
+        }))
+    ),
+  };
+}
+
 // ===============================
 // HANDLERS (Interações)
 // ===============================
@@ -1387,161 +2266,123 @@ if (interaction.isStringSelectMenu() && customId === "logcheck_admin_select") {
 }
 
   // 5. Toggle Status Individual
-  if (interaction.isStringSelectMenu() && customId.startsWith("logcheck_toggle:")) {
-    const [, respId, weekKey] = customId.split(":");
-    const memberId = interaction.values[0];
+  if (
+    interaction.isStringSelectMenu() &&
+    customId.startsWith("logcheck_toggle:")
+  ) {
+    const [, respId, weekKey] =
+      customId.split(":");
 
-    if (!hasPermission(interaction.member)) {
-      return interaction.reply({
-        content: "❌ Você não possui permissão para alterar este checklist.",
-        flags: MessageFlags.Ephemeral
+    let applied = false;
+
+    await interaction.deferUpdate();
+
+    try {
+      await applyChecklistChange({
+        client,
+        guild: interaction.guild,
+        actorId: interaction.user.id,
+        weekKey,
+        responsibleId: respId,
+        memberId: interaction.values[0],
+        origin: "Discord",
       });
+
+      applied = true;
+
+      const current =
+        checklistReadStrict();
+
+      const group =
+        current.weeks[weekKey]
+          ?.responsaveis?.[respId];
+
+      if (group) {
+        await sendPersonalManager(
+          interaction,
+          respId,
+          weekKey,
+          group,
+          interaction.user.id !== respId,
+          true
+        );
+      }
+    } catch (error) {
+      await interaction.followUp({
+        content: applied
+          ? "Conferência salva. Não foi possível atualizar esta mensagem; reabra o painel."
+          : error.message,
+
+        flags:
+          MessageFlags.Ephemeral,
+      }).catch(() => {});
     }
 
-    // Macedo e Owner ignoram a janela de domingo a quarta.
-    if (!hasChecklistFullOverride(interaction.member) && !isLogWindowOpenSP()) {
-      return interaction.reply({
-        content:
-          "🔒 O período para bater log está fechado.\n" +
-          "As conferências podem ser realizadas de domingo até quarta-feira, às 23:59.",
-        flags: MessageFlags.Ephemeral
-      });
-    }
-
-    const checklist = loadJSON(CHECKLIST_FILE, { weeks: {} });
-    const weekData = checklist.weeks?.[weekKey];
-    const respData = weekData?.responsaveis?.[respId];
-    const member = respData?.members?.[memberId];
-
-    if (!weekData || !respData || !member) {
-      return interaction.reply({
-        content: "❌ Não encontrei esse vínculo na lista semanal atual.",
-        flags: MessageFlags.Ephemeral
-      });
-    }
-
-    const targetMember =
-      interaction.guild.members.cache.get(memberId) ||
-      await interaction.guild.members.fetch(memberId).catch(() => null);
-
-    if (!canManageChecklistTarget(interaction.member, targetMember)) {
-      return interaction.reply({
-        content: "❌ Você não pode bater a própria log, nem a log de alguém da mesma hierarquia ou acima da sua.",
-        flags: MessageFlags.Ephemeral
-      });
-    }
-
-    if (!interaction.deferred && !interaction.replied) {
-      await interaction.deferUpdate().catch(() => {});
-    }
-
-    const oldStatus = member.checked;
-    member.checked = !oldStatus;
-    member.checkedAt = member.checked ? Date.now() : null;
-    member.checkedBy = member.checked ? interaction.user.id : null;
-
-    saveJSON(CHECKLIST_FILE, checklist);
-
-    // Log Auditoria
-    await logAudit(client, interaction.user, respId, memberId, member.checked, weekKey);
-
-    // Recarrega do arquivo já salvo
-    const refreshedChecklist = loadJSON(CHECKLIST_FILE, { weeks: {} });
-    const updatedData = refreshedChecklist.weeks?.[weekKey]?.responsaveis?.[respId];
-
-    if (updatedData) {
-      await sendPersonalManager(interaction, respId, weekKey, updatedData, interaction.user.id !== respId, true);
-    }
-
-    await refreshMainPanel(client, interaction.guild);
     return true;
   }
 
   // 6. Ações em Massa
-  if (interaction.isButton() && customId.startsWith("logcheck_bulk:")) {
-    const [, action, respId, weekKey] = customId.split(":");
+  if (
+    interaction.isButton() &&
+    customId.startsWith("logcheck_bulk:")
+  ) {
+    const [, action, respId, weekKey] =
+      customId.split(":");
 
-    if (!hasPermission(interaction.member)) {
-      return interaction.reply({
-        content: "❌ Você não possui permissão para alterar este checklist.",
-        flags: MessageFlags.Ephemeral
-      });
-    }
+    let applied = false;
 
-    // Macedo e Owner ignoram a janela de domingo a quarta.
-    if (!hasChecklistFullOverride(interaction.member) && !isLogWindowOpenSP()) {
-      return interaction.reply({
-        content:
-          "🔒 O período para bater log está fechado.\n" +
-          "As conferências podem ser realizadas de domingo até quarta-feira, às 23:59.",
-        flags: MessageFlags.Ephemeral
-      });
-    }
+    await interaction.deferUpdate();
 
-    const checklist = loadJSON(CHECKLIST_FILE, { weeks: {} });
-    const weekData = checklist.weeks?.[weekKey];
-    const respData = weekData?.responsaveis?.[respId];
-    const members = respData?.members;
-
-    if (!weekData || !respData || !members) {
-      return interaction.reply({
-        content: "❌ Não encontrei esse grupo na lista semanal atual.",
-        flags: MessageFlags.Ephemeral
-      });
-    }
-
-    const memberIds = Object.keys(members);
-    if (memberIds.length > 0) {
-      await interaction.guild.members.fetch({ user: memberIds }).catch(() => {});
-    }
-
-    // Em massa também respeita a hierarquia: nunca altera a própria log,
-    // nem membros do mesmo nível/acima. Macedo e Owner ignoram apenas a hierarquia,
-    // mas continuam sem bater a própria log.
-    const allowedMemberIds = memberIds.filter(memberId => {
-      const targetMember = interaction.guild.members.cache.get(memberId);
-      return canManageChecklistTarget(interaction.member, targetMember);
-    });
-
-    if (allowedMemberIds.length === 0) {
-      return interaction.reply({
-        content: "❌ Não há membros abaixo da sua hierarquia disponíveis para esta ação.",
-        flags: MessageFlags.Ephemeral
-      });
-    }
-
-    if (!interaction.deferred && !interaction.replied) {
-      await interaction.deferUpdate().catch(() => {});
-    }
-
-    allowedMemberIds.forEach(mId => {
-      members[mId].checked = action === "check";
-      members[mId].checkedAt = action === "check" ? Date.now() : null;
-      members[mId].checkedBy = action === "check" ? interaction.user.id : null;
-    });
-
-    saveJSON(CHECKLIST_FILE, checklist);
-
-    // Se todos os vinculados eram permitidos, mantém o log em massa tradicional.
-    // Se houve filtro hierárquico, registra individualmente para a recuperação por auditoria
-    // não alterar alguém que o responsável não podia gerenciar.
-    if (allowedMemberIds.length === memberIds.length) {
-      await logAudit(client, interaction.user, respId, "TODOS", action === "check", weekKey, true);
-    } else {
-      for (const memberId of allowedMemberIds) {
-        await logAudit(client, interaction.user, respId, memberId, action === "check", weekKey, false);
+    try {
+      if (
+        !["check", "uncheck"].includes(action)
+      ) {
+        throw checklistError(
+          "Ação em massa inválida."
+        );
       }
+
+      await applyChecklistChange({
+        client,
+        guild: interaction.guild,
+        actorId: interaction.user.id,
+        weekKey,
+        responsibleId: respId,
+        bulk: true,
+        checked: action === "check",
+        origin: "Discord",
+      });
+
+      applied = true;
+
+      const current =
+        checklistReadStrict();
+
+      const group =
+        current.weeks[weekKey]
+          ?.responsaveis?.[respId];
+
+      if (group) {
+        await sendPersonalManager(
+          interaction,
+          respId,
+          weekKey,
+          group,
+          interaction.user.id !== respId,
+          true
+        );
+      }
+    } catch (error) {
+      await interaction.followUp({
+        content: applied
+          ? "Conferências salvas. Não foi possível atualizar esta mensagem; reabra o painel."
+          : error.message,
+
+        flags:
+          MessageFlags.Ephemeral,
+      }).catch(() => {});
     }
 
-    // Recarrega do arquivo já salvo
-    const refreshedChecklist = loadJSON(CHECKLIST_FILE, { weeks: {} });
-    const updatedData = refreshedChecklist.weeks?.[weekKey]?.responsaveis?.[respId];
-
-    if (updatedData) {
-      await sendPersonalManager(interaction, respId, weekKey, updatedData, interaction.user.id !== respId, true);
-    }
-
-    await refreshMainPanel(client, interaction.guild);
     return true;
   }
 
@@ -1552,28 +2393,114 @@ if (interaction.isStringSelectMenu() && customId === "logcheck_admin_select") {
 async function sendPersonalManager(interaction, respId, weekKey, data, isAdmin = false, isUpdate = false) {
   const guild = interaction.guild;
   const isSunday = getNowSP().getDay() === 0;
-  const allMembers = Object.entries(data?.members || {});
 
-  // ✅ Pre-fetch focado nos membros deste responsável específico.
-  // A filtragem hierárquica precisa dos cargos carregados antes de montar a tela.
-  const idsToFetch = new Set([respId]);
-  allMembers.forEach(([mId]) => idsToFetch.add(mId));
-  allMembers.forEach(([_, m]) => { if (m.checkedBy) idsToFetch.add(m.checkedBy); });
+  let access;
+  let members;
+  let canChange;
 
-  if (idsToFetch.size > 0 && guild) {
-    await guild.members.fetch({ user: Array.from(idsToFetch) }).catch(() => {});
-  }
+  try {
+    access = await checklistAccess(
+      guild,
+      interaction.user.id
+    );
 
-  const members = isAdmin
-    ? allMembers.filter(([id]) => {
-        const targetMember = guild.members.cache.get(id);
-        return canManageChecklistTarget(interaction.member, targetMember);
-      })
-    : allMembers;
+    const initialStore = checklistReadStrict();
 
-  if (isAdmin && members.length === 0) {
+    const initialGroup =
+      initialStore.weeks?.[weekKey]?.responsaveis?.[respId];
+
+    if (!initialGroup) {
+      throw checklistError(
+        "Este grupo não está disponível na semana selecionada.",
+        404
+      );
+    }
+
+    const targetIds = Object.keys(initialGroup.members || {});
+    const fetchedTargets = new Map();
+
+    for (let offset = 0; offset < targetIds.length; offset += 4) {
+      const batch = targetIds.slice(offset, offset + 4);
+
+      await Promise.all(
+        batch.map(async targetId => {
+          const targetMember = await guild.members.fetch({
+            user: targetId,
+            force: true
+          }).catch(() => null);
+
+          if (targetMember) {
+            fetchedTargets.set(targetId, targetMember);
+          }
+        })
+      );
+    }
+
+    access = await checklistAccess(
+      guild,
+      interaction.user.id
+    );
+
+    const latestStore = checklistReadStrict();
+
+    data =
+      latestStore.weeks?.[weekKey]?.responsaveis?.[respId];
+
+    if (!data) {
+      throw checklistError(
+        "Este grupo foi alterado ou removido. Abra o checklist novamente.",
+        409
+      );
+    }
+
+    members = Object.entries(data.members || {}).filter(
+      ([targetId]) =>
+        canManageChecklistTarget(
+          access.member,
+          fetchedTargets.get(targetId)
+        )
+    );
+
+    if (members.length === 0) {
+      throw checklistError(
+        "Este grupo não possui membros que você possa gerenciar pela sua hierarquia.",
+        403
+      );
+    }
+
+    canChange =
+      weekKey === weekKeyFromDateSP() &&
+      access.windowOpen;
+
+    const checkerIds = [
+      ...new Set(
+        members
+          .map(([, record]) => record.checkedBy)
+          .filter(Boolean)
+      )
+    ];
+
+    const displayIds = [
+      ...new Set([respId, ...checkerIds])
+    ];
+
+    if (displayIds.length > 0) {
+      await guild.members.fetch({
+        user: displayIds
+      }).catch(() => {});
+    }
+  } catch (error) {
+    console.error(
+      "[Checklist] Não foi possível abrir a gestão:",
+      error
+    );
+
     const payload = {
-      content: "❌ Este grupo não possui membros que você possa gerenciar pela sua hierarquia.",
+      content: `❌ ${
+        error.status
+          ? error.message
+          : "Não foi possível carregar o checklist. Tente atualizar a janela."
+      }`,
       embeds: [],
       components: []
     };
@@ -1582,10 +2509,17 @@ async function sendPersonalManager(interaction, respId, weekKey, data, isAdmin =
       return interaction.editReply(payload).catch(console.error);
     }
 
-    return interaction.reply({ ...payload, flags: MessageFlags.Ephemeral }).catch(console.error);
+    if (isUpdate) {
+      return interaction.update(payload).catch(console.error);
+    }
+
+    return interaction.reply({
+      ...payload,
+      flags: MessageFlags.Ephemeral
+    }).catch(console.error);
   }
 
-  const checked = members.filter(([_, m]) => m.checked).length;
+  const checked = members.filter(([, record]) => record.checked).length;
   const total = members.length;
 
   const respMember = guild.members.cache.get(respId);
@@ -1608,14 +2542,22 @@ async function sendPersonalManager(interaction, respId, weekKey, data, isAdmin =
     }
   }
 
+  const windowDescription =
+    weekKey !== weekKeyFromDateSP()
+      ? "📚 **Consulta de semana anterior:** alterações indisponíveis."
+      : canChange
+        ? "🟣 **Conferência disponível:** selecione um membro para alterar o status."
+        : "🔒 **Conferência fechada:** os registros continuam disponíveis para consulta.";
+
   const embed = new EmbedBuilder()
     .setTitle(`📖 Gerenciar Logs: ${respDisplay}`)
     .setDescription(
       `📅 **Semana:** ${getWeekRangeLabel(weekKey)}\n` +
-      `📊 **Progresso:** ${checked}/${total} conferidos\n\n` +
+      `📊 **Progresso:** ${checked}/${total} conferidos\n` +
+      `${windowDescription}\n\n` +
       (memberLines.length ? memberLines.join("\n") : "_Nenhum membro vinculado._")
     )
-    .setColor(checked === total ? "#2ecc71" : "#3498db");
+    .setColor(checked === total ? "#2ecc71" : "#8b5cf6");
 
   const selectOptions = [];
   for (const [id, m] of members) {
@@ -1632,21 +2574,41 @@ async function sendPersonalManager(interaction, respId, weekKey, data, isAdmin =
 
   const components = [];
 
-  if (selectOptions.length > 0) {
+  if (canChange && selectOptions.length > 0) {
     const select = new ActionRowBuilder().addComponents(
       new StringSelectMenuBuilder()
         .setCustomId(`logcheck_toggle:${respId}:${weekKey}`)
-        .setPlaceholder("Clique para inverter o status de um membro")
+        .setPlaceholder("Selecione um membro para alterar o status")
         .addOptions(selectOptions.slice(0, 25))
     );
+
     components.push(select);
 
-    const buttons = new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId(`logcheck_bulk:check:${respId}:${weekKey}`).setLabel("Marcar Todos").setStyle(ButtonStyle.Success),
-      new ButtonBuilder().setCustomId(`logcheck_bulk:uncheck:${respId}:${weekKey}`).setLabel("Desmarcar Todos").setStyle(ButtonStyle.Danger)
-    );
+    const bulkButtons = [];
 
-    components.push(buttons);
+    if (members.some(([, record]) => !record.checked)) {
+      bulkButtons.push(
+        new ButtonBuilder()
+          .setCustomId(`logcheck_bulk:check:${respId}:${weekKey}`)
+          .setLabel("Conferir pendentes")
+          .setStyle(ButtonStyle.Success)
+      );
+    }
+
+    if (members.some(([, record]) => record.checked)) {
+      bulkButtons.push(
+        new ButtonBuilder()
+          .setCustomId(`logcheck_bulk:uncheck:${respId}:${weekKey}`)
+          .setLabel("Reabrir conferidos")
+          .setStyle(ButtonStyle.Danger)
+      );
+    }
+
+    if (bulkButtons.length > 0) {
+      components.push(
+        new ActionRowBuilder().addComponents(bulkButtons)
+      );
+    }
   }
 
   const payload = { embeds: [embed], components };
@@ -1665,23 +2627,177 @@ async function sendPersonalManager(interaction, respId, weekKey, data, isAdmin =
   return interaction.reply({ ...payload, flags: MessageFlags.Ephemeral }).catch(console.error);
 }
 
-async function logAudit(client, actor, respId, memberId, status, weekKey, isBulk = false) {
-  const channel = await client.channels.fetch(LOG_CHANNEL_ID).catch(() => null);
-  if (!channel) return;
+async function logAudit(
+  client,
+  actor,
+  respId,
+  memberId,
+  status,
+  weekKey,
+  isBulk = false,
+  details = {}
+) {
+  const channel = await client.channels.fetch(
+    LOG_CHANNEL_ID
+  );
+
+  if (
+    !channel?.isTextBased() ||
+    (
+      details.guildId &&
+      channel.guildId !== details.guildId
+    )
+  ) {
+    throw new Error(
+      'Canal de auditoria do checklist indisponível ou de outro servidor.'
+    );
+  }
+
+  const at =
+    Number(details.at || Date.now());
+
+  const actorName =
+    actor.name ||
+    actor.tag ||
+    actor.username ||
+    actor.id;
+
+  const avatar =
+    actor.avatar ||
+    actor.displayAvatarURL?.({
+      size: 128,
+    });
 
   const embed = new EmbedBuilder()
-    .setTitle(isBulk ? "📑 Checklist: Ação em Massa" : "📑 Checklist Individual Atualizado")
-    .setColor(status ? "#2ecc71" : "#e74c3c")
-    .addFields(
-      { name: "👤 Responsável", value: `<@${respId}>`, inline: true },
-      { name: "🧍 Membro(s)", value: memberId === "TODOS" ? "Todos os vinculados" : `<@${memberId}>`, inline: true },
-      { name: "📌 Ação", value: status ? "✅ Marcou como Conferido" : "❌ Marcou como Pendente", inline: true },
-      { name: "🔧 Alterado por", value: `${actor}`, inline: true },
-      { name: "📅 Semana", value: weekKey, inline: true }
+    .setTitle(
+      isBulk
+        ? '📑 Checklist: Ação em Massa'
+        : '📑 Checklist Individual Atualizado'
     )
-    .setTimestamp();
+    .setColor(
+      status
+        ? '#2ecc71'
+        : '#e74c3c'
+    )
+    .setAuthor({
+      name: actorName,
+      iconURL: avatar,
+      url:
+        `https://discord.com/users/${actor.id}`,
+    })
+    .addFields(
+      {
+        name: '👤 Responsável',
+        value: `<@${respId}>`,
+        inline: true,
+      },
+      {
+        name: '🧍 Membro(s)',
+        value:
+          memberId === 'TODOS'
+            ? 'Todos os vinculados'
+            : `<@${memberId}>`,
+        inline: true,
+      },
+      {
+        name: '📌 Ação',
+        value:
+          status
+            ? '✅ Marcou como Conferido'
+            : '❌ Marcou como Pendente',
+        inline: true,
+      },
+      {
+        name: '🔧 Alterado por',
+        value:
+          `<@${actor.id}>\nID: ${actor.id}`,
+        inline: true,
+      },
+      {
+        name: '📅 Semana',
+        value: weekKey,
+        inline: true,
+      },
+      {
+        name: 'Origem',
+        value:
+          details.origin || 'Discord',
+        inline: true,
+      },
+      {
+        name: 'Data e hora',
+        value:
+          `<t:${Math.floor(at / 1000)}:F>`,
+        inline: true,
+      },
+      {
+        name: 'Motivo',
+        value:
+          String(
+            details.reason ||
+            'Não informado.'
+          ).slice(0, 1000),
+      }
+    )
+    .setTimestamp(at);
 
-  await channel.send({ embeds: [embed] }).catch(() => {});
+  if (details.id) {
+    embed.addFields({
+      name: 'Operação',
+      value: details.id,
+    });
+  }
+
+  const files =
+    details.before && details.after
+      ? [
+          {
+            attachment: Buffer.from(
+              JSON.stringify(
+                {
+                  operationId:
+                    details.id,
+
+                  guildId:
+                    details.guildId,
+
+                  actor,
+
+                  origin:
+                    details.origin,
+
+                  at,
+                  weekKey,
+
+                  responsibleId:
+                    respId,
+
+                  memberId,
+
+                  reason:
+                    details.reason || '',
+
+                  before:
+                    details.before,
+
+                  after:
+                    details.after,
+                },
+                null,
+                2
+              )
+            ),
+
+            name:
+              `checklist-${details.id}.json`,
+          },
+        ]
+      : [];
+
+  await channel.send({
+    embeds: [embed],
+    files,
+  });
 }
 
 // ===============================
@@ -1755,6 +2871,8 @@ dashOn(
 
 export async function checklistOnReady(client) {
   CHECKLIST_RUNTIME_CLIENT = client;
+
+  installChecklistAudit(client);
 
   const weekKey = weekKeyFromDateSP();
   const checklist = readChecklistWeek(weekKey);

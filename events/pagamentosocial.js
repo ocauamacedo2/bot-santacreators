@@ -1,4 +1,8 @@
 // ./application/events/pagamentosocial.js
+
+import {
+  validatePrizeInput,
+} from '../utils/prizeValidation.js';
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
@@ -611,6 +615,9 @@ function normalizarTipoPremiacao(texto) {
   const original = String(texto || "").trim();
 
   const t = original
+    .normalize("NFKC")
+    .replace(/https?:\/\/\S+/gi, " ")
+    .replace(/<[^>]+>/g, " ")
     .toLowerCase()
     .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
     .replace(/[^a-z0-9\s$.,]/g, " ")
@@ -625,6 +632,14 @@ function normalizarTipoPremiacao(texto) {
     /\br\$\b/i.test(t) ||
     /\b\d{1,3}(?:[.\s]\d{3})+(?:,\d{1,2})?\b/.test(t) ||
     /\b\d+(?:[.,]\d+)?\s*(?:k|kk|m|mi|mil|milhao|milhoes)?\b/i.test(t);
+
+  if (
+    /\b(?:battle\s*pass|better\s*paste)\b/.test(
+      t
+    )
+  ) {
+    return 'Pass';
+  }
 
   // ✅ PRIORIDADE MÁXIMA: se escreveu rolepass/pass, nunca pode virar Dinheiro.
   if (t.includes("rolepass")) return "Pass";
@@ -665,15 +680,15 @@ if (
   t.includes("lançamento")
 ) return "VIP Lancamento";
 
-if (pareceDinheiro) return "Dinheiro";
-
 if (
   t.includes("evento") ||
   t.includes("vipevento") ||
   t.includes("vip evento")
 ) return "VIP Evento";
 
-  return "Dinheiro";
+if (pareceDinheiro) return "Dinheiro";
+
+  return "Não identificado";
 }
 
 function formatarTipoPremiacaoBonito(tipo) {
@@ -4537,7 +4552,10 @@ async function buscarVipEventoPorDados(client, dados = {}) {
   if (!alvoData) camposObrigatoriosFaltando.push("data");
   if (!alvoTipo) camposObrigatoriosFaltando.push("premiação/tipo");
   if (!alvoCidade) camposObrigatoriosFaltando.push("cidade");
-  if (!alvoId && !alvoNome) camposObrigatoriosFaltando.push("ganhador");
+
+  if (!/^\d{17,20}$/.test(alvoId)) {
+    camposObrigatoriosFaltando.push("ID Discord válido do ganhador");
+  }
 
   if (camposObrigatoriosFaltando.length > 0) {
     return {
@@ -4631,14 +4649,19 @@ async function buscarVipEventoPorDados(client, dados = {}) {
       alvoTipo === tipoVip
     );
 
-    const mesmaQuantidade =
-      quantidadePagamento === null ||
-      quantidadeVip === null ||
-      quantidadePagamento === quantidadeVip;
+    const mesmaQuantidade = Boolean(
+      Number.isFinite(quantidadePagamento) &&
+      Number.isFinite(quantidadeVip) &&
+      quantidadePagamento > 0 &&
+      quantidadeVip > 0 &&
+      quantidadePagamento === quantidadeVip
+    );
 
-    const mesmoGanhador = alvoId
-      ? Boolean(idVip && alvoId === idVip)
-      : Boolean(alvoNome && nomeVip && alvoNome === nomeVip);
+    const mesmoGanhador = Boolean(
+      /^\d{17,20}$/.test(alvoId) &&
+      /^\d{17,20}$/.test(idVip) &&
+      alvoId === idVip
+    );
 
     const diferencaMinutos =
       calcularDiferencaMinutosVip(
@@ -4690,7 +4713,11 @@ async function buscarVipEventoPorDados(client, dados = {}) {
     return {
       ok: false,
       erro:
-        "Nenhum Registro VIP passou por todas as conferências automáticas: evento, data, cidade, premiação, ganhador e horário próximo.",
+        "Nenhum Registro VIP passou por todas as conferências automáticas: " +
+        "evento, data, cidade, tipo, quantidade, ID do ganhador e horário próximo. " +
+        "A quantidade precisa estar identificada nos dois registros. " +
+        "Confira os campos e informe o link exato do Registro VIP quando necessário. " +
+        "Nenhum vínculo automático foi aplicado.",
     };
   }
 
@@ -4799,10 +4826,28 @@ async function resolverVipEventoProfissional(client, texto, dados = {}) {
         `${info.tipo || ""}\n${info.premiacao || ""}`
       );
 
-      if (!tipoVip || tipoPagamento !== tipoVip) {
+      if (
+        !tipoPagamento ||
+        !tipoVip ||
+        tipoPagamento === "Não identificado" ||
+        tipoVip === "Não identificado"
+      ) {
         return {
           ok: false,
-          erro: "A premiação/tipo diverge do Registro VIP. Confira o link.",
+          erro:
+            "Não foi possível identificar o tipo da premiação no pagamento ou no Registro VIP. " +
+            "Corrija o tipo antes de vincular os registros.",
+        };
+      }
+
+      if (tipoPagamento !== tipoVip) {
+        return {
+          ok: false,
+          erro:
+            "A premiação/tipo diverge do Registro VIP. " +
+            "Pagamento: " + tipoPagamento + ". " +
+            "Registro VIP: " + tipoVip + ". " +
+            "Confira os campos e o link informado.",
         };
       }
     }
@@ -7184,6 +7229,29 @@ const cidadeAutomaticaNome =
 
 await interaction.deferReply({ flags: MessageFlags.Ephemeral }).catch(() => {});
 
+const prizeError =
+  validatePrizeInput({
+    prize:
+      premiacao,
+
+    type:
+      tipoDigitadoPagamentoSocial,
+
+    classify:
+      normalizarTipoPremiacao,
+  });
+
+if (
+  prizeError
+) {
+  await interaction.editReply({
+    content:
+      '❌ ' + prizeError,
+  });
+
+  return true;
+}
+
 const vipEventoResolvido = await resolverVipEventoProfissional(
   client,
   premiacao,
@@ -8052,6 +8120,223 @@ void (async () => {
 // SITE HUB • SOCIAL MEDIA
 // =====================================================
 
+function getPagamentoSocialSitePresentation(guild, message) {
+  const resolveText = value => String(value || '')
+    .replace(/<@&(\d{17,20})>/g, (_, id) =>
+      guild.roles.cache.get(id)?.name || `Cargo ${id}`)
+    .replace(/<@!?(\d{17,20})>/g, (_, id) => {
+      const member = guild.members.cache.get(id);
+
+      return member?.displayName ||
+        member?.user?.username ||
+        `Usuário ${id}`;
+    })
+    .replace(/<#(\d{17,20})>/g, (_, id) =>
+      `#${guild.channels.cache.get(id)?.name || id}`)
+    .replace(/<t:(\d{1,12})(?::[tTdDfFR])?>/g, (original, seconds) => {
+      const date = new Date(Number(seconds) * 1000);
+
+      return Number.isFinite(date.getTime())
+        ? date.toLocaleString('pt-BR', {
+            timeZone: 'America/Sao_Paulo',
+          })
+        : original;
+    });
+
+  const embed = message.embeds[0];
+  const links = [];
+
+  for (const row of message.components || []) {
+    for (const component of row.components || []) {
+      if (component.url) {
+        links.push({
+          label: resolveText(component.label || 'Abrir link'),
+          url: String(component.url),
+        });
+      }
+    }
+  }
+
+  return {
+    title: resolveText(embed?.title),
+    description: resolveText(embed?.description),
+    content: resolveText(message.content),
+
+    fields: (embed?.fields || []).map(field => ({
+      name: resolveText(field.name),
+      value: resolveText(field.value),
+      inline: Boolean(field.inline),
+    })),
+
+    links,
+  };
+}
+
+export async function getPagamentoSocialSitePendingNotifications({
+  guild,
+  member,
+}) {
+  const channel = await guild.channels.fetch(
+    CANAL_PAGAMENTO
+  );
+
+  if (
+    channel?.guildId !== guild.id ||
+    !channel.messages ||
+    !channel.permissionsFor(member)?.has([
+      'ViewChannel',
+      'ReadMessageHistory',
+    ]) ||
+    !temPermissaoAprovacaoMember(
+      member,
+      member.id
+    )
+  ) {
+    return {
+      allowed: false,
+      records: [],
+      limited: false,
+    };
+  }
+
+  const records = [];
+  const refreshedCreators = new Set();
+  let before;
+  let limited = false;
+
+  for (let pageIndex = 0; pageIndex < 5; pageIndex++) {
+    const page = await channel.messages.fetch({
+      limit: 100,
+      ...(before ? { before } : {}),
+    });
+
+    for (const message of page.values()) {
+      if (
+        message.author?.id !== guild.client.user.id ||
+        !mensagemEhRegistroPagamento(message) ||
+        String(message.content || '').includes(
+          'mensagem antiga'
+        )
+      ) {
+        continue;
+      }
+
+      const embed = message.embeds[0];
+      const status = getStatusValueFromEmbed(
+        embed
+      ).split('\n')[0];
+
+      if (/PAGO|REPROVADO/i.test(status)) {
+        continue;
+      }
+
+      const creatorId = getCriadorIdFromEmbed(
+        embed
+      );
+
+      if (!creatorId) {
+        continue;
+      }
+
+      if (!refreshedCreators.has(creatorId)) {
+        await guild.members.fetch({
+          user: creatorId,
+          force: true,
+        }).catch(() => null);
+
+        refreshedCreators.add(creatorId);
+      }
+
+      const buttons = (
+        message.components || []
+      ).flatMap(row =>
+        row.components || []
+      );
+
+      let allowed = false;
+
+      for (const action of ['pago', 'reprovado']) {
+        const active = buttons.some(button =>
+          !button.disabled &&
+          String(
+            button.customId || ''
+          ).startsWith(
+            `${action}__`
+          )
+        );
+
+        if (!active) {
+          continue;
+        }
+
+        const validation =
+          await validarHierarquiaDecisaoPagamento(
+            {
+              guild,
+              member,
+              user: member.user,
+            },
+            creatorId,
+            action
+          );
+
+        if (validation.ok) {
+          allowed = true;
+          break;
+        }
+      }
+
+      if (!allowed) {
+        continue;
+      }
+
+      const presentation =
+        getPagamentoSocialSitePresentation(
+          guild,
+          message
+        );
+
+      records.push({
+        id: message.id,
+
+        title:
+          presentation.title ||
+          'Pagamento aguardando decisão',
+
+        text: [
+          presentation.description,
+          presentation.content,
+        ].filter(Boolean).join('\n'),
+
+        fields:
+          presentation.fields || [],
+
+        createdAt:
+          message.createdTimestamp,
+
+        url:
+          message.url,
+      });
+    }
+
+    if (page.size < 100) {
+      break;
+    }
+
+    before = page.last().id;
+
+    if (pageIndex === 4) {
+      limited = true;
+    }
+  }
+
+  return {
+    allowed: true,
+    records,
+    limited,
+  };
+}
+
 export async function getPagamentoSocialSiteSnapshot({
   guild,
   actorId,
@@ -8085,10 +8370,23 @@ export async function getPagamentoSocialSiteSnapshot({
       const statusText = getStatusValueFromEmbed(embed).split('\n')[0];
       const status = /REPROVADO/i.test(statusText) ? 'rejected' : /PAGO/i.test(statusText) ? 'approved'
         : /SOLICITADO/i.test(statusText) ? 'requested' : 'pending';
-      records.push({ messageId: message.id, creatorId: getCriadorIdFromEmbed(embed), status,
-        title: embed.title, text: getTextoCompletoRegistroPagamento(message), createdAt: message.createdTimestamp,
-        url: message.url, actionable: ['pending', 'requested'].includes(status) &&
-          message.components.some(row => row.components.some(button => /^(pago|solicitado|reprovado)__/.test(button.customId || ''))) });
+      records.push({
+        messageId: message.id,
+        creatorId: getCriadorIdFromEmbed(embed),
+        status,
+        title: embed.title,
+        text: getTextoCompletoRegistroPagamento(message),
+        presentation: getPagamentoSocialSitePresentation(guild, message),
+        createdAt: message.createdTimestamp,
+        url: message.url,
+
+        actionable: ['pending', 'requested'].includes(status) &&
+          message.components.some(row =>
+            row.components.some(button =>
+              /^(pago|solicitado|reprovado)__/.test(button.customId || '')
+            )
+          ),
+      });
     }
     if (batch.size < 100) break;
     before = batch.last().id;

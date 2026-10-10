@@ -2520,11 +2520,88 @@ export async function getHierarchySiteSnapshot({
       actor
     );
 
+  const hierarchy =
+    getOfficialSantaCreatorsHierarchySnapshot(
+      guild
+    );
+
+  for (
+    const group of
+    hierarchy?.hierarchy || []
+  ) {
+    group.members =
+      (
+        group.members || []
+      ).map(
+        memberData => {
+          const target =
+            guild.members.cache.get(
+              String(
+                memberData.userId
+              )
+            );
+
+          const canManage =
+            permission !== 'NONE' &&
+            Boolean(target) &&
+            canManageDivisionTarget(
+              actor,
+              target
+            );
+
+          const division =
+            canManage &&
+            isDivisionTargetRole(
+              target
+            );
+
+          const slot =
+            canManage &&
+            (
+              target.roles.cache.has(
+                CONFIG.ROLES.COORD_CREATOR
+              ) ||
+              target.roles.cache.has(
+                CONFIG.ROLES.RESP_LIDER
+              )
+            ) &&
+            !(
+              permission === 'MOD' &&
+              target.roles.cache.has(
+                CONFIG.ROLES.RESP_LIDER
+              )
+            );
+
+          const result = {
+            ...memberData,
+
+            rights: {
+              division,
+              slot,
+            },
+          };
+
+          if (
+            !division
+          ) {
+            delete result.divisions;
+            delete result.divisionLabels;
+          }
+
+          if (
+            !slot
+          ) {
+            delete result.slot;
+            delete result.slotLabel;
+          }
+
+          return result;
+        }
+      );
+  }
+
   return {
-    hierarchy:
-      getOfficialSantaCreatorsHierarchySnapshot(
-        guild
-      ),
+    hierarchy,
 
     rights: {
       edit:
@@ -2699,6 +2776,17 @@ export async function hierarchySiteAction({
     action ===
     "slot"
   ) {
+    if (
+      !canManageDivisionTarget(
+        actor,
+        target
+      )
+    ) {
+      throw new Error(
+        'Sua hierarquia não permite alterar o horário deste membro.'
+      );
+    }
+
     const newSlot =
       String(
         values?.[0] ||

@@ -7,6 +7,7 @@ const MAIN = '1457573495952248883';
 const MENUS = '1457577651152883797';
 
 const EDIT_ROLES = [
+  '1262262852949905408',
   '1352408327983861844',
   '1262262852949905409',
   '1352407252216184833',
@@ -295,6 +296,14 @@ export function createSiteEventsLibrary({ client }) {
     const result = {
       events: events.map(event => ({
         ...event,
+
+        publicationOnline:
+          Boolean(
+            state.publications?.[
+              guild.id + ':' + event.id
+            ]?.online
+          ),
+
         name: state.names?.[guild.id + ':' + event.id] || event.name,
         metadataRevision: digest([
           state.names?.[guild.id + ':' + event.id] || event.name,
@@ -399,6 +408,11 @@ export function createSiteEventsLibrary({ client }) {
       );
     }
 
+    result.rulesRevision =
+      digest(
+        result.sections.rules || []
+      );
+
     return result;
   }
 
@@ -437,7 +451,355 @@ export function createSiteEventsLibrary({ client }) {
     return value;
   }
 
+  async function publishedRules(
+    guild,
+    payload
+  ) {
+    const state =
+      await read();
+
+    const records =
+      Object.entries(
+        state.publications || {}
+      ).filter(
+        ([key, value]) =>
+          key.startsWith(
+            guild.id + ':'
+          ) &&
+          value.online
+      );
+
+    const events =
+      records.map(
+        ([, value]) => ({
+          id:
+            value.eventId,
+
+          name:
+            value.name,
+
+          cover:
+            value.cover || '',
+
+          publicationOnline:
+            true,
+
+          publishedAt:
+            value.publishedAt,
+        })
+      );
+
+    const selected =
+      records.find(
+        ([, value]) =>
+          value.eventId ===
+            String(
+              payload.eventId || ''
+            )
+      )?.[1];
+
+    return {
+      events,
+
+      sections: {
+        rules:
+          selected?.rules || [],
+      },
+
+      rights: {
+        edit:
+          false,
+      },
+
+      warnings:
+        payload.eventId &&
+        !selected
+          ? [
+              'As regras deste evento não estão publicadas.',
+            ]
+          : [],
+
+      publicRules:
+        true,
+    };
+  }
+
+  async function publishRules(
+    guild,
+    member,
+    payload
+  ) {
+    return serial(
+      async () => {
+        const data =
+          await snapshot(
+            guild,
+            member,
+            {
+              eventId:
+                payload.eventId,
+
+              section:
+                'rules',
+            }
+          );
+
+        const event =
+          data.events.find(
+            item =>
+              item.id ===
+                payload.eventId
+          );
+
+        if (
+          !event ||
+          event.id === 'cds'
+        ) {
+          throw fail(
+            404,
+            'Evento inválido.'
+          );
+        }
+
+        if (
+          ![
+            'online',
+            'offline',
+          ].includes(
+            payload.status
+          )
+        ) {
+          throw fail(
+            400,
+            'Estado de publicação inválido.'
+          );
+        }
+
+        const rules =
+          data.sections.rules || [];
+
+        if (
+          payload.status === 'online' &&
+          data.warnings.length
+        ) {
+          throw fail(
+            409,
+            'Resolva os avisos de leitura antes de publicar as regras.'
+          );
+        }
+
+        if (
+          digest(rules) !==
+            payload.rulesRevision
+        ) {
+          throw fail(
+            409,
+            'As regras mudaram. Confira o conteúdo novamente.'
+          );
+        }
+
+        if (
+          payload.status === 'online' &&
+          !rules.length
+        ) {
+          throw fail(
+            400,
+            'Adicione as regras antes de publicar.'
+          );
+        }
+
+        const state =
+          await read();
+
+        state.publications ||= {};
+
+        const key =
+          guild.id + ':' +
+          event.id;
+
+        const previous =
+          state.publications[key] ||
+          null;
+
+        const record = {
+          eventId:
+            event.id,
+
+          name:
+            event.name,
+
+          cover:
+            event.cover || '',
+
+          online:
+            payload.status ===
+              'online',
+
+          rules:
+            JSON.parse(
+              JSON.stringify(
+                rules
+              )
+            ),
+
+          publishedAt:
+            Date.now(),
+
+          publishedBy:
+            member.id,
+        };
+
+        state.publications[key] =
+          record;
+
+        await save(state);
+
+        let auditWarning = '';
+
+        try {
+          const channelId =
+            String(
+              process.env
+                .SANTA_EVENTS_PUBLICATION_LOG_CHANNEL_ID ||
+              ''
+            ).trim();
+
+          if (
+            !channelId
+          ) {
+            throw new Error(
+              'Canal de logs de publicação não configurado.'
+            );
+          }
+
+          const audit =
+            await guild.channels.fetch(
+              channelId
+            );
+
+          if (
+            !audit ||
+            audit.guildId !== guild.id ||
+            !audit.isTextBased()
+          ) {
+            throw new Error(
+              'Canal de logs inválido.'
+            );
+          }
+
+          const before =
+            JSON.stringify(
+              previous,
+              null,
+              2
+            );
+
+          const after =
+            JSON.stringify(
+              record,
+              null,
+              2
+            );
+
+          await audit.send({
+            content:
+              'Publicação de regras: **' +
+              event.name +
+              '** — **' +
+              payload.status.toUpperCase() +
+              '**',
+
+            embeds: [
+              {
+                color:
+                  record.online
+                    ? 0x57F287
+                    : 0xED4245,
+
+                author: {
+                  name:
+                    member.displayName,
+
+                  icon_url:
+                    member.user
+                      .displayAvatarURL(),
+
+                  url:
+                    'https://discord.com/users/' +
+                    member.id,
+                },
+
+                description:
+                  'Responsável: <@' +
+                  member.id +
+                  '>\nData: <t:' +
+                  Math.floor(
+                    record.publishedAt /
+                      1000
+                  ) +
+                  ':F>',
+              },
+            ],
+
+            files: [
+              {
+                attachment:
+                  Buffer.from(
+                    'ANTES\n' +
+                    before +
+                    '\n\nDEPOIS\n' +
+                    after
+                  ),
+
+                name:
+                  'publicacao-' +
+                  event.id +
+                  '.txt',
+              },
+            ],
+
+            allowedMentions: {
+              parse:
+                [],
+            },
+          });
+        } catch (error) {
+          auditWarning =
+            'Publicação salva, mas a log de publicação não foi entregue.';
+
+          console.error(
+            '[EVENT RULES AUDIT]',
+            error.code ||
+              error.name
+          );
+        }
+
+        return {
+          ok:
+            true,
+
+          online:
+            record.online,
+
+          auditWarning,
+        };
+      }
+    );
+  }
+
   async function handle({ guild, member, action, payload = {} }) {
+    if (
+      action ===
+        'events.published'
+    ) {
+      await writes;
+
+      return publishedRules(
+        guild,
+        payload
+      );
+    }
+
     if (action === 'events.snapshot') {
       await writes;
       return snapshot(guild, member, payload);
@@ -469,6 +831,17 @@ export function createSiteEventsLibrary({ client }) {
         await save(state);
         return { ok: true };
       });
+    }
+
+    if (
+      action ===
+        'events.publish'
+    ) {
+      return publishRules(
+        guild,
+        member,
+        payload
+      );
     }
 
     const value = input(payload);

@@ -16,6 +16,10 @@ import {
 import { dashEmit } from "../utils/dashHub.js";
 
 import {
+  createApprovalWorkflow,
+} from "../utils/approvalWorkflow.js";
+
+import {
   getOperationalDateKeySP,
   getOperationalMidnightTimestampSP,
   recordExpectedOperation,
@@ -33,20 +37,83 @@ const CRONO_FILE = path.join(DATA_DIR, "cronograma_state.json"); // ✅ NOVO
 const ensureDir = () => { if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true }); };
 
 // ✅ Escrita Atômica (mais segura: escreve num .tmp e renomeia, evitando corromper se o bot cair no meio)
-const saveState = (data) => { 
-  ensureDir(); 
+const saveState = (data) => {
+  ensureDir();
+
   const tmp = `${STATE_FILE}.tmp`;
+
   try {
-    fs.writeFileSync(tmp, JSON.stringify(data, null, 2));
+    fs.writeFileSync(
+      tmp,
+      JSON.stringify(data, null, 2)
+    );
+
     fs.renameSync(tmp, STATE_FILE);
-  } catch (e) {
-    console.error("[EventosDiarios] Erro ao salvar state:", e);
+  } catch (error) {
+    console.error(
+      "[EventosDiarios] Erro ao salvar state:",
+      error
+    );
+
+    throw error;
   }
 };
 
-const loadState = () => { 
-  try { if (fs.existsSync(STATE_FILE)) return JSON.parse(fs.readFileSync(STATE_FILE, "utf8")); } catch (e) { console.error("[EventosDiarios] Erro load:", e); } 
-  return { pendingRequests: {} }; 
+const loadState = () => {
+  if (!fs.existsSync(STATE_FILE)) {
+    return {
+      pendingRequests: {},
+      processingRequests: {},
+      dailyPublications: {},
+    };
+  }
+
+  try {
+    const loaded = JSON.parse(
+      fs.readFileSync(STATE_FILE, "utf8")
+    );
+
+    if (
+      !loaded ||
+      typeof loaded !== "object" ||
+      Array.isArray(loaded) ||
+      !loaded.pendingRequests ||
+      typeof loaded.pendingRequests !== "object" ||
+      Array.isArray(loaded.pendingRequests)
+    ) {
+      throw new Error(
+        "Estrutura inválida em eventos_diarios_state.json."
+      );
+    }
+
+    for (const key of [
+      "processingRequests",
+      "dailyPublications",
+    ]) {
+      if (loaded[key] === undefined) {
+        loaded[key] = {};
+      }
+
+      if (
+        !loaded[key] ||
+        typeof loaded[key] !== "object" ||
+        Array.isArray(loaded[key])
+      ) {
+        throw new Error(
+          "Campo inválido no estado de eventos diários: " + key
+        );
+      }
+    }
+
+    return loaded;
+  } catch (error) {
+    console.error(
+      "[EventosDiarios] Não foi possível carregar o estado:",
+      error
+    );
+
+    throw error;
+  }
 };
 
 // ================= CONFIGURAÇÃO =================
@@ -540,6 +607,95 @@ function unlockRequestProcessing(reqId) {
   saveState(state);
 }
 
+function getDailyPublication(reqId) {
+  return state.dailyPublications?.[reqId] || null;
+}
+
+function beginDailyPublication(reqId, interaction, data) {
+  state.dailyPublications ??= {};
+
+  if (state.dailyPublications[reqId]) {
+    throw new Error(
+      "Esta solicitação já possui uma tentativa de publicação registrada. " +
+      "Confira o resultado antes de executar outra ação."
+    );
+  }
+
+  const entry = {
+    requestId: reqId,
+    phase: "publishing",
+    startedAt: Date.now(),
+    actorId: interaction.user.id,
+    actorName:
+      interaction.user.tag ||
+      interaction.user.username ||
+      interaction.user.id,
+    guildId: interaction.guild.id,
+    approvalChannelId: interaction.message.channelId,
+    approvalMessageId: interaction.message.id,
+    eventChannelId: EVENTOS_CHANNEL_ID,
+    creatorId: data.userId,
+    cityKey: data.cityKey,
+    eventKey: data.eventKey || null,
+    messageIds: [],
+  };
+
+  state.dailyPublications[reqId] = entry;
+
+  try {
+    saveState(state);
+  } catch (error) {
+    delete state.dailyPublications[reqId];
+    throw error;
+  }
+
+  return entry;
+}
+
+function finishDailyPublication(reqId, sentMessages) {
+  const entry = getDailyPublication(reqId);
+
+  if (!entry || entry.phase !== "publishing") {
+    throw new Error(
+      "A tentativa de publicação não está no estado esperado."
+    );
+  }
+
+  const completed = {
+    ...entry,
+    phase: "published",
+    postedAt: Date.now(),
+    messageIds: sentMessages.map(message => message.id),
+    messageUrls: sentMessages.map(message => message.url),
+  };
+
+  state.dailyPublications[reqId] = completed;
+
+  try {
+    saveState(state);
+  } catch (error) {
+    state.dailyPublications[reqId] = entry;
+    throw error;
+  }
+
+  return completed;
+}
+
+async function dailyApprovalComplement(label, operation) {
+  try {
+    await operation();
+    return true;
+  } catch (error) {
+    console.error(
+      "[EventosDiarios] Publicação concluída; falha no complemento " +
+      label + ":",
+      error
+    );
+
+    return false;
+  }
+}
+
 // ================= HELPERS =================
 function hasPermission(member, userId) {
   if (ALLOWED_USERS.includes(userId)) return true;
@@ -587,7 +743,10 @@ async function validateApprovalHierarchy(interaction, requesterId) {
   }
 
   const requesterMember = await interaction.guild?.members
-    .fetch(requesterId)
+    .fetch({
+      user: String(requesterId),
+      force: true,
+    })
     .catch(() => null);
 
   if (!requesterMember) {
@@ -797,7 +956,147 @@ ${imageUrl}`;
   }
 }
 
+export const dailySiteWorkflow = createApprovalWorkflow({
+  key: 'daily',
+
+  label: 'Eventos diários',
+
+  channelId:
+    APPROVAL_CHANNEL_ID,
+
+  sourceChannelId:
+    EVENTOS_CHANNEL_ID,
+
+  auditChannelId:
+    '1554381360200683581',
+
+  approvePrefix:
+    BTN_APPROVE_PREFIX,
+
+  rejectPrefix:
+    BTN_REJECT_PREFIX,
+
+  cities:
+    CITIES,
+
+  canCreate:
+    member =>
+      hasPermission(
+        member,
+        member.id
+      ),
+
+  canDecide:
+    member =>
+      canApprove(
+        member,
+        member.id
+      ),
+
+  getRequest:
+    reqId =>
+      state.pendingRequests?.[reqId] ||
+      null,
+
+  validate: async (
+    interaction,
+    data
+  ) => {
+    const publication = Object.values(
+      state.dailyPublications || {}
+    ).find(entry =>
+      entry.approvalMessageId === interaction.message?.id
+    );
+
+    const viewingPublishedRecord =
+      interaction.siteReadOnly === true &&
+      publication?.phase === "published";
+
+    if (
+      publication &&
+      !viewingPublishedRecord
+    ) {
+      return {
+        allowed: false,
+        message:
+          publication.phase === "published"
+            ? "Este evento já foi publicado. Não é possível decidir novamente."
+            : "A publicação deste evento foi iniciada e precisa de conferência antes de outra ação.",
+      };
+    }
+
+    return validateApprovalHierarchy(
+      interaction,
+      data.userId
+    );
+  },
+
+  isCreateModal:
+    id =>
+      String(id).startsWith(
+        `${MODAL_SUBMIT}:`
+      ),
+
+  modal(payload) {
+    const city =
+      String(
+        payload.city || 'nobre'
+      );
+
+    if (!CITIES[city]) {
+      throw new Error(
+        'Cidade inválida.'
+      );
+    }
+
+    const event =
+      payload.eventKey
+        ? getTodayEventData(
+            payload.eventKey
+          )
+        : getNextTodayEventData(
+            'eventosDiarios'
+          );
+
+    if (
+      payload.eventKey &&
+      !event
+    ) {
+      throw new Error(
+        'Evento do cronograma não encontrado.'
+      );
+    }
+
+    return createEventModal(
+      city,
+      event
+    );
+  },
+
+  status:
+    message =>
+      /RECUSADO/i.test(
+        message.embeds[0]?.title || ''
+      )
+        ? 'reprovado'
+        : /APROVADO/i.test(
+            message.embeds[0]?.title || ''
+          )
+          ? 'aprovado'
+          : 'pendente',
+
+  handler:
+    eventosDiariosHandleInteractionOriginal,
+});
+
 export async function eventosDiariosHandleInteraction(interaction, client) {
+  return dailySiteWorkflow.handle(
+    interaction,
+    client
+  );
+}
+
+async function eventosDiariosHandleInteractionOriginal(interaction, client) {
   if (!interaction.guild) return false;
 
   if (interaction.isButton() && interaction.customId === BTN_OPEN_MENU) {
@@ -1136,7 +1435,15 @@ ${oldMentions}`;
   if (interaction.isModalSubmit() && interaction.customId.startsWith(MODAL_SUBMIT)) {
     await interaction.deferReply({ ephemeral: true });
 
-const [, cityKey, eventKeyFromModal] = interaction.customId.split(":");
+const [
+  ,
+  cityKey,
+  ...eventKeyParts
+] = interaction.customId.split(":");
+
+const eventKeyFromModal =
+  eventKeyParts.join(":") ||
+  "auto";
 if (!cityKey || !CITIES[cityKey]) {
   return interaction.editReply("❌ Erro: Cidade não identificada.");
 }
@@ -1305,8 +1612,20 @@ recordApprovalCreated({
 
     const reqId = interaction.customId.replace(BTN_APPROVE_PREFIX, "");
 
+    const previousPublication = getDailyPublication(reqId);
+
+    if (previousPublication) {
+      return interaction.editReply(
+        previousPublication.phase === "published"
+          ? "✅ Este evento já foi publicado. Uma nova publicação não será executada."
+          : "⚠️ A publicação deste pedido já foi iniciada. Confira o canal de eventos e o registro salvo antes de qualquer recuperação."
+      );
+    }
+
     if (isRequestProcessing(reqId)) {
-      return interaction.editReply("⏳ Essa solicitação já está sendo processada. Aguarde finalizar.");
+      return interaction.editReply(
+        "⏳ Essa solicitação já está sendo processada. Aguarde finalizar."
+      );
     }
 
     const data = state.pendingRequests[reqId];
@@ -1351,19 +1670,34 @@ ${data.imageUrl}
 
 ${mentions}`;
 
-      const sentMessages = await syncEventMessages(eventChannel, finalMessage);
+      beginDailyPublication(
+        reqId,
+        interaction,
+        data
+      );
+
+      const sentMessages = await syncEventMessages(
+        eventChannel,
+        finalMessage
+      );
+
       const sentMsg = sentMessages.at(-1);
 
 if (!sentMsg) {
-  unlockRequestProcessing(reqId);
-
-  return interaction.editReply(
-    "❌ Falha ao enviar a mensagem do evento. O conteúdo pode estar vazio."
+  throw new Error(
+    "O envio não retornou uma mensagem final. " +
+    "A tentativa foi preservada para conferência."
   );
 }
 
-const postedAt =
-  Date.now();
+const publication = finishDailyPublication(
+  reqId,
+  sentMessages
+);
+
+const postedAt = publication.postedAt;
+
+interaction.__approvalWorkflowApplied = true;
 
 recordApprovalDecision({
   system:
@@ -1409,8 +1743,14 @@ if (
 
 // ✅ As reações já foram aplicadas na última parte por syncEventMessages.
 
-      // ✅ Aqui passa true para forçar o botão a descer
-      await ensureButtonAtBottom(eventChannel, client, true);
+      await dailyApprovalComplement(
+        "reposicionamento do menu",
+        () => ensureButtonAtBottom(
+          eventChannel,
+          client,
+          true
+        )
+      );
 
 dashEmit(
   "eventosdiarios:aprovado",
@@ -1464,20 +1804,95 @@ dashEmit(
         .setFooter({ text: `Aprovado por ${interaction.user.tag}` })
         .addFields({ name: '✅ Aprovado por', value: `${interaction.user} (\`${interaction.user.tag}\`)`, inline: false });
 
-      await interaction.message.edit({ embeds: [embedApproved], components: [] }).catch(() => {});
+      await dailyApprovalComplement(
+        "atualização da mensagem de aprovação",
+        () => interaction.message.edit({
+          embeds: [embedApproved],
+          components: [],
+        })
+      );
       
       markTodayEventPosted(data.eventKey, "eventosDiarios");
 
-      delete state.pendingRequests[reqId];
-      unlockRequestProcessing(reqId);
-      saveState(state); // Salva a remoção
+delete state.pendingRequests[reqId];
+unlockRequestProcessing(reqId);
+saveState(state); // Salva a remoção
 
-      await interaction.editReply("✅ Evento postado e pontos computados!");
-      return true;
-    } catch (e) {
-      console.error("[EventosDiarios] Erro ao aprovar evento diário:", e);
-      unlockRequestProcessing(reqId);
-      await interaction.editReply("❌ Erro ao aprovar/postar o Evento Diário. Verifique o console.");
+interaction.__approvalWorkflowApplied = true;
+
+await interaction.editReply("✅ Evento postado e pontos computados!");
+return true;
+    } catch (error) {
+      console.error(
+        "[EventosDiarios] Erro ao aprovar evento diário:",
+        error
+      );
+
+      const publication = getDailyPublication(reqId);
+
+      if (publication?.phase === "published") {
+        interaction.__approvalWorkflowApplied = true;
+
+        try {
+          delete state.pendingRequests[reqId];
+          delete state.processingRequests?.[reqId];
+
+          saveState(state);
+        } catch (saveError) {
+          console.error(
+            "[EventosDiarios] Publicação concluída; falha ao finalizar a fila:",
+            saveError
+          );
+        }
+
+        await interaction.editReply(
+          "✅ O evento foi publicado. " +
+          "Um complemento não foi concluído e precisa de conferência. " +
+          "A publicação não será repetida."
+        ).catch(replyError => {
+          console.error(
+            "[EventosDiarios] Falha ao responder após publicação:",
+            replyError
+          );
+        });
+
+        return true;
+      }
+
+      if (publication) {
+        await interaction.editReply(
+          "⚠️ A publicação foi iniciada, mas o resultado completo não foi confirmado. " +
+          "O pedido permanece bloqueado para evitar duplicidade. " +
+          "Confira as mensagens do canal de eventos antes de recuperar a operação."
+        ).catch(replyError => {
+          console.error(
+            "[EventosDiarios] Falha ao informar publicação incerta:",
+            replyError
+          );
+        });
+
+        return true;
+      }
+
+      try {
+        unlockRequestProcessing(reqId);
+      } catch (unlockError) {
+        console.error(
+          "[EventosDiarios] Falha ao liberar pedido antes da publicação:",
+          unlockError
+        );
+      }
+
+      await interaction.editReply(
+        "❌ Não foi possível concluir a aprovação antes de iniciar a publicação. " +
+        "Verifique o erro registrado no console."
+      ).catch(replyError => {
+        console.error(
+          "[EventosDiarios] Falha ao responder erro de aprovação:",
+          replyError
+        );
+      });
+
       return true;
     }
   }
@@ -1489,24 +1904,97 @@ dashEmit(
 
     const reqId = interaction.customId.replace(BTN_REJECT_PREFIX, "");
 
+    const publication = getDailyPublication(reqId);
+
+    if (publication) {
+      return interaction.reply({
+        content:
+          publication.phase === "published"
+            ? "✅ Este evento já foi publicado. Não é possível recusar o pedido concluído."
+            : "⚠️ A publicação deste pedido foi iniciada. Confira o resultado antes de recuperar a operação.",
+        ephemeral: true,
+      });
+    }
+
     if (isRequestProcessing(reqId)) {
-      return interaction.reply({ content: "⏳ Essa solicitação já está sendo processada. Aguarde finalizar.", ephemeral: true });
+      return interaction.reply({
+        content:
+          "⏳ Essa solicitação já está sendo processada. Aguarde finalizar.",
+        ephemeral: true,
+      });
+    }
+
+    const requestToReject = state.pendingRequests[reqId];
+
+    if (!requestToReject) {
+      return interaction.reply({
+        content:
+          "⚠️ Este pedido não está mais disponível para decisão.",
+        ephemeral: true,
+      });
+    }
+
+    const rejectionHierarchy = await validateApprovalHierarchy(
+      interaction,
+      requestToReject.userId
+    );
+
+    if (!rejectionHierarchy.allowed) {
+      return interaction.reply({
+        content: rejectionHierarchy.message,
+        ephemeral: true,
+      });
+    }
+
+    if (
+      isRequestProcessing(reqId) ||
+      getDailyPublication(reqId)
+    ) {
+      return interaction.reply({
+        content:
+          "⏳ O estado deste pedido mudou durante a validação. Atualize a consulta.",
+        ephemeral: true,
+      });
     }
 
     lockRequestProcessing(reqId, interaction.user.id);
-    
+
     const embedRejected = EmbedBuilder.from(interaction.message.embeds[0])
       .setColor("#e74c3c")
       .setTitle("❌ Evento Diário RECUSADO")
       .setFooter({ text: `Recusado por ${interaction.user.tag}` });
 
-    await interaction.message.edit({
-      embeds:
-        [embedRejected],
+    try {
+      await interaction.message.edit({
+        embeds: [embedRejected],
+        components: [],
+      });
+    } catch (error) {
+      console.error(
+        "[EventosDiarios] Não foi possível aplicar a recusa:",
+        error
+      );
 
-      components:
-        []
-    }).catch(() => {});
+      try {
+        unlockRequestProcessing(reqId);
+      } catch (unlockError) {
+        console.error(
+          "[EventosDiarios] Falha ao liberar a recusa:",
+          unlockError
+        );
+      }
+
+      await interaction.reply({
+        content:
+          "❌ Não foi possível atualizar o pedido com a recusa. " +
+          "Confira a mensagem no Discord antes de tentar novamente.",
+        ephemeral: true,
+      });
+
+      return true;
+    }
+
+    interaction.__approvalWorkflowApplied = true;
 
    const rejectedData =
   state.pendingRequests[
@@ -1592,6 +2080,8 @@ unlockRequestProcessing(
 );
 
 saveState(state);
+
+interaction.__approvalWorkflowApplied = true;
 
 await interaction.reply({
   content:

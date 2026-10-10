@@ -18,6 +18,10 @@ import {
 // ✅ HUB do dashboard
 import { dashEmit } from "../utils/dashHub.js";
 import { getMemberOrgTicketContext } from "./orgTicketAccessSync.js";
+
+import {
+  validatePrizeInput,
+} from '../utils/prizeValidation.js';
 // ── CONFIG DE CANAIS ─────────────────────────────────────────────
 const VIP_MENU_CHANNEL_ID = "1414718336826081330"; // onde fica o MENU e os REGISTROS
 const VIP_NOTIFY_CHANNEL_ID = "1424489278615978114"; // notificação de novo registro
@@ -712,6 +716,9 @@ function VIP_formatDateSP(date = new Date()) {
 
 function VIP_normalizarTipoPremiacao(texto) {
   const t = String(texto || "")
+    .normalize("NFKC")
+    .replace(/https?:\/\/\S+/gi, " ")
+    .replace(/<[^>]+>/g, " ")
     .toLowerCase()
     .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
     .replace(/[^a-z0-9\s$.,]/g, " ")
@@ -723,6 +730,14 @@ function VIP_normalizarTipoPremiacao(texto) {
 
   // ✅ Se ficou vazio depois da limpeza, NÃO pode virar Dinheiro.
   if (!t) return "Não identificado";
+
+  if (
+    /\b(?:battle\s*pass|better\s*paste)\b/.test(
+      t
+    )
+  ) {
+    return 'Pass';
+  }
 
   // ✅ PRIORIDADE REAL:
   // Se tiver Rolepass/Pass escrito em qualquer linha da premiação,
@@ -1851,6 +1866,35 @@ if (pagamentoResolvido?.ok) {
   tipo = VIP_normalizarTipoPremiacao(premiacaoPrincipalFonte || premiacaoFonte || premiacao);
 
   if (pagamentoResolvido.info?.premiacao) premiacao = pagamentoResolvido.info.premiacao;
+}
+
+const prizeError =
+  validatePrizeInput({
+    prize:
+      premiacao,
+
+    type:
+      tipo,
+
+    classify:
+      VIP_normalizarTipoPremiacao,
+  });
+
+if (
+  prizeError
+) {
+  await safeReply(
+    i,
+    {
+      content:
+        '❌ ' + prizeError,
+
+      ephemeral:
+        true,
+    }
+  );
+
+  return true;
 }
 
 // A premiação fica bruta aqui.

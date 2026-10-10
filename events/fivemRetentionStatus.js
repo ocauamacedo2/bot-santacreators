@@ -2352,7 +2352,30 @@ function mergeSnapshotWithFallback(currentSnapshot, fallbackSnapshot) {
  };
 }
 
-async function createSafeCurrentSnapshot(options = {}) {
+let FIVEM_SAFE_SNAPSHOT_PENDING =
+  null;
+
+async function createSafeCurrentSnapshot(
+  options = {}
+) {
+  if (
+    !FIVEM_SAFE_SNAPSHOT_PENDING
+  ) {
+    FIVEM_SAFE_SNAPSHOT_PENDING =
+      createSafeCurrentSnapshotUnshared(
+        options
+      ).finally(
+        () => {
+          FIVEM_SAFE_SNAPSHOT_PENDING =
+            null;
+        }
+      );
+  }
+
+  return FIVEM_SAFE_SNAPSHOT_PENDING;
+}
+
+async function createSafeCurrentSnapshotUnshared(options = {}) {
  if (!options.forceFresh && FIVEM_SNAPSHOT_CACHE.value && Date.now() - FIVEM_SNAPSHOT_CACHE.createdAt < FIVEM_SNAPSHOT_CACHE_MS) {
    return FIVEM_SNAPSHOT_CACHE.value;
  }

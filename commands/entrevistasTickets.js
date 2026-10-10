@@ -2986,6 +2986,7 @@ const FORMS_CHANNEL_ID = '1428003736671883405';
 
   // ✅ Quem pode aprovar por CARGO (roles)
   const APPROVER_ROLES = new Set([
+    '1262262852949905408', // owner
     '1352407252216184833', // resp líder
     '1392678638176043029', // equipe manager
     '1262262852949905409', // resp influ
@@ -2995,14 +2996,17 @@ const FORMS_CHANNEL_ID = '1428003736671883405';
   ]);
 
   // ✅ Mapa de solicitações pendentes (approval ↔️ dados)
-  const pendingLeaderSets = new Map(); // customId -> { userId, ticketChannelId, name, cid, faccao, requestMsgId }
-  function upsertPending(reqId, data) {
-  pendingLeaderSets.set(reqId, data);
-}
+  const leaderSetDecisionLocks = new Set();
 
-function deletePending(reqId) {
-  pendingLeaderSets.delete(reqId);
-}
+  const pendingLeaderSets = new Map(); // customId -> { userId, ticketChannelId, name, cid, faccao, requestMsgId }
+
+  function upsertPending(reqId, data) {
+    pendingLeaderSets.set(reqId, data);
+  }
+
+  function deletePending(reqId) {
+    pendingLeaderSets.delete(reqId);
+  }
 
 // fallback se perder o Map (restart / crash)
 function rebuildPendingFromFormsMessage(message) {
@@ -3568,11 +3572,21 @@ async function notificarEquipeEntrevista(guild, canal, tipo) {
 
     try {
       await member.setNickname(nick);
+
+      return {
+        ok: true,
+        nickname: nick,
+      };
     } catch (e) {
       console.warn(
         'Não consegui alterar o apelido (permissões?):',
         e.message
       );
+
+      return {
+        ok: false,
+        nickname: nick,
+      };
     }
   }
 
@@ -4936,97 +4950,232 @@ if (dados.nome === 'entrevista') {
       const embedMsg = interaction.message;
 
      if (id.startsWith('aprovar_set:') || id.startsWith('recusar_set:')) {
-
-  // ✅ FIX PRINCIPAL — DEFER IMEDIATO
   await interaction.deferReply({ flags: 64 });
 
-  // 🔒 trava múltiplos cliques (agora DEPOIS do defer, seguro)
-  if (interaction.message.components?.length) {
-    try {
-      const disabledRows = interaction.message.components.map(row => {
-        const r = ActionRowBuilder.from(row);
-        r.components = r.components.map(c =>
-          ButtonBuilder.from(c).setDisabled(true)
-        );
-        return r;
-      });
-
-      await interaction.message.edit({ components: disabledRows });
-    } catch (e) {
-      console.warn('Falha ao desativar botões:', e.message);
-    }
-  }
-
   const [action, reqId] = id.split(':');
+  const guild = interaction.guild;
   const approverId = interaction.user.id;
 
+  const approver = await guild.members.fetch({
+    user: approverId,
+    force: true,
+  }).catch(() => null);
+
   const hasUserPass = SET_APPROVERS.has(approverId);
-  const hasRolePass = interaction.member?.roles?.cache?.some(r => APPROVER_ROLES.has(r.id));
 
-  if (!hasUserPass && !hasRolePass && !USERS_SEMPRE_PODEM.includes(approverId)) {
-    await interaction.editReply({ content: '🚫 Você não tem permissão para aprovar/recusar.', flags: 64 });
-    return true;
-  }
+  const hasRolePass = approver?.roles?.cache?.some(
+    role => APPROVER_ROLES.has(role.id)
+  );
 
-  const guild = interaction.guild;
-
-  let data = pendingLeaderSets.get(reqId);
-
-  if (!data) {
-    const rebuilt = rebuildPendingFromFormsMessage(interaction.message);
-    if (rebuilt) {
-      data = rebuilt;
-      upsertPending(reqId, data);
-    }
-  }
-
-  if (!data) {
+  if (
+    !approver ||
+    (
+      !hasUserPass &&
+      !hasRolePass &&
+      !USERS_SEMPRE_PODEM.includes(approverId)
+    )
+  ) {
     await interaction.editReply({
-      content: '⚠️ Não consegui localizar os dados desse pedido. Peça para reenviar.', flags: 64
+      content: '🚫 Você não tem permissão para aprovar/recusar.',
     });
+
     return true;
   }
 
-  const { userId, ticketChannelId, name, cid } = data;
+  const lockKey = `${guild.id}:${interaction.message.id}`;
 
+  if (leaderSetDecisionLocks.has(lockKey)) {
+    await interaction.editReply({
+      content: '⏳ Este pedido já está sendo processado. Aguarde a conclusão.',
+    });
 
-
-
-  // =========================
-  // ❌ SE FOR RECUSAR
-  // =========================
-  if (action === 'recusar_set') {
-    deletePending(reqId);
-    await interaction.editReply({ content: '❌ Solicitação recusada com sucesso.', flags: 64 });
     return true;
   }
 
-  // =========================
-  // ✅ SE FOR APROVAR
-  // =========================
-  const membro = await safeFetchMember(guild, userId);
+  leaderSetDecisionLocks.add(lockKey);
 
-  if (!membro) {
-    deletePending(reqId);
-    await interaction.editReply({ content: '⚠️ Usuário não encontrado no servidor.', flags: 64 });
-    return true;
-  }
+  let currentMessage = null;
+  let originalRows = null;
+  let buttonsChanged = false;
+  let decisionCompleted = false;
 
   try {
-    await membro.roles.add([ROLE_LIDERES_ID, ROLE_PARCEIROS_ID]);
-  } catch (e) {
-    console.error('Erro ao adicionar cargos:', e);
+    currentMessage = await interaction.message.fetch();
+
+    const expectedIds = new Set([
+      `aprovar_set:${reqId}`,
+      `recusar_set:${reqId}`,
+    ]);
+
+    const activeButton = currentMessage.components.some(row =>
+      row.components.some(component =>
+        expectedIds.has(component.customId) &&
+        !component.disabled
+      )
+    );
+
+    if (
+      !activeButton ||
+      currentMessage.author.id !== client.user.id
+    ) {
+      await interaction.editReply({
+        content: 'ℹ️ Este pedido já foi finalizado ou seus botões não estão disponíveis.',
+      });
+
+      return true;
+    }
+
+    let data = pendingLeaderSets.get(reqId);
+
+    if (!data) {
+      const rebuilt = rebuildPendingFromFormsMessage(currentMessage);
+
+      if (rebuilt) {
+        data = rebuilt;
+        upsertPending(reqId, data);
+      }
+    }
+
+    if (!data) {
+      await interaction.editReply({
+        content: '⚠️ Não consegui localizar os dados desse pedido. Peça para reenviar.',
+      });
+
+      return true;
+    }
+
+    const {
+      userId,
+      name,
+      cid,
+    } = data;
+
+    let targetMember = null;
+
+    if (action === 'aprovar_set') {
+      targetMember = await guild.members.fetch({
+        user: userId,
+        force: true,
+      }).catch(() => null);
+
+      if (!targetMember) {
+        await interaction.editReply({
+          content: '⚠️ Usuário não encontrado no servidor. O pedido continua pendente.',
+        });
+
+        return true;
+      }
+    }
+
+    originalRows = currentMessage.components.map(
+      row => row.toJSON()
+    );
+
+    const disabledRows = currentMessage.components.map(row => {
+      const rebuiltRow = ActionRowBuilder.from(row);
+
+      rebuiltRow.components = rebuiltRow.components.map(component =>
+        expectedIds.has(component.customId)
+          ? ButtonBuilder.from(component).setDisabled(true)
+          : component
+      );
+
+      return rebuiltRow;
+    });
+
+    await currentMessage.edit({
+      components: disabledRows,
+    });
+
+    buttonsChanged = true;
+
+    let nicknameWarning = '';
+
+    if (action === 'aprovar_set') {
+      await targetMember.roles.add([
+        ROLE_LIDERES_ID,
+        ROLE_PARCEIROS_ID,
+      ]);
+
+      const nicknameResult = await setNicknameLD(
+        targetMember,
+        name,
+        cid
+      );
+
+      if (!nicknameResult.ok) {
+        nicknameWarning =
+          ' ⚠️ Os cargos foram aplicados, mas o bot não conseguiu alterar o apelido. Verifique a hierarquia e a permissão de gerenciar apelidos.';
+      }
+    }
+
+    const approved = action === 'aprovar_set';
+    const decidedAt = Math.floor(Date.now() / 1000);
+
+    const finalEmbed = EmbedBuilder
+      .from(currentMessage.embeds[0])
+      .setColor(
+        approved
+          ? 0x2ecc71
+          : 0xe74c3c
+      )
+      .addFields({
+        name: 'Resultado do pedido',
+        value:
+          `${approved ? '✅ Aprovado' : '❌ Recusado'} por <@${approverId}> em <t:${decidedAt}:F>.${nicknameWarning}`,
+        inline: false,
+      });
+
+    await currentMessage.edit({
+      embeds: [finalEmbed],
+      components: [],
+    });
+
+    decisionCompleted = true;
+
+    deletePending(reqId);
+
+    interaction.__scLeaderSetDecisionApplied = true;
+
+    await interaction.editReply({
+      content: approved
+        ? `✅ Set aprovado e cargos aplicados com sucesso!${nicknameWarning}`
+        : '❌ Solicitação recusada com sucesso.',
+    });
+
+    return true;
+  } catch (error) {
+    console.error(
+      '[SetLider] Falha ao decidir pedido:',
+      error
+    );
+
+    if (
+      buttonsChanged &&
+      !decisionCompleted &&
+      currentMessage &&
+      originalRows
+    ) {
+      await currentMessage.edit({
+        components: originalRows,
+      }).catch(restoreError => {
+        console.error(
+          '[SetLider] Falha ao restaurar botões:',
+          restoreError
+        );
+      });
+    }
+
+    await interaction.editReply({
+      content: decisionCompleted
+        ? 'ℹ️ A decisão já foi concluída na mensagem do pedido.'
+        : '❌ Não foi possível concluir a decisão. O pedido continua pendente. Se a falha ocorreu depois da aplicação de cargos, eles podem já estar aplicados; confira o membro antes de tentar novamente.',
+    }).catch(() => {});
+
+    return true;
+  } finally {
+    leaderSetDecisionLocks.delete(lockKey);
   }
-
-  await setNicknameLD(membro, name, cid);
-
-  deletePending(reqId);
-
-  await interaction.editReply({
-    content: '✅ Set aprovado e aplicado com sucesso!', flags: 64
-  });
-
-  return true;
 }
 
 
@@ -7820,6 +7969,215 @@ if (client.isReady()) {
   client.once('clientReady', startInterviewAnalysisMaintenance);
   client.once('ready', startInterviewAnalysisMaintenance);
 }
+
+client.__SC_TICKET_NOTIFICATION_SITE__ = {
+  async list({
+    guild,
+    member,
+  }) {
+    if (
+      !temCargoQuePodeAbrir(member) &&
+      !temCargoDeResp(member) &&
+      !USERS_SEMPRE_PODEM.includes(member.id)
+    ) {
+      return {
+        allowed: false,
+        records: [],
+        warnings: [],
+      };
+    }
+
+    const channels = [
+      ...guild.channels.cache.values(),
+    ].filter(channel => {
+      if (
+        channel.type !== ChannelType.GuildText ||
+        !ALL_TICKET_CATEGORY_IDS.has(channel.parentId) ||
+        !channel.messages ||
+        /\bentrevista_encerrando:1\b/i.test(
+          channel.topic || ''
+        ) ||
+        !/aberto_por:\d{17,20}/i.test(
+          channel.topic || ''
+        )
+      ) {
+        return false;
+      }
+
+      return channel.permissionsFor(member)?.has([
+        'ViewChannel',
+        'ReadMessageHistory',
+      ]);
+    });
+
+    const records = [];
+    const warnings = [];
+    let next = 0;
+
+    await Promise.all(
+      Array.from(
+        {
+          length: Math.min(
+            4,
+            channels.length
+          ),
+        },
+        async () => {
+          while (next < channels.length) {
+            const channel = channels[next++];
+
+            try {
+              const openerId = String(
+                channel.topic || ''
+              ).match(
+                /aberto_por:(\d{17,20})/i
+              )?.[1];
+
+              if (!openerId) {
+                continue;
+              }
+
+              const page = await channel.messages.fetch({
+                limit: 100,
+              });
+
+              const classification =
+                await classifyTicketWaitingSide(
+                  guild,
+                  page,
+                  openerId
+                );
+
+              if (
+                classification.waitingOn !== 'equipe' ||
+                !classification.lastOpenerMessage
+              ) {
+                continue;
+              }
+
+              const message =
+                classification.lastOpenerMessage;
+
+              const attachments = [
+                ...message.attachments.values(),
+              ];
+
+              const owner =
+                guild.members.cache.get(openerId);
+
+              records.push({
+                id: channel.id,
+
+                title:
+                  `#${channel.name} • ` +
+                  (
+                    owner?.displayName ||
+                    message.author?.username ||
+                    'Cidadão'
+                  ),
+
+                text:
+                  message.content ||
+                  (
+                    attachments.length
+                      ? 'Mensagem com arquivo ou imagem.'
+                      : 'Mensagem sem texto.'
+                  ),
+
+                fields: [
+                  {
+                    name: 'Categoria',
+                    value:
+                      guild.channels.cache.get(
+                        channel.parentId
+                      )?.name ||
+                      'Ticket',
+                  },
+                  {
+                    name: 'Aguardando',
+                    value:
+                      'Resposta humana da equipe.',
+                  },
+                  {
+                    name: 'Solicitante',
+                    value:
+                      `<@${openerId}>`,
+                  },
+                ],
+
+                images: attachments
+                  .filter(attachment =>
+                    String(
+                      attachment.contentType || ''
+                    ).startsWith('image/')
+                  )
+                  .map(attachment =>
+                    attachment.url
+                  ),
+
+                attachments: attachments.map(
+                  attachment => ({
+                    name:
+                      attachment.name || 'Arquivo',
+
+                    url:
+                      attachment.url,
+                  })
+                ),
+
+                createdAt:
+                  message.createdTimestamp,
+
+                url:
+                  message.url,
+              });
+            } catch (error) {
+              console.error(
+                '[TICKET SITE NOTIFICATIONS]',
+                channel.id,
+                error
+              );
+
+              warnings.push(
+                `Não foi possível consultar #${channel.name}.`
+              );
+            }
+          }
+        }
+      )
+    );
+
+    return {
+      allowed: true,
+
+      records: records.sort(
+        (first, second) =>
+          second.createdAt - first.createdAt
+      ),
+
+      warnings,
+    };
+  },
+};
+
+client.__SC_LEADER_SET_SITE__ = {
+  canDecide(member) {
+    return Boolean(
+      member &&
+      (
+        SET_APPROVERS.has(member.id) ||
+        USERS_SEMPRE_PODEM.includes(member.id) ||
+        member.roles.cache.some(
+          role => APPROVER_ROLES.has(role.id)
+        )
+      )
+    );
+  },
+
+  handle(interaction) {
+    return onInteractionCreate(interaction);
+  },
+};
 
 return {
   onReady,

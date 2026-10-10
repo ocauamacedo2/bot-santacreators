@@ -339,14 +339,45 @@ export async function getMemberOrgTicketContext(member) {
   }
 
   const guild = member.guild;
+
+  const freshMember = await guild.members.fetch({
+    user: member.id,
+    force: true,
+  });
+
   const channels = await fetchOrgTicketChannels(guild);
 
-  const tagRoles = [...member.roles.cache.values()].filter(role =>
-    !role.managed &&
-    role.id !== guild.id &&
-    !isIgnoredRoleName(role.name) &&
-    isRoleInsideTagsRange(guild, role)
+  const ticketNames = new Set(
+    channels
+      .map(
+        channel =>
+          normalizeName(
+            prettyChannelName(channel.name)
+          )
+      )
+      .filter(Boolean)
   );
+
+  const tagRoles = [
+    ...freshMember.roles.cache.values(),
+  ].filter(role => {
+    if (
+      role.managed ||
+      role.id === guild.id ||
+      isIgnoredRoleName(role.name)
+    ) {
+      return false;
+    }
+
+    const exactTicketName = ticketNames.has(
+      normalizeName(role.name)
+    );
+
+    return (
+      isRoleInsideTagsRange(guild, role) ||
+      exactTicketName
+    );
+  });
 
   const buildMatch = (role, channel) => {
     const roleClean = normalizeName(role.name);

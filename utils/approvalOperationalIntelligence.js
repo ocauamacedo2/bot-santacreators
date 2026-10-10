@@ -503,7 +503,7 @@ function formatMinutes(
 // EVENTOS ESPERADOS PELO CRONOGRAMA
 // ============================================================================
 
-export function recordExpectedOperation({
+function recordExpectedOperationInternal({
   system,
   dateKey,
   eventKey,
@@ -594,7 +594,7 @@ export function recordExpectedOperation({
 // FILA DE APROVAÇÕES
 // ============================================================================
 
-export function recordApprovalCreated({
+function recordApprovalCreatedInternal({
   system,
   operationId,
   eventKey = null,
@@ -666,7 +666,7 @@ export function recordApprovalCreated({
   return true;
 }
 
-export function recordApprovalDecision({
+function recordApprovalDecisionInternal({
   system,
   operationId,
   decision,
@@ -733,9 +733,43 @@ export function recordApprovalDecision({
     );
   }
 
-  record.decision =
-    decision ||
-    "unknown";
+  const nextDecision = String(
+    decision || ""
+  ).trim().toLowerCase();
+
+  if (
+    !["approved", "rejected"].includes(nextDecision)
+  ) {
+    throw new Error(
+      "A decisão operacional deve ser approved ou rejected."
+    );
+  }
+
+  if (
+    ["approved", "rejected"].includes(record.decision)
+  ) {
+    if (
+      record.decision !== nextDecision
+    ) {
+      throw new Error(
+        "A solicitação já possui outra decisão final. O registro foi preservado."
+      );
+    }
+
+    if (
+      nextDecision === "approved" &&
+      postedAt &&
+      !record.postedAt
+    ) {
+      record.postedAt = Number(postedAt);
+
+      saveState(state);
+    }
+
+    return true;
+  }
+
+  record.decision = nextDecision;
 
   record.approverId =
     approverId ||
@@ -772,7 +806,7 @@ export function recordApprovalDecision({
 // PUBLICAÇÃO REAL DO EVENTO DIÁRIO
 // ============================================================================
 
-export function markExpectedOperationPosted({
+function markExpectedOperationPostedInternal({
   system,
   dateKey,
   eventKey,
@@ -834,6 +868,32 @@ export function markExpectedOperationPosted({
     systemState.expectations.push(
       expectation
     );
+  }
+
+  if (
+    expectation.postedAt
+  ) {
+    if (
+      operationId &&
+      expectation.operationId &&
+      expectation.operationId !== operationId
+    ) {
+      throw new Error(
+        "O evento nesta data já está vinculado a outra operação. " +
+        "A publicação original foi preservada."
+      );
+    }
+
+    if (
+      operationId &&
+      !expectation.operationId
+    ) {
+      expectation.operationId = operationId;
+
+      saveState(state);
+    }
+
+    return true;
   }
 
   expectation.postedAt =
