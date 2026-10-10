@@ -781,6 +781,16 @@ if (
   // rodando ao mesmo tempo no mesmo ticket.
   const TICKETS_EM_FECHAMENTO = new Set();
 
+  // =====================================================
+  // SANTA CREATORS — SOLICITAÇÕES DE FECHAMENTO
+  // =====================================================
+  // Apenas uma solicitação de conclusão por canal.
+  // A trava é liberada quando a coleta termina.
+  const TICKETS_AGUARDANDO_CONCLUSAO = new Map();
+
+  // Prazo para o responsável informar o motivo.
+  const TICKET_CONCLUSAO_TIMEOUT_MS = 5 * 60 * 1000;
+
   function hasHandled(i) {
     try {
       if (!i?.id) return false;
@@ -5366,9 +5376,29 @@ if (dados.nome === 'entrevista') {
       }
 
       // ✅ Botão: Fechar ticket (sem modal — pede mensagem no chat)
-      if (id === 'fechar_ticket') {
-        const canal   = interaction.channel;
-        const canalId = canal.id;
+if (id === 'fechar_ticket') {
+  const canal = interaction.channel;
+  const canalId = String(canal.id);
+
+  if (TICKETS_EM_FECHAMENTO.has(canalId)) {
+    await interaction.reply({
+      content:
+        '⏳ Este ticket já está sendo finalizado. Aguarde a conclusão do processamento.',
+      ephemeral: true,
+    }).catch(console.error);
+
+    return true;
+  }
+
+  if (TICKETS_AGUARDANDO_CONCLUSAO.has(canalId)) {
+    await interaction.reply({
+      content:
+        '📝 Já existe uma solicitação de fechamento aguardando a conclusão no chat.',
+      ephemeral: true,
+    }).catch(console.error);
+
+    return true;
+  }
 
         // =====================================================
         // 🔒 TICKET PESSOAL PERMANENTE
@@ -5442,38 +5472,159 @@ if (dados.nome === 'entrevista') {
           }
         }
 
-        // 4) pede a conclusão (SEM TEMPO)
-        await interaction.reply({
-          content: '📝 Envie **abaixo**, no chat, o motivo/conclusão para encerrar o ticket.\n(Só vou fechar quando você mandar.)',
-          ephemeral: true
+        // =====================================================
+        // SANTA CREATORS — FECHAMENTO CONTROLADO
+        // =====================================================
+        // Mantém todas as regras de autorização anteriores.
+        // Evita solicitações duplicadas.
+        // Permite corrigir motivos inválidos sem novo clique.
+        // =====================================================
+
+        const ticketKey = String(canalId);
+
+        TICKETS_AGUARDANDO_CONCLUSAO.set(
+          ticketKey,
+          interaction.user.id
+        );
+
+        try {
+          await interaction.reply({
+            content:
+              '📝 **Informe o motivo do fechamento no chat.**\n\n' +
+              'O motivo precisa ter mais de 5 caracteres e pelo menos 2 palavras.\n' +
+              '⏱️ Você tem 5 minutos para enviar a conclusão.',
+            flags: 64
+          });
+        } catch (error) {
+          TICKETS_AGUARDANDO_CONCLUSAO.delete(ticketKey);
+
+          console.error(
+            '[TICKET] Falha ao solicitar conclusão:',
+            error
+          );
+
+          return true;
+        }
+
+        const filtro = msg =>
+          msg.author.id === member.id &&
+          msg.channel.id === canalId &&
+          !msg.author.bot;
+
+        const collector = canal.createMessageCollector({
+          filter: filtro,
+          time: TICKET_CONCLUSAO_TIMEOUT_MS
         });
 
-        const filtro = msg => msg.author.id === member.id && msg.channel.id === canalId;
+        let conclusaoAceita = false;
 
-        // collector que fica esperando ATÉ vir a mensagem
-        const collector = canal.createMessageCollector({ filter: filtro });
+        collector.on('collect', async (msg) => {
+          if (conclusaoAceita) {
+            return;
+          }
 
-        collector.once('collect', async (msg) => {
-          const resposta = msg.content?.trim() || "";
-          const ignoreValidationRoles = new Set(['1262262852949905408', '660311795327828008', '1352408327983861844']);
-          const memberHasBypass = ignoreValidationRoles.has(interaction.user.id) || interaction.member.roles.cache.some(r => ignoreValidationRoles.has(r.id));
+          if (TICKETS_EM_FECHAMENTO.has(ticketKey)) {
+            collector.stop('ja_finalizando');
+            return;
+          }
 
-          // Valida o motivo do fechamento, a menos que o usuário tenha permissão para ignorar
+          const resposta = String(
+            msg.content || ''
+          ).trim();
+
+          const ignoreValidationRoles = new Set([
+            '1262262852949905408',
+            '660311795327828008',
+            '1352408327983861844'
+          ]);
+
+          const memberHasBypass =
+            ignoreValidationRoles.has(interaction.user.id) ||
+            member.roles.cache.some(
+              role => ignoreValidationRoles.has(role.id)
+            );
+
           if (!memberHasBypass) {
-            const wordCount = resposta.split(' ').filter(Boolean).length;
+            const wordCount = resposta
+              .split(/\s+/)
+              .filter(Boolean)
+              .length;
+
             if (resposta.length <= 5 || wordCount < 2) {
-              await interaction.followUp({
-                content: '❌ **Motivo de fechamento inválido!**\n\nPara fechar o ticket, o motivo precisa ter **mais de 5 caracteres** e pelo menos **2 palavras**.\n\n*Exemplo: "O problema do usuário foi resolvido com sucesso."*',
-                ephemeral: true
-              });
-              return; // Aborta o fechamento, o usuário precisará clicar no botão e tentar de novo.
+              await canal.send({
+                content:
+                  `<@${interaction.user.id}> ❌ **Motivo inválido.**\n\n` +
+                  'O motivo precisa ter mais de 5 caracteres e pelo menos 2 palavras.\n' +
+                  'Exemplo: `Problema resolvido com sucesso.`\n\n' +
+                  'Envie outro motivo diretamente no chat. Não precisa clicar novamente.',
+                allowedMentions: {
+                  users: [interaction.user.id]
+                }
+              }).catch(console.error);
+
+              return;
             }
           }
 
-          await canal.send('✅ Conclusão recebida! Fechando o ticket...');
-          // Se a pessoa com bypass não colocar motivo, um texto padrão é usado.
-          await finalizarTicketComConclusao(interaction, resposta || "Fechado sem motivo (permissão especial).");
+          conclusaoAceita = true;
+
           collector.stop('concluido');
+
+          const conclusaoFinal =
+            resposta ||
+            'Fechado sem motivo (permissão especial).';
+
+          console.log(
+            `[TICKET] Conclusão aceita no canal ${ticketKey}`
+          );
+
+          await canal.send({
+            content:
+              '✅ **Conclusão recebida!**\n' +
+              '📄 Salvando histórico e finalizando o atendimento.'
+          }).catch(console.error);
+
+          const inicio = Date.now();
+
+          try {
+            const resultado =
+              await finalizarTicketComConclusao(
+                interaction,
+                conclusaoFinal
+              );
+
+            console.log(
+              `[TICKET PERF] Canal ${ticketKey} | ` +
+              `Duração: ${Date.now() - inicio}ms | ` +
+              `Resultado: ${resultado}`
+            );
+          } catch (error) {
+            console.error(
+              `[TICKET] Erro ao finalizar ${ticketKey}:`,
+              error
+            );
+
+            await canal.send(
+              '⚠️ O fechamento apresentou um erro. Verifique os logs antes de tentar novamente.'
+            ).catch(() => {});
+          }
+        });
+
+        collector.on('end', (_collected, reason) => {
+          if (
+            TICKETS_AGUARDANDO_CONCLUSAO.get(ticketKey) ===
+            interaction.user.id
+          ) {
+            TICKETS_AGUARDANDO_CONCLUSAO.delete(ticketKey);
+          }
+
+          if (reason === 'time') {
+            canal.send({
+              content:
+                '⌛ O pedido de fechamento expirou.\n' +
+                'Clique novamente em **Fechar Ticket** para iniciar outro pedido.'
+            }).catch(() => {});
+          }
         });
 
         return true;
@@ -5863,9 +6014,12 @@ if (interaction.isModalSubmit() && interaction.customId === 'modal_registro_lide
         return false;
       }
     } finally {
-      // limpa responsável e libera a trava do canal de qualquer forma
-      responsaveisOficiais.delete(canalId);
-      TICKETS_EM_FECHAMENTO.delete(String(canalId));
+      // A liberação da trava pertence à função
+      // finalizarTicketComConclusao.
+      //
+      // Não apagar o responsável oficial aqui:
+      // a tentativa de exclusão pode ter falhado
+      // e o canal ainda pode existir.
     }
   }
 
@@ -5976,98 +6130,187 @@ if (
   });
 }
 
-// ✅ IMPORTANTE: se algo travar, a gente ainda vai deletar o canal
-let deleteAgendado = false;
+// =====================================================
+// SANTA CREATORS — PROTEÇÃO DO FECHAMENTO
+// =====================================================
+
+// Um único temporizador por execução do fechamento.
 let deleteTimer = null;
+let deleteAgendado = false;
 
+// Só será true depois que o transcript e os metadados
+// de restauração forem confirmados.
+let transcriptPreservado = false;
+
+// Evita excluir um ticket enquanto outra etapa
+// ainda está processando ou aguardando a API.
 const cancelarDeleteGarantido = () => {
-  if (
-    deleteTimer
-  ) {
-    clearTimeout(
-      deleteTimer
-    );
-
-    deleteTimer =
-      null;
+  if (deleteTimer) {
+    clearTimeout(deleteTimer);
+    deleteTimer = null;
   }
+
+  deleteAgendado = false;
 };
 
 const agendarDeleteGarantido = () => {
-  if (deleteAgendado) return;
+  if (deleteAgendado) {
+    return;
+  }
 
   deleteAgendado = true;
 
-  // Este timer é SOMENTE a rede de segurança.
-  //
-  // O fluxo normal agora apaga o canal imediatamente assim
-  // que transcript, log e tentativa de PV terminarem.
-  //
-  // Se alguma etapa ficar travada de verdade, este timer
-  // continua garantindo a exclusão depois de 90 segundos.
-  deleteTimer =
-    setTimeout(
-      async () => {
-        deleteTimer =
-          null;
+  deleteTimer = setTimeout(async () => {
+    deleteTimer = null;
+    deleteAgendado = false;
 
-        const ok =
-          await safeDeleteTicketChannel(
-            canal,
-            canalId
-          );
-
-        if (!ok) {
-          // se falhar, tenta avisar no canal (se ainda existir)
-          try {
-            await canal.send(
-              "⚠️ Não consegui deletar o canal automaticamente (permissão do bot). Um admin precisa apagar manualmente."
-            );
-          } catch {}
-        }
-      },
-      90000
+    console.warn(
+      `[TICKET SEGURANÇA] Fechamento do canal ${canalId} ` +
+      'excedeu 90 segundos.'
     );
+
+    if (!transcriptPreservado) {
+      console.error(
+        `[TICKET SEGURANÇA] Transcript não confirmado: ${canalId}`
+      );
+    } else {
+      console.warn(
+        `[TICKET SEGURANÇA] Histórico preservado, ` +
+        `mas o processamento do ticket ${canalId} ainda está em andamento.`
+      );
+    }
+
+    // Não exclui à força enquanto ainda pode existir
+    // gravação ou envio de informação em andamento.
+    //
+    // A rotina normal continua responsável por excluir
+    // o canal após a conclusão das etapas obrigatórias.
+    //
+    // O aviso permite identificar travamentos reais.
+    await canal.send({
+      content:
+        '⚠️ **O fechamento está demorando mais que o esperado.**\n' +
+        'O sistema está preservando os dados do atendimento. ' +
+        'A equipe deve verificar os logs caso o canal continue aberto.'
+    }).catch(() => {});
+  }, 90_000);
+
+  deleteTimer.unref?.();
 };
 
-// ✅ Inicia a rede de segurança.
-// IMPORTANTE:
-// o ticket NÃO precisa mais esperar 90 segundos para sumir.
-// Esse prazo só entra em ação se o processamento normal travar.
+// Inicia um único monitor de demora.
 agendarDeleteGarantido();
 
+// =====================================================
+// ESTADO FINAL DA EXCLUSÃO
+// =====================================================
+// Registra se o canal foi excluído com sucesso.
+// O valor será utilizado para limpar o responsável
+// oficial somente quando o canal não existir mais.
+let fechamentoExcluiuCanal = false;
+
 try {
-    // ⚙️ pega TODAS as mensagens em ordem crescente (só UMA vez aqui)
-    // 🔧 FIX: se esse fetch ficar pesado/travar por rate, colocamos timeout por “lote”
-    const sorted = await (async function fetchTodasAsMensagens(channel) {
-      let mensagens = [];
-      let ultimaId = undefined;
+// =====================================================
+// SANTA CREATORS — HISTÓRICO COMPLETO OTIMIZADO
+// =====================================================
 
-      while (true) {
-        const options = { limit: 100 };
-        if (ultimaId) options.before = ultimaId;
+const inicioBuscaMensagens = Date.now();
 
-        // ⏱️ timeout por chamada ao Discord
-        const lote = await withTimeout(
-          channel.messages.fetch(options),
-          20_000,
-          "channel.messages.fetch"
-        ).catch(err => {
-          console.error("[TICKET] fetch mensagens falhou/timeout:", err?.message || err);
-          return null;
-        });
+const sorted = await (async function fetchTodasAsMensagens(channel) {
+  const mensagens = [];
+  const idsRecebidos = new Set();
 
-        if (!lote || lote.size === 0) break;
+  let ultimaId;
+  let totalLotes = 0;
 
-        mensagens.push(...lote.values());
-        ultimaId = lote.last().id;
+  while (true) {
+    const options = {
+      limit: 100,
+    };
 
-        // pequena pausa pra aliviar rate limit
-        await safeDelay(250);
+    if (ultimaId) {
+      options.before = ultimaId;
+    }
+
+    const inicioLote = Date.now();
+
+    let lote;
+
+    try {
+      lote = await withTimeout(
+        channel.messages.fetch(options),
+        20_000,
+        `channel.messages.fetch(lote ${totalLotes + 1})`
+      );
+    } catch (error) {
+      console.error(
+        `[TICKET HISTÓRICO] Falha no lote ${totalLotes + 1}:`,
+        error?.message || error
+      );
+
+      // Não gerar transcript incompleto silenciosamente.
+      throw new Error(
+        `Histórico incompleto do ticket ${channel.id}. ` +
+        `Falha na paginação: ${error?.message || error}`
+      );
+    }
+
+    if (!lote?.size) {
+      break;
+    }
+
+    totalLotes++;
+
+    const mensagensDoLote = [...lote.values()];
+
+    for (const mensagem of mensagensDoLote) {
+      if (!idsRecebidos.has(mensagem.id)) {
+        idsRecebidos.add(mensagem.id);
+        mensagens.push(mensagem);
       }
+    }
 
-      return mensagens.sort((a, b) => a.createdTimestamp - b.createdTimestamp);
-    })(canal);
+    const menorId = mensagensDoLote
+      .reduce(
+        (menor, mensagem) =>
+          BigInt(mensagem.id) < BigInt(menor)
+            ? mensagem.id
+            : menor,
+        mensagensDoLote[0].id
+      );
+
+    if (ultimaId && BigInt(menorId) >= BigInt(ultimaId)) {
+      throw new Error(
+        `Paginação sem avanço no ticket ${channel.id}`
+      );
+    }
+
+    ultimaId = menorId;
+
+    console.log(
+      `[TICKET HISTÓRICO] ${channel.id} | ` +
+      `Lote ${totalLotes} | ` +
+      `${lote.size} mensagens | ` +
+      `${Date.now() - inicioLote}ms`
+    );
+
+    // Discord.js gerencia as filas e rate limits das requisições.
+    // Não adicionamos mais uma pausa fixa após cada lote.
+    if (lote.size < 100) {
+      break;
+    }
+  }
+
+  return mensagens.sort(
+    (a, b) => a.createdTimestamp - b.createdTimestamp
+  );
+})(canal);
+
+console.log(
+  `[TICKET PERF] Busca completa ${canalId}: ` +
+  `${sorted.length} mensagens em ` +
+  `${Date.now() - inicioBuscaMensagens}ms`
+);
 
     // 🧵 tópico do canal é a fonte preferida (traz tipo e quem abriu se já estiver gravado)
     const topic = canal.topic || "";
@@ -6136,14 +6379,69 @@ try {
 
     const contagemAtendentes = new Map(); // userId -> { count, firstTs }
 
-    // 🚀 Otimização: Identifica quais UIDs no chat são Staff apenas uma vez.
-    // Isso evita centenas de chamadas lentas ao banco/API do Discord dentro do loop abaixo.
-    const uidsNoChat = [...new Set(sorted.filter(m => !m.author?.bot && m.author?.id !== idAberto).map(m => m.author?.id))];
-    const staffVerificada = new Set();
+// =====================================================
+// SANTA CREATORS — IDENTIFICAÇÃO OTIMIZADA DE ATENDENTES
+// =====================================================
 
-    for (const uid of uidsNoChat) {
-      if (await isAtendenteValido(uid)) staffVerificada.add(uid);
+const inicioValidacaoStaff = Date.now();
+
+const uidsNoChat = [
+  ...new Set(
+    sorted
+      .filter(
+        mensagem =>
+          !mensagem.author?.bot &&
+          mensagem.author?.id &&
+          mensagem.author.id !== idAberto
+      )
+      .map(mensagem => mensagem.author.id)
+  ),
+];
+
+const staffVerificada = new Set();
+
+// No máximo 5 verificações simultâneas.
+// Evita consultas excessivas à API.
+const MAX_STAFF_CONCURRENCY = 5;
+
+let proximoIndice = 0;
+
+async function workerValidarStaff() {
+  while (proximoIndice < uidsNoChat.length) {
+    const indice = proximoIndice++;
+    const uid = uidsNoChat[indice];
+
+    try {
+      if (await isAtendenteValido(uid)) {
+        staffVerificada.add(uid);
+      }
+    } catch (error) {
+      // Não marcar usuário como validado em caso de falha.
+      console.error(
+        `[TICKET STAFF] Falha ao validar ${uid}:`,
+        error?.message || error
+      );
     }
+  }
+}
+
+await Promise.all(
+  Array.from(
+    {
+      length: Math.min(
+        MAX_STAFF_CONCURRENCY,
+        uidsNoChat.length
+      ),
+    },
+    () => workerValidarStaff()
+  )
+);
+
+console.log(
+  `[TICKET PERF] Validação de atendentes ${canalId}: ` +
+  `${uidsNoChat.length} usuários verificados em ` +
+  `${Date.now() - inicioValidacaoStaff}ms`
+);
 
     for (const msg of sorted) {
       if (!msg || msg.author?.bot) continue;
@@ -7263,31 +7561,43 @@ try {
       };
 
       try {
-        const transcriptDocument = await withTimeout(
-          Transcript.create(payload),
-          15_000,
-          "Transcript.create"
-        );
+  const transcriptDocument = await withTimeout(
+    Transcript.create(payload),
+    15_000,
+    "Transcript.create"
+  );
 
-        await withTimeout(
-          ticketRestore.saveRestoreMeta({
-            transcriptDocument,
-            channel: canal,
-            tipoTicket,
-            openerId: idAberto,
-            assumedById: idAssumido || ATENDENTE_ID_FINAL
-          }),
-          10_000,
-          "ticketRestore.saveRestoreMeta"
-        ).catch(error => {
-          console.error(
-            "[TICKET RESTORE] Falha ao salvar metadados de restauração:",
-            error?.message || error
-          );
-        });
-      } catch (e) {
-        console.error("[TICKET] Transcript.create falhou/timeout:", e?.message || e);
-      }
+  if (!transcriptDocument?._id) {
+    throw new Error(
+      'Transcript não retornou um documento persistido.'
+    );
+  }
+
+  await withTimeout(
+    ticketRestore.saveRestoreMeta({
+      transcriptDocument,
+      channel: canal,
+      tipoTicket,
+      openerId: idAberto,
+      assumedById: idAssumido || ATENDENTE_ID_FINAL,
+    }),
+    10_000,
+    "ticketRestore.saveRestoreMeta"
+  );
+
+  transcriptPreservado = true;
+
+  console.log(
+    `[TICKET RESTORE] Histórico e metadados persistidos: ${canalId}`
+  );
+} catch (error) {
+  transcriptPreservado = false;
+
+  console.error(
+    `[TICKET RESTORE] Falha ao preservar ticket ${canalId}:`,
+    error?.message || error
+  );
+}
 }
 
 // ============================================================================
@@ -7907,35 +8217,96 @@ if (
 // para o caso de alguma etapa anterior realmente travar.
 // =====================================================
 
-const canalDeletadoAgora =
-  await safeDeleteTicketChannel(
-    canal,
-    canalId
+let canalDeletadoAgora = false;
+
+if (transcriptPreservado) {
+  canalDeletadoAgora =
+    await safeDeleteTicketChannel(
+      canal,
+      canalId
+    );
+} else {
+  console.error(
+    `[TICKET] Exclusão bloqueada para ${canalId}: ` +
+    'histórico ou restauração não confirmados.'
   );
+
+  cancelarDeleteGarantido();
+
+  console.error(
+    `[TICKET RECOVERY] Canal ${canalId} precisa de recuperação. ` +
+    'A trava permanecerá ativa neste processo para evitar ' +
+    'uma segunda execução simultânea.'
+  );
+
+  await canal.send(
+    '⚠️ **Fechamento interrompido por segurança.**\n' +
+    'Não foi possível confirmar a preservação do histórico. ' +
+    'O canal permanecerá disponível para recuperação.\n' +
+    'A equipe deve verificar a persistência antes de tentar novamente.'
+  ).catch(() => {});
+}
 
 if (
   canalDeletadoAgora
 ) {
+  fechamentoExcluiuCanal = true;
+
   cancelarDeleteGarantido();
+
+  console.log(
+    `[TICKET] ✅ Fechamento concluído com sucesso: ${canalId}`
+  );
 } else {
   console.error(
-    `[TICKET] O processamento do ticket ${canalId} terminou, mas a exclusão imediata falhou. A trava de segurança continuará ativa.`
+    `[TICKET] O processamento do ticket ${canalId} terminou, ` +
+    'mas o canal permaneceu aberto. ' +
+    'Os dados existentes serão preservados.'
   );
 }
 
-} catch (
-  err
-) {
+} catch (err) {
   console.error(
-    "[TICKET] Erro crítico durante o processamento do fechamento:",
+    `[TICKET] Erro crítico durante o processamento do fechamento ${canalId}:`,
     err
   );
 
-  // Não liberamos a trava aqui.
+  // Não excluir o canal neste tratamento de erro.
   //
-  // Se houve erro crítico antes da exclusão normal,
-  // o timer de segurança continua responsável por tentar
-  // apagar o canal depois.
+  // A rotina pode ter falhado antes da persistência
+  // do transcript e dos metadados de restauração.
+  //
+  // O canal permanece disponível para nova tentativa.
+  await canal.send({
+    content:
+      '⚠️ **Não foi possível concluir o fechamento.**\n' +
+      'O ticket foi preservado para evitar perda de dados.\n' +
+      'A equipe poderá tentar novamente após verificar o erro.'
+  }).catch(() => {});
+
+} finally {
+  // =====================================================
+  // LIMPEZA GARANTIDA APÓS O FIM DA ROTINA
+  // =====================================================
+
+  // Impede que o temporizador continue ativo.
+  cancelarDeleteGarantido();
+
+  // Só remove o responsável oficial quando
+  // a exclusão do canal foi confirmada.
+  if (fechamentoExcluiuCanal) {
+    responsaveisOficiais.delete(canalId);
+  }
+
+  // Libera a trava somente depois que esta execução
+  // terminou ou apresentou uma falha.
+  TICKETS_EM_FECHAMENTO.delete(canalId);
+
+  console.log(
+    `[TICKET RECOVERY] ${canalId} | ` +
+    `Canal excluído: ${fechamentoExcluiuCanal} | ` +
+    'Trava de fechamento liberada.'
+  );
 }
 
 }
