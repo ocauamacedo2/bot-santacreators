@@ -2020,7 +2020,22 @@ async function collectAllPoints(client, mode = "light") {
     weeklyCollectionsInFlight.set(client, requests);
   }
 
-  if (requests.has(mode)) return requests.get(mode);
+  if (requests.has('full')) {
+    return requests.get('full');
+  }
+
+  if (
+    mode === 'full' &&
+    requests.has('light')
+  ) {
+    await requests.get('light').catch(() => {});
+
+    return collectAllPoints(client, mode);
+  }
+
+  if (requests.has(mode)) {
+    return requests.get(mode);
+  }
 
   const operation = collectAllPointsUnshared(client, mode).finally(() => {
     if (requests.get(mode) === operation) requests.delete(mode);
@@ -4989,7 +5004,12 @@ registerOperationalMetricProvider(
 );
 
 // ✅ NOVO: Exporta o ranking semanal para outros módulos
-export async function getWeeklyRanking(client) {
+export async function getWeeklyRanking(
+  client,
+  {
+    strict = false
+  } = {}
+) {
   try {
     // Navegação do site reaproveita a coleta recente; a rotina do bot mantém a varredura completa.
     const { items } = await collectAllPoints(client, "light");
@@ -5050,6 +5070,10 @@ export async function getWeeklyRanking(client) {
       "[SC_GERAL_WEEKLY_RANK] getWeeklyRanking error:",
       e
     );
+
+    if (strict) {
+      throw e;
+    }
 
     return [];
   }
@@ -6228,7 +6252,10 @@ export async function getWeeklyRankingSiteSnapshot({
 
   const ranking =
     await getWeeklyRanking(
-      client
+      client,
+      {
+        strict: true
+      }
     );
 
   return {

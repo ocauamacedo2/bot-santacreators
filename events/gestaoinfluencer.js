@@ -628,6 +628,30 @@ CHANNEL_MEMBER_HISTORY_LOG: '1555344870195994754',
     }
 
     const SC_GI_CONTROL_API = {
+      getChecklistSource() {
+        if (
+          !SC_GI_DATA_READY ||
+          !SC_GI_DATA_AUTHORITATIVE
+        ) {
+          throw Object.assign(
+            new Error(
+              'O Controle GI ainda não confirmou sua fonte de dados.'
+            ),
+            {
+              status: 503
+            }
+          );
+        }
+
+        return {
+          registros: JSON.parse(
+            JSON.stringify(
+              [...SC_GI_STATE.registros.values()]
+            )
+          )
+        };
+      },
+
       get ready() {
         return SC_GI_DATA_READY;
       },
@@ -669,6 +693,32 @@ CHANNEL_MEMBER_HISTORY_LOG: '1555344870195994754',
           reason || "Desligamento pelo FormsCreator"
         );
         return { ok: true, status: "disabled" };
+      },
+
+      getChecklistSource() {
+        if (
+          !SC_GI_DATA_READY ||
+          !SC_GI_DATA_AUTHORITATIVE
+        ) {
+          throw Object.assign(
+            new Error(
+              'O Controle GI ainda não confirmou sua fonte de dados.'
+            ),
+            {
+              status: 503
+            }
+          );
+        }
+
+        const registros = [
+          ...SC_GI_STATE.registros.values()
+        ];
+
+        return {
+          registros: JSON.parse(
+            JSON.stringify(registros)
+          )
+        };
       },
 
       listControls(guildId = null) {
@@ -13742,6 +13792,32 @@ async function enrichGISiteRecords(guild, actor, records) {
         ),
       };
 
+      item.rights.responsible =
+        canManageGISiteTarget(
+          actor,
+          target,
+          item.targetId
+        );
+
+      item.rights.ai =
+        item.rights.responsible;
+
+      item.rights.edit =
+        hasAreaEditAuth(actor) &&
+        item.rights.responsible;
+
+      item.rights.resend =
+        item.rights.refresh ||
+        (
+          String(actor.id) === String(item.targetId) &&
+          actor.roles.cache.some(
+            role => [
+              SC_GI_CFG.ROLE_COORD_CREATORS,
+              SC_GI_CFG.ROLE_GESTOR_CREATORS
+            ].includes(role.id)
+          )
+        );
+
       item.links = rec
         ? await linksFor(rec)
         : {
@@ -13759,6 +13835,204 @@ async function enrichGISiteRecords(guild, actor, records) {
   );
 
   return records;
+}
+
+async function generateGISiteWeeklyFeedback(
+  guild,
+  rec,
+  actorUser
+) {
+  let formsResult = null;
+  let formsError = null;
+
+  let privateDmError = null;
+  let privateDmSentParts = 0;
+  let privateDmTotalParts = 0;
+
+  try {
+    if (
+      typeof forceWeeklyMemberAiFeedback !==
+      'function'
+    ) {
+      throw new Error(
+        'O módulo de comentário semanal por IA não está disponível.'
+      );
+    }
+
+    formsResult =
+      await forceWeeklyMemberAiFeedback({
+        client,
+        guild,
+        record: rec,
+        actorUser,
+      });
+  } catch (error) {
+    formsError = error;
+
+    console.warn(
+      '[SC_GI SITE] Comentário interno não concluído:',
+      error.message
+    );
+  }
+
+  try {
+    if (
+      typeof generateWeeklyMemberPrivateDm !==
+      'function'
+    ) {
+      throw new Error(
+        'O gerador de orientação privada não está disponível.'
+      );
+    }
+
+    const targetUser =
+      await fetchUserCached(
+        rec.targetId
+      );
+
+    if (!targetUser) {
+      throw new Error(
+        'Usuário do registro não encontrado para envio privado.'
+      );
+    }
+
+    const privateFeedback =
+      await generateWeeklyMemberPrivateDm({
+        client: guild.client,
+        guild,
+        record: rec,
+        facts:
+          formsResult?.facts ||
+          null,
+      });
+
+    const chunks =
+      Array.isArray(
+        privateFeedback?.chunks
+      )
+        ? privateFeedback.chunks
+        : [];
+
+    privateDmTotalParts =
+      chunks.length;
+
+    if (!chunks.length) {
+      throw new Error(
+        'A orientação privada ficou vazia.'
+      );
+    }
+
+    for (
+      let index = 0;
+      index < chunks.length;
+      index++
+    ) {
+      const chunk = String(
+        chunks[index] ||
+        ''
+      ).trim();
+
+      if (!chunk) {
+        continue;
+      }
+
+      const guidanceEmbed =
+        new EmbedBuilder()
+          .setColor(
+            0x5865f2
+          )
+          .setTitle(
+            index === 0
+              ? '💡 Um retorno para você'
+              : `↳ Continuação ${index + 1}/${chunks.length}`
+          )
+          .setDescription(
+            chunk.slice(
+              0,
+              4096
+            )
+          );
+
+      if (index === 0) {
+        guidanceEmbed
+          .setFooter({
+            text:
+              'SantaCreators • acompanhamento pessoal',
+          })
+          .setTimestamp(
+            new Date()
+          );
+      }
+
+      const sent =
+        await sendDM_andMirror(
+          guild,
+          targetUser,
+          guidanceEmbed,
+          `<@${rec.targetId}>`
+        );
+
+      if (sent) {
+        privateDmSentParts++;
+      }
+    }
+
+    if (
+      privateDmSentParts !==
+      privateDmTotalParts
+    ) {
+      throw new Error(
+        `Entrega privada incompleta: ${privateDmSentParts}/${privateDmTotalParts} parte(s).`
+      );
+    }
+  } catch (error) {
+    privateDmError = error;
+
+    console.warn(
+      '[SC_GI SITE] Orientação privada não concluída:',
+      error.message
+    );
+  }
+
+  const privateDmSent =
+    privateDmTotalParts > 0 &&
+    privateDmSentParts === privateDmTotalParts;
+
+  const message = [
+    formsResult
+      ? 'Comentário interno atualizado.'
+      : `Forms: ${formsError?.message || 'comentário não confirmado.'}`,
+
+    privateDmSent
+      ? `Orientação privada enviada: ${privateDmSentParts}/${privateDmTotalParts} partes.`
+      : `Privado: ${privateDmError?.message || 'entrega não confirmada.'}`,
+  ].join(' ');
+
+  if (
+    !formsResult &&
+    privateDmSentParts === 0
+  ) {
+    throw new Error(
+      message
+    );
+  }
+
+  return {
+    ok: true,
+
+    partial:
+      !formsResult ||
+      !privateDmSent,
+
+    message,
+
+    formsUpdated:
+      Boolean(formsResult),
+
+    privateDmSent,
+    privateDmSentParts,
+    privateDmTotalParts,
+  };
 }
 
 globalThis.__SC_GI_SITE_API__ = {
@@ -13847,6 +14121,30 @@ globalThis.__SC_GI_SITE_API__ = {
             totalActiveMs:
               getActiveTotalMs(
                 rec,
+                nowMs()
+              ),
+
+            totalPausedMs:
+              getPausedTotalMs(
+                rec,
+                nowMs()
+              ),
+
+            currentPauseMs:
+              getCurrentPauseMs(
+                rec,
+                nowMs()
+              ),
+
+            weeks:
+              weeksSince(
+                rec.joinDateMs,
+                nowMs()
+              ),
+
+            months:
+              monthsSince(
+                rec.joinDateMs,
                 nowMs()
               ),
           })
@@ -13991,6 +14289,65 @@ globalThis.__SC_GI_SITE_API__ = {
       throw new Error(
         "Registro GI não encontrado."
       );
+    }
+
+    if (
+      action === 'resend' ||
+      action === 'ai'
+    ) {
+      const extra = [
+        SC_GI_CFG.ROLE_COORD_CREATORS,
+        SC_GI_CFG.ROLE_GESTOR_CREATORS
+      ];
+
+      await assertCanManageGIRecord(
+        guild,
+        actorUser,
+        rec.targetId,
+        action === 'ai'
+          ? 'gerar o comentário semanal de IA'
+          : 'reenviar a DM',
+        action === 'resend'
+          ? {
+              extraAllowedRoleIds: extra,
+              selfAllowedRoleIds: extra
+            }
+          : {}
+      );
+
+      const acquired =
+        beginGIExclusiveActionLock(
+          actor,
+          messageId,
+          action === 'ai'
+            ? 'Comentário IA'
+            : 'Reenviar DM agora'
+        );
+
+      try {
+        if (action === 'ai') {
+          return await generateGISiteWeeklyFeedback(
+            guild,
+            rec,
+            actorUser
+          );
+        }
+
+        await resendDM(
+          guild,
+          actorUser,
+          messageId
+        );
+
+        return {
+          ok: true
+        };
+      } finally {
+        endGIExclusiveActionLock(
+          messageId,
+          acquired
+        );
+      }
     }
 
     if (

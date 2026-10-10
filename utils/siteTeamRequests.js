@@ -145,7 +145,30 @@ function messageRecord(message, category, rights) {
     status = 'processando';
   }
 
+  const requesterField = (embed.fields || []).find(
+    field => /solicitante|usuário|usuario|membro/i.test(
+      field.name
+    )
+  );
+
+  const userId = [
+    requesterField?.value,
+    embed.description,
+    ...(embed.fields || []).map(
+      field => field.value
+    )
+  ]
+    .map(
+      value => String(
+        value || ''
+      ).match(
+        /<@!?(\d{17,20})>/
+      )?.[1]
+    )
+    .find(Boolean) || null;
+
   return {
+    userId,
     msgId: message.id,
     createdAt: message.createdTimestamp,
     status,
@@ -185,6 +208,69 @@ function messageRecord(message, category, rights) {
         Boolean(rejectId),
     },
   };
+}
+
+async function enrichTeamRequestProfiles(guild, records) {
+  let next = 0;
+
+  const profiles = new Map();
+
+  const ids = [
+    ...new Set(
+      records
+        .map(record => String(record.userId || ''))
+        .filter(id => /^\d{17,20}$/.test(id))
+    )
+  ];
+
+  await Promise.all(
+    Array.from(
+      {
+        length: Math.min(4, ids.length)
+      },
+      async () => {
+        while (next < ids.length) {
+          const id = ids[next++];
+
+          const member = await guild.members
+            .fetch(id)
+            .catch(() => null);
+
+          if (!member) {
+            continue;
+          }
+
+          profiles.set(id, {
+            id,
+            name: member.displayName,
+            avatar: member.displayAvatarURL({
+              size: 128
+            }),
+            roles: [
+              ...member.roles.cache.values()
+            ]
+              .filter(role => role.id !== guild.id)
+              .sort(
+                (a, b) => b.position - a.position
+              )
+              .map(role => ({
+                id: role.id,
+                name: role.name,
+                color: role.hexColor
+              }))
+          });
+        }
+      }
+    )
+  );
+
+  for (const record of records) {
+    record.profile = profiles.get(
+      String(record.userId || '')
+    ) || null;
+  }
+
+  return records;
 }
 
 export function createSiteTeamRequests({
@@ -373,8 +459,16 @@ export function createSiteTeamRequests({
                 `Usuário ${item.userId}`,
             },
             {
+              name: 'Pasta / equipe',
+              value: String(
+                item.folder || '—'
+              ),
+            },
+            {
               name: 'ID na cidade',
-              value: String(item.gameId || '—'),
+              value: String(
+                item.gameId || '—'
+              ),
             },
             {
               name: 'Cidade',
@@ -437,6 +531,11 @@ export function createSiteTeamRequests({
           nextCursor = page.last()?.id || null;
         }
       }
+
+      await enrichTeamRequestProfiles(
+        guild,
+        records
+      );
 
       categories.push({
         key,

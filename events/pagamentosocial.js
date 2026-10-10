@@ -8054,21 +8054,30 @@ await interaction.editReply({
 // continuam sendo executadas sem prender a resposta.
 void (async () => {
   try {
-    // Se aprovado/reprovado/solicitado,
-    // recalcula estatísticas pelos registros do mês atual.
-    if (["pago", "reprovado", "solicitado"].includes(action)) {
-      await sincronizarDashboardSocial(client, `status:${action}`, {
-        forceUnlock: true,
-      }).catch(() => null);
-    }
-
     // Reposta o menu e limpa menus duplicados.
     await canal.send({
       embeds: [criarEmbedMenu()],
       components: [criarRowMenu()],
     }).catch(() => {});
 
-    await limparBotoesAntigos(client, canal).catch(() => {});
+    await limparBotoesAntigos(
+      client,
+      canal
+    ).catch(() => {});
+
+    // Se aprovado/reprovado/solicitado,
+    // recalcula estatísticas pelos registros do mês atual.
+    if (
+      ["pago", "reprovado", "solicitado"].includes(action)
+    ) {
+      await sincronizarDashboardSocial(
+        client,
+        `status:${action}`,
+        {
+          forceUnlock: true,
+        }
+      ).catch(() => null);
+    }
   } catch (error) {
     console.error(
       `[PagamentoSocial] Erro nas tarefas posteriores ao status ${action}:`,

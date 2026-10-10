@@ -5487,36 +5487,46 @@ if (id === 'fechar_ticket') {
           interaction.user.id
         );
 
-        try {
-          await interaction.reply({
-            content:
-              '📝 **Informe o motivo do fechamento no chat.**\n\n' +
-              'O motivo precisa ter mais de 5 caracteres e pelo menos 2 palavras.\n' +
-              '⏱️ Você tem 5 minutos para enviar a conclusão.',
-            flags: 64
-          });
-        } catch (error) {
-          TICKETS_AGUARDANDO_CONCLUSAO.delete(ticketKey);
+        let collector;
+        let conclusaoAceita = false;
+
+        void interaction.reply({
+          content:
+            '📝 **Informe o motivo do fechamento no chat.**\n\n' +
+            'O motivo precisa ter mais de 5 caracteres e pelo menos 2 palavras.\n' +
+            '⏱️ Você tem 5 minutos para enviar a conclusão.',
+          flags: 64
+        }).catch(error => {
+          if (!conclusaoAceita) {
+            if (
+              TICKETS_AGUARDANDO_CONCLUSAO.get(ticketKey) ===
+              interaction.user.id
+            ) {
+              TICKETS_AGUARDANDO_CONCLUSAO.delete(
+                ticketKey
+              );
+            }
+
+            collector?.stop(
+              'falha_aviso'
+            );
+          }
 
           console.error(
             '[TICKET] Falha ao solicitar conclusão:',
             error
           );
-
-          return true;
-        }
+        });
 
         const filtro = msg =>
           msg.author.id === member.id &&
           msg.channel.id === canalId &&
           !msg.author.bot;
 
-        const collector = canal.createMessageCollector({
+        collector = canal.createMessageCollector({
           filter: filtro,
           time: TICKET_CONCLUSAO_TIMEOUT_MS
         });
-
-        let conclusaoAceita = false;
 
         collector.on('collect', async (msg) => {
           if (conclusaoAceita) {
@@ -5612,10 +5622,13 @@ if (id === 'fechar_ticket') {
 
         collector.on('end', (_collected, reason) => {
           if (
+            reason !== 'concluido' &&
             TICKETS_AGUARDANDO_CONCLUSAO.get(ticketKey) ===
             interaction.user.id
           ) {
-            TICKETS_AGUARDANDO_CONCLUSAO.delete(ticketKey);
+            TICKETS_AGUARDANDO_CONCLUSAO.delete(
+              ticketKey
+            );
           }
 
           if (reason === 'time') {
@@ -6084,6 +6097,10 @@ if (interaction.isModalSubmit() && interaction.customId === 'modal_registro_lide
 
     TICKETS_EM_FECHAMENTO.add(
       canalId
+    );
+
+    TICKETS_AGUARDANDO_CONCLUSAO.delete(
+      String(canalId)
     );
 
     try {

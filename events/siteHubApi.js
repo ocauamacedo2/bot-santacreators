@@ -664,7 +664,7 @@ const experience = createSiteHubExperience({
 
   const eventsLibrary = createSiteEventsLibrary({ client });
 
-  globalThis.__SC_QUIZ_SITE_API__ =
+  globalThis.__SC_QUIZ_SITE_API__ ||=
     createQuizRemoteClient();
 
   const snapshots = createSiteSnapshotStore({
@@ -759,6 +759,7 @@ const experience = createSiteHubExperience({
     const cleanPayload = { ...payload };
     delete cleanPayload.refresh;
     delete cleanPayload.requireFresh;
+    delete cleanPayload.poll;
     const permissionChannels = new Set(CHANNELS[moduleKey] || []);
     if (moduleKey === 'events') {
       permissionChannels.add('1457577651152883797');
@@ -1092,17 +1093,62 @@ const experience = createSiteHubExperience({
             return { ...value, cacheScope: key,
               delivery: { savedAt: record.at, updating: !record.fresh, source: 'consulta-salva' } };
           };
-          if (saved?.fresh && !payload.refresh) return res.json(deliver(saved));
+          if (
+            saved?.fresh &&
+            (!payload.refresh || payload.poll)
+          ) {
+            return res.json(deliver(saved));
+          }
+
           const task = snapshots.begin(key);
+
           if (!task.owner) {
-            if (saved && !payload.requireFresh) return res.json(deliver({ ...saved, fresh:false }));
+            if (saved && !payload.requireFresh) {
+              return res.json(
+                deliver({
+                  ...saved,
+                  fresh: false
+                })
+              );
+            }
+
+            if (
+              ['weekly', 'quiz'].includes(moduleKey)
+            ) {
+              return res.status(202).json({
+                pending: true
+              });
+            }
+
             const result = await task.promise;
-            if (result.error) throw result.error;
+
+            if (result.error) {
+              throw result.error;
+            }
+
             return res.json(result.value);
           }
           const realResponse = res;
-          const background = Boolean(saved && !payload.requireFresh);
-          if (background) realResponse.json(deliver({ ...saved, fresh:false }));
+
+          const background =
+            Boolean(saved && !payload.requireFresh) ||
+            ['weekly', 'quiz'].includes(moduleKey);
+
+          if (background) {
+            if (saved && !payload.requireFresh) {
+              realResponse.json(
+                deliver({
+                  ...saved,
+                  fresh: false
+                })
+              );
+            } else {
+              realResponse.status(202).json({
+                pending: true
+              });
+            }
+          }
+
           let statusCode = 200;
           res = {
             get statusCode() { return statusCode; },
@@ -1932,9 +1978,79 @@ if (await experience.handle({ guild, member, action, payload, res })) return;
             "cronograma"
           );
 
-      const getCronogramaData = getCronogramaSiteData;
+      const getCronogramaData =
+        getCronogramaSiteData;
+
+      const data =
+        await getCronogramaData();
+
+      const eventCovers = {};
+
+      if (
+        await canAccessSiteModule(
+          client,
+          member,
+          'events'
+        )
+      ) {
+        try {
+          const catalog =
+            await eventsLibrary.handle({
+              guild,
+              member,
+              action: 'events.snapshot',
+              payload: {}
+            });
+
+          const normalize = name => String(
+            name || ''
+          )
+            .normalize('NFD')
+            .replace(
+              /[\u0300-\u036f]/g,
+              ''
+            )
+            .trim()
+            .toLocaleLowerCase('pt-BR');
+
+          const repeated = new Set();
+
+          for (const event of catalog.events || []) {
+            const name = normalize(
+              event.name
+            );
+
+            if (!name) {
+              continue;
+            }
+
+            if (
+              Object.hasOwn(
+                eventCovers,
+                name
+              )
+            ) {
+              repeated.add(name);
+            }
+
+            eventCovers[name] =
+              event.cover || '';
+          }
+
+          for (const name of repeated) {
+            delete eventCovers[name];
+          }
+        } catch (error) {
+          console.warn(
+            '[CRONOGRAMA SITE] Capas indisponíveis:',
+            error.message
+          );
+        }
+      }
+
       return res.json({
-        data: await getCronogramaData(),
+        data,
+        eventCovers
       });
         }
 

@@ -1069,13 +1069,20 @@ const loadState = () => {
 const saveHallRankings = (data) => {
   ensureDir();
 
+  const temporary = HALL_RANKING_FILE + ".tmp";
+
   fs.writeFileSync(
-    HALL_RANKING_FILE,
+    temporary,
     JSON.stringify(
       data,
       null,
       2
     )
+  );
+
+  fs.renameSync(
+    temporary,
+    HALL_RANKING_FILE
   );
 };
 
@@ -3237,319 +3244,376 @@ async function restoreHallManualEditsFromAudit(client, hallChannel) {
 // =====================================================
 
 async function autoCorrectDuplications(channel, client, options = {}) {
-  const locks =
-    globalThis.__SC_HALL_ACTIVE_SCAN_LOCKS__ ??=
-      new Set();
-
-  const lockKey =
-    `${client.user.id}:${channel.id}`;
+  const locks = globalThis.__SC_HALL_ACTIVE_SCAN_LOCKS__ ??= new Set();
+  const lockKey = `${client.user.id}:${channel.id}`;
 
   if (locks.has(lockKey)) {
-    throw new Error(
-      "Já existe uma varredura em andamento."
-    );
+    throw new Error("Já existe uma varredura em andamento.");
   }
 
   locks.add(lockKey);
 
-  const showProgress =
-    options.showProgress ?? true;
+  const startedAt = Date.now();
+  const showProgress = options.showProgress ?? true;
+  const approvalPages = new Map();
+  const evidencePages = new Map();
+  const previousApprovalPages = client.__SC_HALL_APPROVAL_PAGES__;
+  const previousEvidencePages = client.__SC_HALL_NEARBY_EVIDENCE_PAGES__;
+  client.__SC_HALL_APPROVAL_PAGES__ = approvalPages;
+  client.__SC_HALL_NEARBY_EVIDENCE_PAGES__ = evidencePages;
+
+  let scannedPages = 0;
+  let totalMessages = 0;
+  let processed = 0;
+  let checkpoint = null;
+
+  const assertDeadline = () => {
+    if (Date.now() - startedAt > 30 * 60 * 1000) {
+      throw new Error(
+        "A varredura atingiu 30 minutos. O progresso foi preservado para a próxima execução."
+      );
+    }
+  };
+
+  const rankingHash = () => createHash("sha256").update(
+    fs.existsSync(HALL_RANKING_FILE)
+      ? fs.readFileSync(HALL_RANKING_FILE)
+      : "ranking_ausente"
+  ).digest("hex");
+
+  const checkpointFile = path.join(
+    DATA_DIR,
+    `hall_scan_${client.user.id}_${channel.id}.json`
+  );
+
+  const saveCheckpoint = () => {
+    const temporary = checkpointFile + ".tmp";
+    fs.writeFileSync(temporary, JSON.stringify(checkpoint));
+    fs.renameSync(temporary, checkpointFile);
+  };
+
+  const report = async (values) => {
+    if (!showProgress) return;
+    await updateHallScanProgress(client, {
+      totalMessages,
+      processed,
+      edited: 0,
+      ...values
+    });
+  };
 
   try {
-    const messagesById =
-      new Map();
+    fs.mkdirSync(DATA_DIR, { recursive: true });
 
-    let beforeId = null;
-    let reachedEnd = false;
+    if (fs.existsSync(checkpointFile)) {
+      checkpoint = JSON.parse(fs.readFileSync(checkpointFile, "utf8"));
+      if (
+        checkpoint.version !== 1 ||
+        checkpoint.botId !== String(client.user.id) ||
+        checkpoint.channelId !== String(channel.id) ||
+        !/^[a-f0-9]{24}$/.test(checkpoint.generation) ||
+        !["collecting", "analysis", "publishing", "completed"].includes(checkpoint.phase)
+      ) {
+        throw new Error("Checkpoint do Hall inválido. O arquivo foi preservado.");
+      }
+    }
 
-    for (
-      let page = 0;
-      page < 200;
-      page++
+    const currentHash = rankingHash();
+    const canResumePublication = checkpoint?.phase === "publishing" &&
+      [checkpoint.baseHash, checkpoint.publishedHash].includes(currentHash);
+
+    if (
+      !checkpoint ||
+      checkpoint.phase === "completed" ||
+      (!canResumePublication && checkpoint.baseHash !== currentHash)
     ) {
-      const batch =
-        await channel.messages.fetch(
-          beforeId
-            ? {
-                limit: 100,
-                before: beforeId
-              }
-            : {
-                limit: 100
-              }
-        );
+      checkpoint = {
+        version: 1,
+        botId: String(client.user.id),
+        channelId: String(channel.id),
+        generation: createHash("sha256")
+          .update(`${lockKey}:${Date.now()}:${Math.random()}`)
+          .digest("hex")
+          .slice(0, 24),
+        phase: "collecting",
+        baseHash: currentHash,
+        processed: 0,
+        rankings: null,
+        startedAt: Date.now()
+      };
+      saveCheckpoint();
+    }
 
-      if (batch.size === 0) {
-        reachedEnd = true;
-        break;
+    const journalFile = path.join(
+      DATA_DIR,
+      `hall_scan_${client.user.id}_${channel.id}_${checkpoint.generation}.jsonl`
+    );
+
+    const finishPublication = async () => {
+      const hash = rankingHash();
+      if (![checkpoint.baseHash, checkpoint.publishedHash].includes(hash)) {
+        throw new Error(
+          "O ranking recebeu outra alteração durante a varredura. A reconstrução não foi publicada."
+        );
       }
 
-      let added = 0;
-
-      for (
-        const message of
-        batch.values()
-      ) {
-        if (
-          !messagesById.has(
-            message.id
-          )
-        ) {
-          messagesById.set(
-            message.id,
-            message
-          );
-
-          added++;
+      if (hash !== checkpoint.publishedHash) {
+        saveHallRankings(checkpoint.rankings);
+        if (rankingHash() !== checkpoint.publishedHash) {
+          throw new Error("Não foi possível confirmar a gravação do ranking.");
         }
       }
 
-      const oldest =
-        [...batch.values()]
-          .reduce(
-            (current, message) => {
-              if (!current) {
-                return message;
-              }
+      await publishHallRankings(client, checkpoint.rankings);
+      checkpoint.phase = "completed";
+      checkpoint.rankings = null;
+      checkpoint.completedAt = Date.now();
+      saveCheckpoint();
+      try { fs.unlinkSync(journalFile); } catch {}
 
-              return BigInt(
-                message.id
-              ) <
-                BigInt(
-                  current.id
-                )
-                ? message
-                : current;
-            },
-            null
-          );
+      await report({
+        status: "Finalizado. Halls preservados e ranking atualizado.",
+        totalHalls: checkpoint.totalHalls,
+        progressCurrent: processed,
+        progressTotal: checkpoint.totalHalls,
+        phase: "Finalizado"
+      }).catch(error => {
+        console.warn("[HallDaFama] Ranking publicado; painel de progresso indisponível:", error.message);
+      });
+    };
 
-      const nextBeforeId =
-        oldest?.id;
-
-      if (
-        !nextBeforeId ||
-        nextBeforeId === beforeId ||
-        added === 0 ||
-        (
-          beforeId &&
-          BigInt(nextBeforeId) >=
-            BigInt(beforeId)
-        )
-      ) {
-        throw new Error(
-          "A paginação da varredura não avançou."
-        );
+    if (canResumePublication) {
+      if (!checkpoint.rankings || !checkpoint.publishedHash) {
+        throw new Error("Checkpoint de publicação incompleto. O arquivo foi preservado.");
       }
-
-      beforeId =
-        nextBeforeId;
-
-      if (
-        batch.size < 100
-      ) {
-        reachedEnd = true;
-        break;
-      }
-    }
-
-    if (!reachedEnd) {
-      throw new Error(
-        "Histórico acima de 200 páginas. Ranking anterior preservado."
-      );
-    }
-
-    const hallMessages =
-      [...messagesById.values()]
-        .filter(message => {
-          const normalized =
-            normalizeHallName(
-              getHallMessageText(
-                message
-              )
-            );
-
-          if (
-            !normalized.includes(
-              "hall da fama"
-            )
-          ) {
-            return false;
-          }
-
-          const excluded = [
-            "ranking de orgs",
-            "ranking de pessoas",
-            "top 10 organizacoes",
-            "top 10 pessoas",
-            "revisao manual",
-            "varredura hall da fama"
-          ];
-
-          if (
-            excluded.some(text => {
-              return normalized.includes(
-                text
-              );
-            })
-          ) {
-            return false;
-          }
-
-          return (
-            state.historicalHallMigrations?.[
-              message.id
-            ]?.status !==
-            "completed"
-          );
-        })
-        .sort((a, b) => {
-          return (
-            (a.createdTimestamp || 0) -
-            (b.createdTimestamp || 0)
-          );
-        });
-
-    if (
-      hallMessages.length === 0
-    ) {
+      processed = checkpoint.processed;
+      totalMessages = checkpoint.totalMessages || 0;
+      await finishPublication();
       return;
     }
 
-    const rankings =
-      createEmptyHallRankingData(
-        loadHallRankings()
-      );
+    let beforeId = null;
+    let reachedEnd = false;
+    const messagesById = new Map();
 
-    let processed = 0;
-
-    for (
-      const message of
-      hallMessages
-    ) {
-      const evidence =
-        await resolveHallEvidence(
-          client,
-          message,
-          getHallMessageText(
-            message
-          )
-        );
-
-      await addHallToRankings(
-        rankings,
-        message,
-        client,
-        evidence
-      );
-
-      processed++;
-
+    const consumePage = page => {
       if (
-        showProgress &&
-        (
-          processed === 1 ||
-          processed % 10 === 0 ||
-          processed ===
-            hallMessages.length
-        )
+        !Number.isInteger(page.count) ||
+        page.count < 0 ||
+        page.count > 100 ||
+        !Array.isArray(page.halls) ||
+        typeof page.ended !== "boolean" ||
+        (page.count === 0 && (!page.ended || page.beforeId !== beforeId)) ||
+        (page.count > 0 && (
+          !/^\d+$/.test(page.beforeId) ||
+          (beforeId && BigInt(page.beforeId) >= BigInt(beforeId))
+        ))
       ) {
-        await updateHallScanProgress(
-          client,
-          {
-            status:
-              "Analisando sem alterar publicações ou imagens.",
-            totalMessages:
-              messagesById.size,
-            totalHalls:
-              hallMessages.length,
-            processed,
-            edited: 0,
-            progressCurrent:
-              processed,
-            progressTotal:
-              hallMessages.length,
-            currentHallUrl:
-              getMessageJumpUrl(
-                message
-              ),
-            currentEvent:
-              evidence.eventName ||
-              "Evento",
-            currentCity:
-              evidence.cityName ||
-              CITIES[
-                evidence.cityKey
-              ]?.label ||
-              "Não identificada",
-            phase:
-              "Análise e ranking"
-          }
-        );
+        throw new Error("Página inválida no checkpoint do Hall. Os arquivos foram preservados.");
+      }
+      if (reachedEnd) {
+        throw new Error("O checkpoint possui páginas após o fim do histórico.");
+      }
+      for (const message of page.halls) {
+        if (
+          !/^\d+$/.test(message.id) ||
+          message.channelId !== String(channel.id) ||
+          message.guildId !== String(channel.guildId) ||
+          typeof message.content !== "string" ||
+          !Array.isArray(message.embeds) ||
+          !Number.isFinite(message.createdTimestamp)
+        ) {
+          throw new Error("Registro inválido no checkpoint do Hall.");
+        }
+        messagesById.set(message.id, message);
+      }
+      beforeId = page.beforeId;
+      totalMessages += page.count;
+      if (page.count > 0) scannedPages++;
+      reachedEnd = page.ended;
+    };
+
+    if (fs.existsSync(journalFile)) {
+      const buffer = fs.readFileSync(journalFile);
+      const committedLength = buffer.lastIndexOf(10) + 1;
+      if (committedLength !== buffer.length) {
+        fs.truncateSync(journalFile, committedLength);
+      }
+      const text = buffer.subarray(0, committedLength).toString("utf8");
+      for (const line of text.split("\n")) {
+        if (line) consumePage(JSON.parse(line));
+      }
+    } else if (checkpoint.phase !== "collecting") {
+      throw new Error("O diário da varredura está ausente. O ranking anterior foi preservado.");
+    }
+
+    await report({
+      status: `Retomando varredura: ${scannedPages} páginas já coletadas.`,
+      phase: reachedEnd ? "Análise e ranking" : "Coleta do histórico"
+    });
+
+    while (!reachedEnd) {
+      assertDeadline();
+      const batch = await channel.messages.fetch(
+        beforeId ? { limit: 100, before: beforeId } : { limit: 100 }
+      );
+      const fetched = [...batch.values()];
+      const oldest = fetched.reduce((current, message) =>
+        !current || BigInt(message.id) < BigInt(current.id) ? message : current,
+        null
+      );
+      const nextBeforeId = oldest?.id || beforeId;
+      if (batch.size > 0 && (
+        !nextBeforeId ||
+        nextBeforeId === beforeId ||
+        (beforeId && BigInt(nextBeforeId) >= BigInt(beforeId))
+      )) {
+        throw new Error("A paginação da varredura não avançou.");
+      }
+
+      const halls = fetched.filter(message => {
+        const normalized = normalizeHallName(getHallMessageText(message));
+        return normalized.includes("hall da fama") && ![
+          "ranking de orgs",
+          "ranking de pessoas",
+          "top 10 organizacoes",
+          "top 10 pessoas",
+          "revisao manual",
+          "varredura hall da fama"
+        ].some(text => normalized.includes(text));
+      }).map(message => ({
+        id: String(message.id),
+        channelId: String(message.channelId),
+        guildId: String(message.guildId),
+        createdTimestamp: message.createdTimestamp,
+        content: message.content || "",
+        embeds: (message.embeds || []).map(embed =>
+          typeof embed.toJSON === "function" ? embed.toJSON() : embed
+        )
+      }));
+
+      const page = {
+        count: batch.size,
+        beforeId: nextBeforeId,
+        ended: batch.size < 100,
+        halls
+      };
+      fs.appendFileSync(journalFile, JSON.stringify(page) + "\n");
+      consumePage(page);
+      if (scannedPages === 1 || scannedPages % 5 === 0 || reachedEnd) {
+        await report({
+          status: `Coletando histórico: ${scannedPages} páginas examinadas.`,
+          totalHalls: messagesById.size,
+          phase: "Coleta do histórico"
+        });
       }
     }
 
-    await addPaymentEventsToPlayerRankings(
-      rankings,
-      client
-    );
+    const hallMessages = [...messagesById.values()]
+      .filter(message => state.historicalHallMigrations?.[message.id]?.status !== "completed")
+      .sort((a, b) => (a.createdTimestamp || 0) - (b.createdTimestamp || 0));
 
-    normalizeExistingPlayerRankingOverrides(
-      rankings
-    );
-
-    await sendPlayerIdentitySimilarityReviews(
-      client,
-      rankings
-    );
-
-    rankings.lastUpdatedAt =
-      Date.now();
-
-    saveHallRankings(rankings);
-
-    await publishHallRankings(
-      client,
-      rankings
-    );
-
-    if (showProgress) {
-      await updateHallScanProgress(
-        client,
-        {
-          status:
-            "Finalizado. Halls preservados e ranking atualizado.",
-          totalMessages:
-            messagesById.size,
-          totalHalls:
-            hallMessages.length,
-          processed,
-          edited: 0,
-          progressCurrent:
-            processed,
-          progressTotal:
-            hallMessages.length,
-          phase:
-            "Finalizado"
-        }
-      );
+    if (!hallMessages.length) {
+      checkpoint.phase = "completed";
+      checkpoint.rankings = null;
+      saveCheckpoint();
+      await report({
+        status: "Nenhum Hall encontrado. Ranking anterior preservado.",
+        totalHalls: 0,
+        phase: "Finalizado"
+      });
+      return;
     }
+
+    const sourceHash = createHash("sha256").update(JSON.stringify({
+      halls: hallMessages,
+      confirmedCityReviews: state.confirmedCityReviews || {},
+      orgCityOverrides: ORG_CITY_OVERRIDES,
+      cronograma: fs.existsSync(CRONO_FILE)
+        ? fs.readFileSync(CRONO_FILE, "utf8")
+        : null
+    })).digest("hex");
+
+    if (checkpoint.phase !== "analysis" || checkpoint.sourceHash !== sourceHash) {
+      checkpoint.phase = "analysis";
+      checkpoint.sourceHash = sourceHash;
+      checkpoint.processed = 0;
+      checkpoint.rankings = createEmptyHallRankingData(loadHallRankings());
+      checkpoint.totalHalls = hallMessages.length;
+      checkpoint.totalMessages = totalMessages;
+      saveCheckpoint();
+    }
+
+    if (
+      !checkpoint.rankings ||
+      !Number.isInteger(checkpoint.processed) ||
+      checkpoint.processed < 0 ||
+      checkpoint.processed > hallMessages.length
+    ) {
+      throw new Error("Checkpoint de análise inválido. O arquivo foi preservado.");
+    }
+
+    const rankings = checkpoint.rankings;
+    processed = checkpoint.processed;
+
+    for (let index = processed; index < hallMessages.length; index++) {
+      assertDeadline();
+      const message = hallMessages[index];
+      const evidence = await resolveHallEvidence(client, message, getHallMessageText(message));
+      assertDeadline();
+      await addHallToRankings(rankings, message, client, evidence);
+      processed = index + 1;
+
+      if (processed % 10 === 0 || processed === hallMessages.length) {
+        checkpoint.processed = processed;
+        saveCheckpoint();
+      }
+
+      if (processed === 1 || processed % 10 === 0 || processed === hallMessages.length) {
+        await report({
+          status: "Analisando sem alterar publicações ou imagens.",
+          totalHalls: hallMessages.length,
+          progressCurrent: processed,
+          progressTotal: hallMessages.length,
+          currentHallUrl: getMessageJumpUrl(message),
+          currentEvent: evidence.eventName || "Evento",
+          currentCity: evidence.cityName || CITIES[evidence.cityKey]?.label || "Não identificada",
+          phase: "Análise e ranking"
+        });
+      }
+    }
+
+    await addPaymentEventsToPlayerRankings(rankings, client);
+    normalizeExistingPlayerRankingOverrides(rankings);
+    await sendPlayerIdentitySimilarityReviews(client, rankings);
+    assertDeadline();
+    if (rankingHash() !== checkpoint.baseHash) {
+      throw new Error("O ranking foi alterado durante a varredura. A reconstrução não foi publicada.");
+    }
+
+    rankings.lastUpdatedAt = Date.now();
+    checkpoint.phase = "publishing";
+    checkpoint.processed = processed;
+    checkpoint.publishedHash = createHash("sha256")
+      .update(JSON.stringify(rankings, null, 2))
+      .digest("hex");
+    saveCheckpoint();
+    await finishPublication();
   } catch (error) {
-    if (showProgress) {
-      await updateHallScanProgress(
-        client,
-        {
-          status:
-            "Varredura interrompida. Halls preservados.",
-          edited: 0,
-          phase:
-            "Erro"
-        }
-      ).catch(() => {});
-    }
-
+    await report({
+      status: "Varredura interrompida. Consulte o erro e retome pelo comando de varredura.",
+      phase: "Erro"
+    }).catch(() => {});
     throw error;
   } finally {
+    if (client.__SC_HALL_APPROVAL_PAGES__ === approvalPages) {
+      if (previousApprovalPages === undefined) delete client.__SC_HALL_APPROVAL_PAGES__;
+      else client.__SC_HALL_APPROVAL_PAGES__ = previousApprovalPages;
+    }
+    if (client.__SC_HALL_NEARBY_EVIDENCE_PAGES__ === evidencePages) {
+      if (previousEvidencePages === undefined) delete client.__SC_HALL_NEARBY_EVIDENCE_PAGES__;
+      else client.__SC_HALL_NEARBY_EVIDENCE_PAGES__ = previousEvidencePages;
+    }
     locks.delete(lockKey);
   }
 }
@@ -7148,7 +7212,21 @@ function getPlayerCityEvidenceFromHallContent(
     const ch = await client.channels.fetch(channelId).catch(() => null);
     if (!ch || !ch.isTextBased()) return null;
 
-    const messages = await ch.messages.fetch({ limit: options.limit || 100 }).catch(() => null);
+    const cache = client.__SC_HALL_NEARBY_EVIDENCE_PAGES__;
+    const cacheKey = `${channelId}:${options.limit || 100}`;
+    let request = cache?.get(cacheKey);
+
+    if (!request) {
+      request = ch.messages.fetch({ limit: options.limit || 100 });
+      cache?.set(cacheKey, request);
+      request.catch(() => {
+        if (cache?.get(cacheKey) === request) {
+          cache.delete(cacheKey);
+        }
+      });
+    }
+
+    const messages = await request.catch(() => null);
     if (!messages) return null;
 
     const hallTs = hallMessage.createdTimestamp || Date.now();
@@ -15511,12 +15589,30 @@ async function findApprovalImagesForHall(
             limit: 100
           };
 
-    const fetchedMessages =
-      await approvalChannel.messages
-        .fetch(
-          fetchOptions
-        )
-        .catch(() => null);
+    const pageKey =
+      approvalChannel.id +
+      ':' +
+      (beforeId || 'latest');
+
+    const pageCache =
+      client.__SC_HALL_APPROVAL_PAGES__;
+
+    let fetchedMessages =
+      pageCache?.get(pageKey);
+
+    if (!fetchedMessages) {
+      fetchedMessages =
+        await approvalChannel.messages
+          .fetch(fetchOptions)
+          .catch(() => null);
+
+      if (fetchedMessages) {
+        pageCache?.set(
+          pageKey,
+          fetchedMessages
+        );
+      }
+    }
 
     if (
       !fetchedMessages ||

@@ -464,17 +464,62 @@ function weekHasCheckedMembers(weekData) {
 }
 
 function loadGiSource() {
-  const dataFile = loadJSON(GI_DATA_FILE, null);
-  if (dataFile && Array.isArray(dataFile.registros) && dataFile.registros.length > 0) {
+  const api =
+    globalThis.SC_GI_CONTROL_API;
+
+  if (
+    typeof api?.getChecklistSource ===
+    'function'
+  ) {
+    const current =
+      api.getChecklistSource();
+
+    if (
+      !current ||
+      !Array.isArray(current.registros)
+    ) {
+      throw Object.assign(
+        new Error(
+          'A fonte ativa do Controle GI retornou dados inválidos.'
+        ),
+        {
+          status: 503
+        }
+      );
+    }
+
+    return current;
+  }
+
+  const dataFile = loadJSON(
+    GI_DATA_FILE,
+    null
+  );
+
+  if (
+    dataFile &&
+    Array.isArray(dataFile.registros) &&
+    dataFile.registros.length > 0
+  ) {
     return dataFile;
   }
 
-  const rootFile = loadJSON(GI_DATA_FILE_ROOT, null);
-  if (rootFile && Array.isArray(rootFile.registros) && rootFile.registros.length > 0) {
+  const rootFile = loadJSON(
+    GI_DATA_FILE_ROOT,
+    null
+  );
+
+  if (
+    rootFile &&
+    Array.isArray(rootFile.registros) &&
+    rootFile.registros.length > 0
+  ) {
     return rootFile;
   }
 
-  return { registros: [] };
+  return {
+    registros: []
+  };
 }
 
 /**
@@ -973,7 +1018,23 @@ async function syncWeekData(client, force = false) {
 
   if (idsToFetch.size > 0) {
     // Busca apenas os membros envolvidos no GI, ignorando o resto do servidor
-    await guild.members.fetch({ user: Array.from(idsToFetch) }).catch(() => {});
+    await guild.members.fetch({
+      user: Array.from(idsToFetch)
+    }).catch(error => {
+      console.warn(
+        '[ChecklistLogs] Fonte de membros indisponível:',
+        error.code || error.message
+      );
+
+      throw Object.assign(
+        new Error(
+          'A sincronização do checklist não foi concluída. A lista não foi congelada.'
+        ),
+        {
+          status: 503
+        }
+      );
+    });
   }
 
   for (const reg of registros) {
@@ -1283,7 +1344,19 @@ async function checklistAccess(guild, actorId) {
   const member = await guild.members.fetch({
     user: actorId,
     force: true,
-  }).catch(() => null);
+  }).catch(error => {
+    if (
+      Number(error.code) ===
+      10007
+    ) {
+      return null;
+    }
+
+    throw checklistError(
+      'Não foi possível confirmar seu acesso ao checklist agora. Tente novamente em alguns instantes.',
+      503
+    );
+  });
 
   if (!member || !hasPermission(member)) {
     throw checklistError(
@@ -1381,7 +1454,22 @@ export async function getChecklistSiteSnapshot({
   );
 
   const weekKey = weekKeyFromDateSP();
-  const initial = checklistReadStrict();
+
+  const stored =
+    checklistReadStrict();
+
+  if (
+    stored.weeks[weekKey]?.snapshotLocked !== true
+  ) {
+    await syncWeekData(
+      guild.client,
+      false
+    );
+  }
+
+  const initial =
+    checklistReadStrict();
+
   const ids = new Set();
 
   for (
@@ -1418,7 +1506,25 @@ export async function getChecklistSiteSnapshot({
           const found = await guild.members.fetch({
             user: id,
             force: true,
-          }).catch(() => null);
+          }).catch(error => {
+            if (
+              Number(error.code) ===
+              10007
+            ) {
+              return null;
+            }
+
+            console.warn(
+              '[CHECKLIST SITE] Falha ao consultar membro:',
+              id,
+              error.code || error.status
+            );
+
+            throw checklistError(
+              'Não foi possível atualizar os membros do checklist. Tente novamente em alguns instantes.',
+              503
+            );
+          });
 
           if (found) {
             resolved.add(id);
