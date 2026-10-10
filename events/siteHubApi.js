@@ -405,28 +405,22 @@ async function assertModuleView(
 
 let permissionRefresh = null, permissionsRefreshedAt = 0;
 async function refreshDiscordPermissions(guild, force = false) {
-  if (
-    !force &&
-    Date.now() - permissionsRefreshedAt < 30000 &&
-    guild.channels.cache.size &&
-    guild.roles.cache.has(guild.id)
-  ) {
-    return;
-  }
+  const available = guild.channels.cache.size > 0 && guild.roles.cache.has(guild.id);
+  if (!force && available && Date.now() - permissionsRefreshedAt < 30000) return;
 
   if (!permissionRefresh) {
     permissionRefresh = Promise.all([
       guild.channels.fetch(),
       guild.roles.fetch(),
     ])
-      .then(() => {
-        permissionsRefreshedAt = Date.now();
-      })
-      .finally(() => {
-        permissionRefresh = null;
-      });
+      .then(() => { permissionsRefreshedAt = Date.now(); })
+      .finally(() => { permissionRefresh = null; });
+    permissionRefresh.catch(error => {
+      console.warn('[SITE PERMISSIONS] Atualização indisponível:', error.code || error.name);
+    });
   }
 
+  if (!force && available) return;
   await permissionRefresh;
 }
 
@@ -686,7 +680,8 @@ const experience = createSiteHubExperience({
       return previous.promise;
     }
     const record = { at: Date.now(), promise: null };
-    record.promise = guild.members.fetch({ user: actorId, force: true })
+    const cached = !force ? guild.members.cache.get(actorId) : null;
+    record.promise = (cached ? Promise.resolve(cached) : guild.members.fetch({ user: actorId, force: true }))
       .then(member => {
         record.at = Date.now();
         return member;
@@ -771,12 +766,12 @@ const experience = createSiteHubExperience({
         snapshots.invalidate('quiz');
       }
     } catch (error) {
-      console.warn(
-        '[SITE QUIZ SYNC]',
-        error.status ||
-          error.code ||
-          error.name
-      );
+      console.warn('[SITE QUIZ SYNC]', {
+        name: error.name,
+        status: error.status || null,
+        code: error.code || null,
+        timedOut: error.name === 'TimeoutError' || error.name === 'AbortError',
+      });
     } finally {
       quizPollBusy =
         false;
@@ -1225,6 +1220,10 @@ const experience = createSiteHubExperience({
             get statusCode() { return statusCode; },
             status(code) { statusCode=code;return this; },
             json(value) {
+              if (value?.pending === true && statusCode < 400 && !value?.error) {
+                snapshots.finish(key, null);
+                return value;
+              }
               if (statusCode>=400 || value?.error) {
                 snapshots.finish(key,null,Object.assign(new Error(value?.error || 'Falha ao atualizar consulta'),{status:statusCode}));
               } else {

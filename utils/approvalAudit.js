@@ -92,16 +92,26 @@ export function installApprovalAudit(client) {
       for (const item of [...store.outbox]) {
         const r = item.receipt;
 
-        const channel =
-          await client.channels.fetch(r.auditChannelId);
+        const channel = await client.channels.fetch(r.auditChannelId)
+          .catch(error => {
+            console.error('[ApprovalAudit] Falha ao consultar canal:', {
+              channelId: r.auditChannelId,
+              guildId: r.guildId,
+              code: error.code || error.name,
+            });
+            return null;
+          });
 
         if (
           channel?.guildId !== r.guildId ||
-          !channel.isTextBased()
+          !channel?.isTextBased()
         ) {
-          throw new Error(
-            'Canal de auditoria indisponível ou de outro servidor.'
-          );
+          console.error('[ApprovalAudit] Entrega mantida na fila:', {
+            channelId: r.auditChannelId,
+            expectedGuildId: r.guildId,
+            actualGuildId: channel?.guildId || null,
+          });
+          continue;
         }
 
         const seconds =

@@ -306,12 +306,12 @@ export function createSiteHubExperience({ client, channels, isTeamMember, genera
     const roles = [...member.roles.cache.keys()].sort().join(',');
     const key = scopeKey(guild, member.id, module, payload) + ':' + roles;
     const saved = cache.get(key);
-    if (!payload.refresh && saved && saved.generation === generation && Date.now() - saved.at < ttl) {
+    if (!payload.refresh && saved && saved.data?.pending !== true && saved.generation === generation && Date.now() - saved.at < ttl) {
       res.json(copy(saved.data)); return true;
     }
     const send = res.json.bind(res), requestGeneration = generation;
     res.json = async data => {
-      if (res.statusCode >= 400 || data?.error) return send(data);
+      if (res.statusCode >= 400 || data?.error || data?.pending === true) return send(data);
       try {
         const value = await enrich(guild, data);
         value.generatedAt = Date.now();

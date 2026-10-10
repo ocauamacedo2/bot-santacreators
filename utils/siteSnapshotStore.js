@@ -29,7 +29,7 @@ export function createSiteSnapshotStore({
       const bytes = readFileSync(join(directory, file), 'utf8');
       const record = JSON.parse(bytes);
       if (
-        Number.isFinite(record.at) && record.value &&
+        Number.isFinite(record.at) && record.value && record.value.pending !== true &&
         now() - record.at < maxAgeMs && record.at <= now() &&
         Buffer.byteLength(bytes) <= maxBytes
       ) {
@@ -111,7 +111,7 @@ export function createSiteSnapshotStore({
     finish(key, value, error = null) {
       const task = pending.get(key);
       try {
-        if (!error && value && !value.error) {
+        if (!error && value && !value.error && value.pending !== true) {
           const record = { at: now(), module: task?.module || null, value };
           const bytes = JSON.stringify(record);
           const size = Buffer.byteLength(bytes);
