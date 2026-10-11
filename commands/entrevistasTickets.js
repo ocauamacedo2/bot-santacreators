@@ -4966,7 +4966,14 @@ if (dados.nome === 'entrevista') {
   const guild = interaction.guild;
   const approverId = interaction.user.id;
 
-  const approver = await guild.members.fetch({
+  const verifiedSiteMember =
+    interaction.siteOrigin === true &&
+    interaction.member?.guild?.id === guild.id &&
+    interaction.member.id === approverId
+      ? interaction.member
+      : null;
+
+  const approver = verifiedSiteMember || await guild.members.fetch({
     user: approverId,
     force: true,
   }).catch(() => null);

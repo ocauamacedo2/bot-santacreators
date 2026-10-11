@@ -1472,7 +1472,11 @@ function checklistRevision(
     .digest('hex');
 }
 
-async function checklistAccess(guild, actorId) {
+async function checklistAccess(
+  guild,
+  actorId,
+  { readOnly = false, verifiedMember = null } = {}
+) {
   if (guild.id !== '1262262852782129183') {
     throw checklistError(
       'Checklist indisponível neste servidor.',
@@ -1480,7 +1484,13 @@ async function checklistAccess(guild, actorId) {
     );
   }
 
-  const member = await guild.members.fetch({
+  const cachedMember = readOnly
+    ? verifiedMember || guild.members.cache.get(actorId)
+    : null;
+
+  const member = cachedMember?.guild?.id === guild.id && cachedMember.id === actorId
+    ? cachedMember
+    : await guild.members.fetch({
     user: actorId,
     force: true,
   }).catch(error => {
@@ -1497,14 +1507,12 @@ async function checklistAccess(guild, actorId) {
     );
   });
 
-  if (!member || !hasPermission(member)) {
+  if (!member || (!readOnly && !hasPermission(member))) {
     throw checklistError(
       'Sem permissão para o checklist.',
       403
     );
   }
-
-  await guild.channels.fetch();
 
   const panelState = loadJSON(
     PANEL_CONFIG.STATE_FILE,
@@ -1518,7 +1526,8 @@ async function checklistAccess(guild, actorId) {
       : PANEL_CONFIG.CHANNEL_ID;
 
   const channel =
-    guild.channels.cache.get(channelId);
+    guild.channels.cache.get(channelId) ||
+    await guild.channels.fetch(channelId);
 
   if (
     channel?.guildId !== guild.id ||
@@ -1534,8 +1543,11 @@ async function checklistAccess(guild, actorId) {
   }
 
   const windowOpen =
-    hasChecklistFullOverride(member) ||
-    isLogWindowOpenSP();
+    hasPermission(member) &&
+    (
+      hasChecklistFullOverride(member) ||
+      isLogWindowOpenSP()
+    );
 
   return {
     member,
@@ -1570,7 +1582,8 @@ export async function getChecklistSiteCatalog({
   try {
     await checklistAccess(
       guild,
-      member.id
+      member.id,
+      { readOnly: true, verifiedMember: member }
     );
 
     return { allowed: true };
@@ -1589,7 +1602,8 @@ export async function getChecklistSiteSnapshot({
 }) {
   const access = await checklistAccess(
     guild,
-    member.id
+    member.id,
+    { readOnly: true, verifiedMember: member }
   );
 
   const weekKey = weekKeyFromDateSP();
@@ -1657,7 +1671,8 @@ export async function getChecklistSiteSnapshot({
 
   const currentAccess = await checklistAccess(
     guild,
-    member.id
+    member.id,
+    { readOnly: true, verifiedMember: member }
   );
 
   if (weekKey !== weekKeyFromDateSP()) {
@@ -1682,15 +1697,16 @@ export async function getChecklistSiteSnapshot({
       const [memberId, item]
       of Object.entries(group.members || {})
     ) {
-      if (
-        !resolved.has(memberId) ||
-        !canManageChecklistTarget(
-          currentAccess.member,
-          guild.members.cache.get(memberId)
-        )
-      ) {
+      if (!resolved.has(memberId)) {
         continue;
       }
+
+      const canEditRecord =
+        currentAccess.windowOpen &&
+        canManageChecklistTarget(
+          currentAccess.member,
+          guild.members.cache.get(memberId)
+        );
 
       records.push({
         memberId,
@@ -1723,11 +1739,11 @@ export async function getChecklistSiteSnapshot({
 
         rights: {
           check:
-            currentAccess.windowOpen &&
+            canEditRecord &&
             item.checked !== true,
 
           uncheck:
-            currentAccess.windowOpen &&
+            canEditRecord &&
             item.checked === true,
         },
       });

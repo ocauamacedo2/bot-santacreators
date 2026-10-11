@@ -2,6 +2,7 @@ import { mkdir, readFile, writeFile, rename } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
 import { PermissionFlagsBits } from 'discord.js';
+import { createShareAuditQueue } from './shareAuditQueue.js';
 
 const MAIN = '1457573495952248883';
 const MENUS = '1457577651152883797';
@@ -45,6 +46,37 @@ export function createSiteEventsLibrary({ client }) {
 
   const file = join(folder, 'events-library.json');
   const confirmations = new Map();
+
+  const publicationAudit = createShareAuditQueue(
+    join(folder, 'events-publication-audit.json'),
+    async (channelId, job) => {
+      if (!client.isReady()) {
+        throw new Error('O bot ainda não está conectado ao Discord.');
+      }
+
+      const audit = client.channels.cache.get(channelId) ||
+        await client.channels.fetch(channelId);
+
+      if (!audit?.isTextBased() || audit.guildId !== job.guildId) {
+        throw new Error('Canal de logs de publicação inválido.');
+      }
+
+      await audit.send({
+        ...job.payload,
+        files: (job.payload.files || []).map(item => ({
+          ...item,
+          attachment: Buffer.from(item.attachment.data || item.attachment),
+        })),
+      });
+    }
+  );
+
+  void publicationAudit.catch(error => {
+    console.error('[EVENT RULES AUDIT] Fila indisponível:', {
+      name: error.name,
+      message: error.message,
+    });
+  });
 
   let writes = Promise.resolve();
 
@@ -657,35 +689,16 @@ export function createSiteEventsLibrary({ client }) {
         let auditWarning = '';
 
         try {
-          const channelId =
-            String(
-              process.env
-                .SANTA_EVENTS_PUBLICATION_LOG_CHANNEL_ID ||
-              ''
-            ).trim();
+          const channelId = String(
+            process.env.SANTA_EVENTS_PUBLICATION_LOG_CHANNEL_ID ||
+            '1554381360200683581'
+          ).trim();
 
-          if (
-            !channelId
-          ) {
-            throw new Error(
-              'Canal de logs de publicação não configurado.'
-            );
+          if (!/^\d{17,20}$/.test(channelId)) {
+            throw new Error('SANTA_EVENTS_PUBLICATION_LOG_CHANNEL_ID inválido.');
           }
 
-          const audit =
-            await guild.channels.fetch(
-              channelId
-            );
-
-          if (
-            !audit ||
-            audit.guildId !== guild.id ||
-            !audit.isTextBased()
-          ) {
-            throw new Error(
-              'Canal de logs inválido.'
-            );
-          }
+          const queue = await publicationAudit;
 
           const before =
             JSON.stringify(
@@ -701,7 +714,9 @@ export function createSiteEventsLibrary({ client }) {
               2
             );
 
-          await audit.send({
+          await queue.enqueue([channelId], {
+            guildId: guild.id,
+            payload: {
             content:
               'Publicação de regras: **' +
               event.name +
@@ -762,16 +777,20 @@ export function createSiteEventsLibrary({ client }) {
               parse:
                 [],
             },
+            },
           });
+
+          auditWarning =
+            'Publicação salva; log registrada na fila de entrega ao Discord.';
         } catch (error) {
           auditWarning =
-            'Publicação salva, mas a log de publicação não foi entregue.';
+            'Publicação salva, mas não foi possível registrar a fila da log. Confira o console do bot.';
 
-          console.error(
-            '[EVENT RULES AUDIT]',
-            error.code ||
-              error.name
-          );
+          console.error('[EVENT RULES AUDIT]', {
+            code: error.code || null,
+            name: error.name,
+            message: error.message,
+          });
         }
 
         return {

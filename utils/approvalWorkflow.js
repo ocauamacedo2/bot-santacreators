@@ -1143,6 +1143,7 @@ export function createApprovalWorkflow(cfg) {
       let create = false;
 
       let decide = false;
+      let view = false;
 
       try {
         await access(
@@ -1168,6 +1169,7 @@ export function createApprovalWorkflow(cfg) {
           cfg.channelId
         );
 
+        view = true;
         decide =
           cfg.canDecide(member);
       } catch (e) {
@@ -1180,7 +1182,7 @@ export function createApprovalWorkflow(cfg) {
 
       if (
         !create &&
-        !decide
+        !view
       ) {
         throw error(
           'Sem acesso a este módulo.',
@@ -1193,6 +1195,7 @@ export function createApprovalWorkflow(cfg) {
         label: cfg.label,
 
         rights: {
+          view,
           create,
           decide,
         },
@@ -1455,16 +1458,6 @@ export function createApprovalWorkflow(cfg) {
     if (
       action === 'list'
     ) {
-      if (
-        !cfg.canCreate(member) &&
-        !cfg.canDecide(member)
-      ) {
-        throw error(
-          'Sem acesso a este módulo.',
-          403
-        );
-      }
-
       const records = [];
 
       const receiptsByMessage = new Map(
@@ -1549,8 +1542,7 @@ export function createApprovalWorkflow(cfg) {
           reject: false,
         };
 
-        let canView =
-          data.userId === member.id;
+        let canView = true;
 
         if (cfg.canDecide(member)) {
           for (const decision of ['approve', 'reject']) {

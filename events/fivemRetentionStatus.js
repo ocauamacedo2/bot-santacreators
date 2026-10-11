@@ -156,6 +156,38 @@ const FIVEM_SNAPSHOT_CACHE = {
   value: null,
 };
 
+let FIVEM_SITE_REFRESH_INTERVAL_ID = null;
+let FIVEM_SITE_REFRESH_RUNNING = false;
+
+async function refreshFivemSiteData(client) {
+  if (FIVEM_SITE_REFRESH_RUNNING || !client.isReady()) return;
+
+  FIVEM_SITE_REFRESH_RUNNING = true;
+  try {
+    const cacheAge = Date.now() - FIVEM_SNAPSHOT_CACHE.createdAt;
+    const safe = FIVEM_SNAPSHOT_CACHE.value?.snapshot && cacheAge >= 0 && cacheAge < 15000
+      ? FIVEM_SNAPSHOT_CACHE.value
+      : await createSafeCurrentSnapshot({ forceFresh: true });
+
+    if (!safe?.snapshot) {
+      throw new Error('A coleta das cidades não retornou um snapshot válido.');
+    }
+
+    if (safe.shouldPersist) {
+      persistFivemLocal(safe.snapshotForPersistence || safe.snapshot);
+    }
+
+    client.emit('scRetentionSnapshotUpdated');
+  } catch (error) {
+    console.warn('[FIVEM SITE SYNC]', {
+      name: error.name,
+      message: error.message,
+    });
+  } finally {
+    FIVEM_SITE_REFRESH_RUNNING = false;
+  }
+}
+
 const FIVEM_LAST_PRIORITY_SAFE_SNAPSHOT = {
   createdAt: 0,
   value: null,
@@ -3643,6 +3675,14 @@ async function ensureFivemPanelExists(channel, client) {
 }
 
 async function ensureFivemRetentionAutoLoop(client, options = {}) {
+  if (!FIVEM_SITE_REFRESH_INTERVAL_ID) {
+    FIVEM_SITE_REFRESH_INTERVAL_ID = setInterval(() => {
+      void refreshFivemSiteData(client);
+    }, 15000);
+    FIVEM_SITE_REFRESH_INTERVAL_ID.unref?.();
+  }
+  void refreshFivemSiteData(client);
+
   for (const channelId of FIVEM_ALL_PANEL_CHANNEL_IDS) {
     const channel = await client.channels.fetch(channelId).catch(() => null);
 
@@ -4142,10 +4182,9 @@ export async function getFivemRetentionSiteSnapshot({
   const cached = FIVEM_SNAPSHOT_CACHE.value;
   const cacheAge = Date.now() - FIVEM_SNAPSHOT_CACHE.createdAt;
   const safe =
-    !refresh &&
     cached?.snapshot &&
     cacheAge >= 0 &&
-    cacheAge < 90000
+    cacheAge < 15000
       ? cached
       : await createSafeCurrentSnapshot({
           forceFresh: refresh === true,

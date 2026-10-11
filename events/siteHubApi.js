@@ -678,6 +678,10 @@ const experience = createSiteHubExperience({
   });
   const memberReads = new Map();
 
+  client.on('scRetentionSnapshotUpdated', () => {
+    snapshots.invalidate('retention');
+  });
+
   async function resolveSiteMember(guild, actorId, force = false) {
     const id = guild.id + ':' + actorId;
     const previous = memberReads.get(id);

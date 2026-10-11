@@ -747,15 +747,25 @@ export function createSiteTeamRequests({
       customId,
     });
 
-    if (key === 'leaders') {
-      await client.__SC_LEADER_SET_SITE__.handle(
-        interaction
-      );
-    } else {
-      await handleCreators(
-        interaction,
-        client
-      );
+    try {
+      if (key === 'leaders') {
+        await client.__SC_LEADER_SET_SITE__.handle(interaction);
+      } else {
+        await handleCreators(interaction, client);
+      }
+    } catch (error) {
+      const committed = key === 'leaders'
+        ? interaction.__scLeaderSetDecisionApplied
+        : interaction.__scSetDecisionApplied;
+
+      if (!committed) throw error;
+
+      console.warn('[SITE TEAM REQUESTS] Decisão aplicada; aviso posterior falhou:', {
+        category: key,
+        msgId,
+        name: error.name,
+        message: error.message,
+      });
     }
 
     const applied = key === 'leaders'

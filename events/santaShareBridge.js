@@ -338,6 +338,10 @@ let chain = Promise.resolve(),
   async function sync() {
     if (!client.isReady()) return;
     if (syncing) { retrySync = true; return; }
+    if (bridgeReady && Date.now() < nextAttemptAt) {
+      requestSync();
+      return;
+    }
     syncing = true;
     try {
       if (!client.options.intents.has(128)) {
@@ -347,22 +351,76 @@ let chain = Promise.resolve(),
       if (!guild || guild.available === false) throw new Error(`Servidor ${guildId} indisponível para o bot.`);
       const states = [...guild.voiceStates.cache.values()].filter(state => state.channelId);
       if (bridgeReady) {
-        try {
-          const response = await fetch(`${site}/api/bridge/voice`, {
-            method: 'POST', signal: AbortSignal.timeout(10000),
-            headers: { Authorization: `Bearer ${secret}`, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ guildId, generatedAt: new Date().toISOString(), users: states.map(state => ({
-              id: state.id, channelId: state.channelId,
-              channelName: state.channel?.name || 'Call Discord', muted: !!(state.selfMute || state.serverMute)
-            })) })
-          });
-          if (!response.ok) throw new Error(`HTTP ${response.status}: ${(await response.text()).slice(0, 300)}`);
-          if (Date.now() - lastSyncLog > 60000) {
-            lastSyncLog = Date.now();
-            console.log('[SANTA SHARE BRIDGE] Sincronização OK:', { guildId, usuariosEmCall: states.length });
+        const users = states.map(state => ({
+          id: state.id,
+          channelId: state.channelId,
+          channelName: state.channel?.name || 'Call Discord',
+          muted: !!(state.selfMute || state.serverMute),
+        })).sort((first, second) => first.id.localeCompare(second.id));
+
+        const signature = JSON.stringify(users);
+        const needsDelivery =
+          signature !== lastDeliveredSignature ||
+          Date.now() - lastDeliveredAt >= FULL_SYNC_MS;
+
+        if (needsDelivery) {
+          try {
+            const response = await fetch(`${site}/api/bridge/voice`, {
+              method: 'POST',
+              signal: AbortSignal.timeout(10000),
+              headers: {
+                Authorization: `Bearer ${secret}`,
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                guildId,
+                generatedAt: new Date().toISOString(),
+                users,
+              }),
+            });
+
+            if (!response.ok) {
+              await response.body?.cancel().catch(() => {});
+              throw Object.assign(
+                new Error(`O site recusou o snapshot: HTTP ${response.status}.`),
+                { status: response.status }
+              );
+            }
+
+            const acknowledgement = await response.json();
+            if (acknowledgement?.ok !== true || acknowledgement.stale === true) {
+              throw new Error('O site não confirmou a aplicação do snapshot atual.');
+            }
+
+            lastDeliveredSignature = signature;
+            lastDeliveredAt = Date.now();
+            consecutiveFailures = 0;
+            nextAttemptAt = 0;
+
+            if (Date.now() - lastSyncLog > 60000) {
+              lastSyncLog = Date.now();
+              console.log('[SANTA SHARE BRIDGE] Sincronização OK:', {
+                guildId,
+                usuariosEmCall: users.length,
+              });
+            }
+          } catch (error) {
+            consecutiveFailures++;
+            const retryInMs = Math.min(
+              30000,
+              2000 * 2 ** Math.min(consecutiveFailures - 1, 4)
+            );
+            nextAttemptAt = Date.now() + retryInMs;
+
+            console.warn('[SANTA SHARE BRIDGE] Entrega pendente:', {
+              status: error.status || null,
+              name: error.name,
+              message: error.message,
+              retryInMs,
+              usuariosEmCall: users.length,
+            });
+            requestSync();
           }
-        } catch (error) {
-          console.error('[SANTA SHARE BRIDGE] Site não recebeu snapshot:', error.message);
         }
       }
       if (Date.now() - lastPanel > 60000) {
