@@ -707,12 +707,40 @@ const experience = createSiteHubExperience({
   for (const event of ['guildMemberUpdate', 'guildMemberRemove']) {
     client.on(event, (first, second) => {
       const member = second || first;
+
+      if (member?.guild?.id !== GUILD_ID) {
+        return;
+      }
+
       memberReads.delete(member.guild.id + ':' + member.id);
+
+      if (event === 'guildMemberUpdate') {
+        const previousRoles = first.roles.cache;
+        const currentRoles = second.roles.cache;
+
+        const rolesChanged =
+          previousRoles.size !== currentRoles.size ||
+          [...previousRoles.keys()].some(
+            roleId => !currentRoles.has(roleId)
+          );
+
+        if (!rolesChanged) {
+          return;
+        }
+      }
+
       snapshots.invalidate();
     });
   }
+
   for (const event of ['channelUpdate', 'channelDelete', 'roleUpdate', 'roleDelete']) {
-    client.on(event, () => {
+    client.on(event, (first, second) => {
+      const target = second || first;
+
+      if (target?.guild?.id !== GUILD_ID) {
+        return;
+      }
+
       permissionsRefreshedAt = 0;
       snapshots.invalidate();
     });
