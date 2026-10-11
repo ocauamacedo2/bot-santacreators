@@ -526,6 +526,8 @@ export function createSiteTeamRequests({
         continue;
       }
 
+      const checkedAt = Date.now();
+
       let records;
       let nextCursor = null;
 
@@ -644,6 +646,8 @@ export function createSiteTeamRequests({
       categories.push({
         key,
         ...DEFINITIONS[key],
+
+        checkedAt,
 
         rights: access.rights,
 

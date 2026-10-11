@@ -770,6 +770,8 @@ if (!podeAprovarSet) {
       embeds: [embedProcessando]
     }).catch(() => {});
 
+    let finalWriteStarted = false;
+
     // Aguarda o resultado do fluxo; o clique já recebeu deferUpdate.
     await (async () => {
       try {
@@ -1017,6 +1019,8 @@ if (!podeAprovarSet) {
                 .setDisabled(true)
             );
 
+        finalWriteStarted = true;
+
         await interaction.message.edit({
           components: [rowAprovada],
           embeds: [embedAprovado],
@@ -1119,13 +1123,98 @@ if (!podeAprovarSet) {
           flowError
         );
 
+        let checkedMessage;
+
+        try {
+          checkedMessage = await interaction.channel.messages.fetch({
+            message: interaction.message.id,
+            force: true,
+          });
+        } catch (checkError) {
+          console.error(
+            '[PedirSet] Não foi possível confirmar a mensagem após a falha:',
+            {
+              guildId: interaction.guildId,
+              msgId: interaction.message.id,
+              finalWriteStarted,
+              code: checkError.code || null,
+              status: checkError.status || null,
+              name: checkError.name,
+            }
+          );
+
+          await interaction.followUp({
+            content: '⚠️ Não foi possível consultar o resultado atual no Discord. Os controles não foram reabertos automaticamente.',
+            flags: MessageFlags.Ephemeral,
+          }).catch(() => {});
+
+          return;
+        }
+
+        if (checkedMessage.author.id !== client.user.id) {
+          await interaction.followUp({
+            content: '⚠️ A mensagem consultada não foi reconhecida como um pedido oficial. Nenhuma restauração foi executada.',
+            flags: MessageFlags.Ephemeral,
+          }).catch(() => {});
+
+          return;
+        }
+
+        const decisionText = String(
+          checkedMessage.embeds?.[0]?.footer?.text || ''
+        );
+
+        const checkedButtons = (
+          checkedMessage.components || []
+        ).flatMap(
+          row => row.components || []
+        );
+
+        const rejected =
+          /reprovado|recusado/i.test(decisionText);
+
+        const approved =
+          !rejected &&
+          (
+            /aprovado/i.test(decisionText) ||
+            checkedButtons.some(
+              button =>
+                button.customId === 'set_aprovado' &&
+                button.disabled
+            )
+          );
+
+        if (approved || rejected) {
+          if (approved) {
+            interaction.__scSetDecisionApplied = true;
+          }
+
+          await interaction.followUp({
+            content: approved
+              ? 'ℹ️ A aprovação já está confirmada na mensagem do Discord. Os controles não serão reabertos.'
+              : 'ℹ️ A mensagem do Discord já confirma a reprovação deste pedido. Nenhuma aprovação adicional foi executada.',
+            flags: MessageFlags.Ephemeral,
+          }).catch(() => {});
+
+          return;
+        }
+
+        if (finalWriteStarted) {
+          await interaction.followUp({
+            content: '⚠️ A escrita final foi tentada, mas seu resultado ainda não foi confirmado. O pedido permanece sem reabertura automática dos controles.',
+            flags: MessageFlags.Ephemeral,
+          }).catch(() => {});
+
+          return;
+        }
+
         // =====================================================
         // NÃO PERDE O PEDIDO SE ALGO FALHAR
         // =====================================================
         //
-        // O pedido continua salvo e os botões voltam.
-        // Assim você pode clicar Aprovar novamente depois de
-        // corrigir qualquer erro externo.
+        // A mensagem foi consultada e não possui resultado final.
+        // A escrita final ainda não começou.
+        // O pedido continua salvo para uma nova tentativa.
         // =====================================================
 
         const embedFalha =

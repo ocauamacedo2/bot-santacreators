@@ -5015,6 +5015,7 @@ if (dados.nome === 'entrevista') {
   let originalRows = null;
   let buttonsChanged = false;
   let decisionCompleted = false;
+  let finalWriteStarted = false;
 
   try {
     currentMessage = await interaction.channel.messages.fetch({
@@ -5146,6 +5147,8 @@ if (dados.nome === 'entrevista') {
         inline: false,
       });
 
+    finalWriteStarted = true;
+
     await currentMessage.edit({
       embeds: [finalEmbed],
       components: [],
@@ -5170,26 +5173,95 @@ if (dados.nome === 'entrevista') {
       error
     );
 
+    let messageChecked = false;
+    let confirmedStatus = null;
+
+    if (!decisionCompleted && currentMessage) {
+      try {
+        const checkedMessage = await interaction.channel.messages.fetch({
+          message: currentMessage.id,
+          force: true,
+        });
+
+        if (checkedMessage.author.id === client.user.id) {
+          currentMessage = checkedMessage;
+          messageChecked = true;
+
+          const resultField = (
+            checkedMessage.embeds?.[0]?.fields || []
+          ).find(
+            field => field.name === 'Resultado do pedido'
+          );
+
+          const resultText = String(
+            resultField?.value || ''
+          );
+
+          if (/reprovado|recusado/i.test(resultText)) {
+            confirmedStatus = 'reprovado';
+          } else if (/aprovado/i.test(resultText)) {
+            confirmedStatus = 'aprovado';
+          }
+
+          if (confirmedStatus) {
+            decisionCompleted = true;
+
+            const expectedStatus = action === 'aprovar_set'
+              ? 'aprovado'
+              : 'reprovado';
+
+            if (confirmedStatus === expectedStatus) {
+              interaction.__scLeaderSetDecisionApplied = true;
+            }
+          }
+        }
+      } catch (checkError) {
+        console.error(
+          '[SetLider] Não foi possível confirmar a mensagem após a falha:',
+          {
+            guildId: guild.id,
+            msgId: currentMessage.id,
+            finalWriteStarted,
+            code: checkError.code || null,
+            status: checkError.status || null,
+            name: checkError.name,
+          }
+        );
+      }
+    }
+
+    let controlsRestored = false;
+
     if (
       buttonsChanged &&
       !decisionCompleted &&
+      !finalWriteStarted &&
+      messageChecked &&
       currentMessage &&
       originalRows
     ) {
-      await currentMessage.edit({
-        components: originalRows,
-      }).catch(restoreError => {
+      try {
+        await currentMessage.edit({
+          components: originalRows,
+        });
+
+        controlsRestored = true;
+      } catch (restoreError) {
         console.error(
           '[SetLider] Falha ao restaurar botões:',
           restoreError
         );
-      });
+      }
     }
 
     await interaction.editReply({
       content: decisionCompleted
-        ? 'ℹ️ A decisão já foi concluída na mensagem do pedido.'
-        : '❌ Não foi possível concluir a decisão. O pedido continua pendente. Se a falha ocorreu depois da aplicação de cargos, eles podem já estar aplicados; confira o membro antes de tentar novamente.',
+        ? confirmedStatus
+          ? `ℹ️ O Discord confirmou este pedido como ${confirmedStatus}. Nenhuma segunda decisão foi executada.`
+          : 'ℹ️ A decisão já foi concluída na mensagem do pedido.'
+        : controlsRestored
+          ? '❌ A decisão não foi concluída. Os controles foram restaurados. Se houve aplicação parcial de cargos, confira o membro antes de tentar novamente.'
+          : '⚠️ Não foi possível confirmar a conclusão desta decisão. Os controles não foram reabertos automaticamente. Consulte o resultado atual no Discord antes de tentar outra ação.',
     }).catch(() => {});
 
     return true;
