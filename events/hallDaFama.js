@@ -3339,6 +3339,7 @@ async function autoCorrectDuplications(channel, client, options = {}) {
   locks.add(lockKey);
 
   const startedAt = Date.now();
+  const analysisVersion = 2;
   const showProgress = options.showProgress ?? true;
   const approvalPages = new Map();
   const evidencePages = new Map();
@@ -3404,7 +3405,9 @@ async function autoCorrectDuplications(channel, client, options = {}) {
     }
 
     const currentHash = rankingHash();
+
     const canResumePublication = checkpoint?.phase === "publishing" &&
+      checkpoint.analysisVersion === analysisVersion &&
       [checkpoint.baseHash, checkpoint.publishedHash].includes(currentHash);
 
     if (
@@ -3595,7 +3598,23 @@ async function autoCorrectDuplications(channel, client, options = {}) {
     }
 
     const hallMessages = [...messagesById.values()]
-      .filter(message => state.historicalHallMigrations?.[message.id]?.status !== "completed")
+      .filter(message => {
+        const migration = state.historicalHallMigrations?.[message.id];
+
+        if (migration?.status === "completed") {
+          return false;
+        }
+
+        if (
+          migration?.status === "published_pending_old_deletion" &&
+          migration.newMessageId &&
+          messagesById.has(String(migration.newMessageId))
+        ) {
+          return false;
+        }
+
+        return true;
+      })
       .sort((a, b) => (a.createdTimestamp || 0) - (b.createdTimestamp || 0));
 
     if (!hallMessages.length) {
@@ -3619,11 +3638,16 @@ async function autoCorrectDuplications(channel, client, options = {}) {
         : null
     })).digest("hex");
 
-    if (checkpoint.phase !== "analysis" || checkpoint.sourceHash !== sourceHash) {
+    if (
+      checkpoint.phase !== "analysis" ||
+      checkpoint.sourceHash !== sourceHash ||
+      checkpoint.analysisVersion !== analysisVersion
+    ) {
       checkpoint.phase = "analysis";
+      checkpoint.analysisVersion = analysisVersion;
       checkpoint.sourceHash = sourceHash;
       checkpoint.processed = 0;
-      checkpoint.rankings = createEmptyHallRankingData(loadHallRankings());
+      checkpoint.rankings = createCleanHallRebuildData(loadHallRankings());
       checkpoint.totalHalls = hallMessages.length;
       checkpoint.totalMessages = totalMessages;
       saveCheckpoint();
@@ -3646,7 +3670,13 @@ async function autoCorrectDuplications(channel, client, options = {}) {
       const message = hallMessages[index];
       const evidence = await resolveHallEvidence(client, message, getHallMessageText(message));
       assertDeadline();
-      await addHallToRankings(rankings, message, client, evidence);
+      await addHallToRankings(
+        rankings,
+        message,
+        client,
+        evidence,
+        { rebuild: true }
+      );
       processed = index + 1;
 
       if (processed % 10 === 0 || processed === hallMessages.length) {
@@ -3668,7 +3698,10 @@ async function autoCorrectDuplications(channel, client, options = {}) {
       }
     }
 
-    await addPaymentEventsToPlayerRankings(rankings, client);
+    await addPaymentEventsToPlayerRankings(rankings, client, {
+      deadlineAt: startedAt + 30 * 60 * 1000,
+    });
+
     normalizeExistingPlayerRankingOverrides(rankings);
     await sendPlayerIdentitySimilarityReviews(client, rankings);
     assertDeadline();
@@ -7298,25 +7331,95 @@ function getPlayerCityEvidenceFromHallContent(
     if (!ch || !ch.isTextBased()) return null;
 
     const cache = client.__SC_HALL_NEARBY_EVIDENCE_PAGES__;
-    const cacheKey = `${channelId}:${options.limit || 100}`;
-    let request = cache?.get(cacheKey);
 
-    if (!request) {
-      request = ch.messages.fetch({ limit: options.limit || 100 });
-      cache?.set(cacheKey, request);
-      request.catch(() => {
-        if (cache?.get(cacheKey) === request) {
-          cache.delete(cacheKey);
-        }
-      });
+    const hallTs =
+      Number(hallMessage.createdTimestamp) ||
+      Date.now();
+
+    const maxDiffMs =
+      options.maxDiffMs ||
+      1000 * 60 * 60 * 6;
+
+    const limit = Math.min(
+      100,
+      Math.max(1, Number(options.limit) || 100)
+    );
+
+    const upperTime =
+      Math.ceil(
+        (hallTs + 30 * 60 * 1000 + 1) / 3600000
+      ) * 3600000;
+
+    const lowerTime = hallTs - maxDiffMs;
+    const discordEpoch = 1420070400000n;
+
+    let beforeId = (
+      (BigInt(upperTime) - discordEpoch) << 22n
+    ).toString();
+
+    const messages = new Map();
+
+    while (true) {
+      const cacheKey = `${channelId}:${limit}:${beforeId}`;
+      let request = cache?.get(cacheKey);
+
+      if (!request) {
+        request = ch.messages.fetch({
+          limit,
+          before: beforeId,
+        });
+
+        cache?.set(cacheKey, request);
+
+        request.catch(() => {
+          if (cache?.get(cacheKey) === request) {
+            cache.delete(cacheKey);
+          }
+        });
+      }
+
+      const batch = await request;
+
+      if (!batch.size) {
+        break;
+      }
+
+      const fetched = [...batch.values()];
+
+      const oldest = fetched.reduce(
+        (current, message) =>
+          !current || BigInt(message.id) < BigInt(current.id)
+            ? message
+            : current,
+        null
+      );
+
+      if (
+        !oldest?.id ||
+        BigInt(oldest.id) >= BigInt(beforeId)
+      ) {
+        throw new Error(
+          "A paginação das evidências do Hall não avançou."
+        );
+      }
+
+      for (const message of fetched) {
+        messages.set(message.id, message);
+      }
+
+      beforeId = oldest.id;
+
+      if (
+        oldest.createdTimestamp <= lowerTime ||
+        batch.size < limit
+      ) {
+        break;
+      }
     }
 
-    const messages = await request.catch(() => null);
-    if (!messages) return null;
-
-    const hallTs = hallMessage.createdTimestamp || Date.now();
-    const maxDiffMs = options.maxDiffMs || 1000 * 60 * 60 * 6;
-    const requiredEventName = normalizeHallEventName(options.requiredEventName || "");
+    const requiredEventName = normalizeHallEventName(
+      options.requiredEventName || ""
+    );
 
     const candidates = [...messages.values()]
       .filter(msg => {
@@ -7544,17 +7647,29 @@ const playerEvidence =
     const eventNameEvidence = getEventCityEvidenceFromHallContent(content);
     const directHallEvidence = getDirectHallCityEvidence(content);
 
-    const eventosEvidence = await findNearbyEvidenceInChannel(client, EVENTOS_DIARIOS_CHANNEL_ID, hallMessage, {
-      limit: 100,
-      maxDiffMs: 1000 * 60 * 60 * 8,
-      requiredEventName: directEventName
-    });
+    const [eventosEvidence, cronoLogEvidence] = await Promise.all([
+      findNearbyEvidenceInChannel(
+        client,
+        EVENTOS_DIARIOS_CHANNEL_ID,
+        hallMessage,
+        {
+          limit: 100,
+          maxDiffMs: 1000 * 60 * 60 * 8,
+          requiredEventName: directEventName,
+        }
+      ),
 
-    const cronoLogEvidence = await findNearbyEvidenceInChannel(client, CRONO_LOG_CHANNEL_ID, hallMessage, {
-      limit: 100,
-      maxDiffMs: 1000 * 60 * 60 * 24,
-      requiredEventName: directEventName
-    });
+      findNearbyEvidenceInChannel(
+        client,
+        CRONO_LOG_CHANNEL_ID,
+        hallMessage,
+        {
+          limit: 100,
+          maxDiffMs: 1000 * 60 * 60 * 24,
+          requiredEventName: directEventName,
+        }
+      ),
+    ]);
 
     const cronoStateEvidence = getCronoSlotForHallTimestamp(hallMessage.createdTimestamp || Date.now(), directEventName);
 
@@ -10164,6 +10279,22 @@ function createEmptyHallRankingData(previousData = null) {
   };
 }
 
+function createCleanHallRebuildData(previousData = null) {
+  const previous = JSON.parse(JSON.stringify(previousData || {}));
+
+  return {
+    ...previous,
+    ...createEmptyHallRankingData(previous),
+
+    orgs: {},
+    players: {},
+    reviewedMessages: {},
+    reviewedPaymentMessages: {},
+    paymentEventKeys: {},
+    pendingReview: {},
+  };
+}
+
   function removeFetchedHallRankingData(rankings, fetchedMessageIds = new Set()) {
     if (!rankings || !fetchedMessageIds?.size) return rankings;
 
@@ -11673,7 +11804,8 @@ async function sendPlayerIdentitySimilarityReviews(client, rankings) {
 
 async function addPaymentEventsToPlayerRankings(
   rankings,
-  client
+  client,
+  options = {}
 ) {
   const channel =
     await client.channels.fetch(
@@ -11710,8 +11842,19 @@ async function addPaymentEventsToPlayerRankings(
     let scanned = 0;
     let counted = 0;
     let skipped = 0;
+    let pages = 0;
 
-    while (scanned < 3000) {
+    const deadlineAt =
+      Number(options.deadlineAt) ||
+      Date.now() + 30 * 60 * 1000;
+
+    while (true) {
+      if (Date.now() >= deadlineAt) {
+        throw new Error(
+          "A leitura dos pagamentos excedeu o prazo. O ranking completo não foi publicado."
+        );
+      }
+
       const batch = await channel.messages.fetch({
         limit: 100,
         ...(beforeId ? { before: beforeId } : {})
@@ -11720,7 +11863,39 @@ async function addPaymentEventsToPlayerRankings(
       if (!batch.size) break;
 
       const messages = [...batch.values()];
-      beforeId = messages[messages.length - 1]?.id;
+
+      const oldest = messages.reduce(
+        (current, message) =>
+          !current || BigInt(message.id) < BigInt(current.id)
+            ? message
+            : current,
+        null
+      );
+
+      const nextBeforeId = oldest?.id;
+
+      if (
+        !nextBeforeId ||
+        (
+          beforeId &&
+          BigInt(nextBeforeId) >= BigInt(beforeId)
+        )
+      ) {
+        throw new Error(
+          "A paginação dos pagamentos não avançou. O ranking anterior foi preservado."
+        );
+      }
+
+      beforeId = nextBeforeId;
+      pages++;
+
+      if (pages === 1 || pages % 5 === 0) {
+        await updateHallScanProgress(client, {
+          status:
+            `Lendo pagamentos: ${scanned} mensagens examinadas; ${counted} registros contabilizados.`,
+          phase: "Pagamentos e ranking de pessoas",
+        }).catch(() => {});
+      }
 
       for (const message of messages) {
         scanned++;
@@ -12102,7 +12277,8 @@ rankings.paymentEventKeys[
     rankings,
     message,
     client = null,
-    resolvedEvidence = null
+    resolvedEvidence = null,
+    options = {}
   ) {
     const content = getHallMessageText(message);
     const normalizedContent = normalizeHallName(content);
@@ -12197,7 +12373,9 @@ const hallMeta = {
       return rankings;
     }
 
-    removeSingleHallRankingData(rankings, message.id);
+    if (!options.rebuild || rankings.reviewedMessages[message.id]) {
+      removeSingleHallRankingData(rankings, message.id);
+    }
 
     for (const orgWinner of deduped.orgs) {
       if (isAmbiguousHallWinner(orgWinner) && client) {

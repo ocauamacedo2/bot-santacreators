@@ -3615,35 +3615,17 @@ emb.setColor("Green").addFields({
   })}`,
 });
 
-await msg.edit({ embeds: [emb], components: [] });
-
-// ===== DONO DO PONTO = MANAGER RESPONSÁVEL (FIX) =====
-// 1) tenta pegar do embed ORIGINAL (mais confiável)
-// 2) fallback: tenta do embed que vamos salvar/editar
 const managerId =
   getManagerIdFromEmbed(originalEmb) ||
   getManagerIdFromEmbed(emb) ||
   null;
 
-// se não achar manager, fallback pro registrante (pra não “perder” ponto)
 const pointsOwnerId = managerId || registrantId;
 
-// ✅ PONTO INDIVIDUAL (RM) vai pro manager responsável
-if (pointsOwnerId) rmBumpUser(pointsOwnerId, +1);
-
-// (opcional) debug pra você ver no log quem recebeu ponto
-console.log("[SC_RM] ponto +1 =>", { pointsOwnerId, managerId, registrantId, msgId: msg.id });
-
-
-  // ✅ weekly: moderador + registrante + manager que recebe ponto
-  const wk = getWeekKeyNow();
-  bumpWeekly(wk, "approvedBy", interaction.user.id, +1);
-  if (registrantId) bumpWeekly(wk, "approvedForRegistrant", registrantId, +1);
-  if (pointsOwnerId) bumpWeekly(wk, "approvedForManager", pointsOwnerId, +1);
-
-// FACs: só aprovado
 let display = RM_DISPLAY.get(msg.id);
-if (!display || !display.trim() || display === "|") display = displayOrgFromEmbed(emb);
+if (!display || !display.trim() || display === "|") {
+  display = displayOrgFromEmbed(emb);
+}
 
 const facsPayload = {
   byUserId: interaction.user.id,
@@ -3656,21 +3638,77 @@ const facsPayload = {
   __at: Date.now(),
 };
 
-const facsDirectOk = await facsSemanaisAppendFromRM(client, display, facsPayload);
+const pendingComponents = msg.components.map(row => row.toJSON());
 
-const facsBridgeOk = facsDirectOk
-  ? true
-  : await bridgeAppendApproved(display, facsPayload);
+await msg.edit({
+  embeds: [emb],
+  components: [],
+});
 
-if (facsBridgeOk) {
-  interaction.__scRmDecisionApplied = true;
+let facsBridgeOk = false;
 
-  for (const key of orgLockKeys.splice(0)) {
-    locks.delete(key);
+try {
+  const facsDirectOk = await facsSemanaisAppendFromRM(
+    client,
+    display,
+    facsPayload
+  );
+
+  facsBridgeOk =
+    facsDirectOk ||
+    await bridgeAppendApproved(display, facsPayload);
+
+  if (!facsBridgeOk) {
+    throw new Error("A inclusão no FACs não foi confirmada.");
+  }
+} catch (error) {
+  try {
+    await msg.edit({
+      embeds: [originalEmb],
+      components: pendingComponents,
+    });
+  } catch (rollbackError) {
+    console.error("[SC_RM] Falha ao restaurar registro após erro no FACs:", {
+      messageId: msg.id,
+      error: rollbackError,
+    });
+
+    throw new Error(
+      `O FACs não foi confirmado e o registro ${msg.id} não pôde voltar ao estado pendente. Nenhum ponto desta tentativa foi adicionado. Confira este registro no Discord antes de tentar novamente.`
+    );
   }
 
-  interaction.__scRmDecisionCommitted?.();
+  throw error;
 }
+
+if (pointsOwnerId) rmBumpUser(pointsOwnerId, +1);
+
+console.log("[SC_RM] ponto +1 =>", {
+  pointsOwnerId,
+  managerId,
+  registrantId,
+  msgId: msg.id,
+});
+
+const wk = getWeekKeyNow();
+
+bumpWeekly(wk, "approvedBy", interaction.user.id, +1);
+
+if (registrantId) {
+  bumpWeekly(wk, "approvedForRegistrant", registrantId, +1);
+}
+
+if (pointsOwnerId) {
+  bumpWeekly(wk, "approvedForManager", pointsOwnerId, +1);
+}
+
+interaction.__scRmDecisionApplied = true;
+
+for (const key of orgLockKeys.splice(0)) {
+  locks.delete(key);
+}
+
+interaction.__scRmDecisionCommitted?.();
 
 try {
   dashEmit("rm:approved", {
