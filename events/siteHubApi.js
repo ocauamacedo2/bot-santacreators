@@ -312,10 +312,10 @@ async function canViewAnyChannel(
       );
 
     if (
-      permissions?.has(
-        PermissionFlagsBits
-          .ViewChannel
-      )
+      permissions?.has([
+        PermissionFlagsBits.ViewChannel,
+        PermissionFlagsBits.ReadMessageHistory,
+      ])
     ) {
       return true;
     }
@@ -330,34 +330,35 @@ async function canAccessSiteModule(
   member,
   moduleKey
 ) {
-  if (member?.id === '660311795327828008' && CHANNELS[moduleKey]) return true;
+  const channelIds = CHANNELS[moduleKey];
 
-  if (
-    moduleKey === 'events' &&
-    !isOfficialSantaCreatorsTeamMember(
-      member
-    )
-  ) {
+  if (!member || !Array.isArray(channelIds)) {
     return false;
   }
 
-  const channelIds =
-    CHANNELS[
-      moduleKey
-    ];
+  const isCentralMember =
+    member.id === '660311795327828008' ||
+    isOfficialSantaCreatorsTeamMember(member);
 
-  if (!channelIds) {
+  const communityModules = new Set([
+    'hall',
+    'quiz',
+    'cronograma',
+  ]);
+
+  if (!isCentralMember && !communityModules.has(moduleKey)) {
     return false;
   }
 
-  const discordChannelAccess =
-    await canViewAnyChannel(
-      client,
-      member,
-      channelIds
-    );
+  if (member.id === '660311795327828008') {
+    return true;
+  }
 
-  return discordChannelAccess;
+  return canViewAnyChannel(
+    client,
+    member,
+    channelIds
+  );
 }
 
 
@@ -1005,7 +1006,11 @@ const experience = createSiteHubExperience({
           for (const key of ['hall', 'quiz']) {
             modules[key] = CHANNELS[key].some(channelId => {
               const channel = guild.channels.cache.get(channelId);
-              return channel?.guildId === guild.id && channel.permissionsFor(guild.roles.everyone)?.has(PermissionFlagsBits.ViewChannel);
+              return channel?.guildId === guild.id &&
+                channel.permissionsFor(guild.roles.everyone)?.has([
+                  PermissionFlagsBits.ViewChannel,
+                  PermissionFlagsBits.ReadMessageHistory,
+                ]);
             });
           }
           if (action === 'public.bootstrap') return res.json({ modules, source: 'discord-public' });
@@ -1032,6 +1037,57 @@ const experience = createSiteHubExperience({
               error:
                 "Você não está no servidor Santa Creators.",
             });
+        }
+
+        const isCentralActor =
+          member.id === '660311795327828008' ||
+          isOfficialSantaCreatorsTeamMember(member);
+
+        const internalModules = new Set([
+          'checklist',
+          'workflow',
+          'events',
+          'retention',
+          'staff',
+          'teamRequests',
+          'gi',
+          'hierarchy',
+          'weekly',
+          'manager',
+          'social',
+          'payments',
+          'ai',
+          'notifications',
+        ]);
+
+        const requestedAction = action === 'cache.authorize'
+          ? String(payload.action || '')
+          : action;
+
+        const requestedModule = requestedAction.startsWith('history.')
+          ? String(
+              action === 'cache.authorize'
+                ? payload.payload?.module || ''
+                : payload.module || ''
+            )
+          : requestedAction.split('.')[0];
+
+        const isRegistrationAction =
+          action === 'staff.submit' ||
+          action === 'staff.retry' ||
+          action === 'profile-options';
+
+        if (
+          !isCentralActor &&
+          !isRegistrationAction &&
+          (
+            internalModules.has(requestedModule) ||
+            requestedAction.startsWith('history.')
+          )
+        ) {
+          return res.status(403).json({
+            error: 'Esta área é exclusiva da equipe autorizada.',
+          });
         }
 
         if (
@@ -1429,12 +1485,10 @@ if (await experience.handle({ guild, member, action, payload, res })) return;
 
   if (
     eventsEntry &&
-    isCreatorsCommunityMember(
-      member
-    )
+    member.id !== '660311795327828008' &&
+    !isOfficialSantaCreatorsTeamMember(member)
   ) {
-    eventsEntry[1] =
-      true;
+    eventsEntry[1] = false;
   }
 
   const isCentralMember =
@@ -1472,7 +1526,7 @@ if (await experience.handle({ guild, member, action, payload, res })) return;
 
   entries.push([
     'checklist',
-    checklistCatalog.allowed,
+    isCentralMember && checklistCatalog.allowed,
   ]);
 
   return res.json({
@@ -1492,7 +1546,7 @@ if (await experience.handle({ guild, member, action, payload, res })) return;
         totalPlayers:value.totals?.current ?? null, cityCount:value.cities?.length||0, savedAt:saved.at }]];
     })),
     profile: { ...experience.profile(member), preferences: await experience.preferences(guild, member) },
-    team: isOfficialSantaCreatorsTeamMember(member),
+    team: isCentralMember,
 
     source:
       'discord-live',
