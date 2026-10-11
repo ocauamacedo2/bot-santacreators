@@ -640,6 +640,7 @@ export function createSiteNotifications({
     }
 
     let nextJob = 0;
+    const failedSources = [];
 
     await Promise.all(
       Array.from(
@@ -651,7 +652,7 @@ export function createSiteNotifications({
             try {
               await task();
             } catch (error) {
-              if (error?.status === 403) {
+              if (Number(error?.status) === 403) {
                 continue;
               }
 
@@ -661,6 +662,8 @@ export function createSiteNotifications({
                 error
               );
 
+              failedSources.push(label);
+
               warnings.push(
                 `${label}: consulta indisponível; os totais podem estar incompletos.`
               );
@@ -669,6 +672,20 @@ export function createSiteNotifications({
         }
       )
     );
+
+    if (failedSources.length) {
+      throw Object.assign(
+        new Error(
+          'Não foi possível concluir a consulta de notificações. ' +
+          'Fontes indisponíveis: ' +
+          [...new Set(failedSources)].join(', ') +
+          '. Tente atualizar novamente em alguns instantes.'
+        ),
+        {
+          status: 503,
+        }
+      );
+    }
 
     const actorKey =
       `${guild.id}:${member.id}`;
