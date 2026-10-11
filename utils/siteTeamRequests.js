@@ -289,9 +289,10 @@ export function createSiteTeamRequests({
       throw fail('Categoria de pedidos inválida.');
     }
 
-    const channel = await guild.channels
-      .fetch(definition.channelId)
-      .catch(() => null);
+    const channel = guild.channels.cache.get(definition.channelId) ||
+      await guild.channels
+        .fetch(definition.channelId)
+        .catch(() => null);
 
     const permissions = channel?.permissionsFor(member);
 
@@ -355,10 +356,6 @@ export function createSiteTeamRequests({
       };
     }
 
-    if (!rights.approve && !rights.reject) {
-      return null;
-    }
-
     return {
       channel,
       rights,
@@ -376,8 +373,7 @@ export function createSiteTeamRequests({
           if (
             channel?.isTextBased() && channel.messages &&
             channel.guildId === guild.id &&
-            permissions?.has(['ViewChannel', 'ReadMessageHistory']) &&
-            canManageStaff(member)
+            permissions?.has(['ViewChannel', 'ReadMessageHistory'])
           ) {
             return true;
           }
