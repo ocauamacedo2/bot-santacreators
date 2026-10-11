@@ -744,48 +744,144 @@ export function createSiteNotifications({
     member,
     action,
     payload = {},
+    memberVerified = false,
   }) {
-    member = await freshMember(
-      guild,
-      member
-    );
+    if (!memberVerified) {
+      member = await freshMember(
+        guild,
+        member
+      );
+    }
 
     const actorKey =
       `${guild.id}:${member.id}`;
 
     if (action === 'notifications.snapshot') {
+      const permissionScope = [...guild.channels.cache.values()]
+        .map(channel => [
+          channel.id,
+          channel.permissionsFor(member)?.bitfield?.toString() || '',
+        ])
+        .sort((first, second) =>
+          first[0].localeCompare(second[0])
+        );
+
       const buildKey = JSON.stringify([
         actorKey,
         [...member.roles.cache.keys()].sort(),
         member.permissions.bitfield.toString(),
+        permissionScope,
       ]);
 
-      let operation = notificationBuilds.get(
-        buildKey
-      );
+      const now = Date.now();
 
-      if (!operation) {
-        operation = build(
-          guild,
-          member
-        ).finally(() => {
-          if (
-            notificationBuilds.get(buildKey) ===
-            operation
-          ) {
-            notificationBuilds.delete(
-              buildKey
-            );
-          }
-        });
-
-        notificationBuilds.set(
-          buildKey,
-          operation
-        );
+      for (const [key, previous] of notificationBuilds) {
+        if (
+          previous.completedAt &&
+          now - previous.completedAt >= 15000
+        ) {
+          notificationBuilds.delete(key);
+        }
       }
 
-      const data = await operation;
+      let operation = notificationBuilds.get(buildKey);
+
+      if (
+        operation?.completedAt &&
+        payload.refresh === true &&
+        payload.poll !== true
+      ) {
+        notificationBuilds.delete(buildKey);
+        operation = null;
+      }
+
+      if (!operation) {
+        if (notificationBuilds.size >= 256) {
+          throw Object.assign(
+            new Error(
+              'As consultas de notificações estão ocupadas. Tente novamente em alguns instantes.'
+            ),
+            {
+              status: 503,
+            }
+          );
+        }
+
+        operation = {
+          promise: null,
+          data: null,
+          error: null,
+          completedAt: 0,
+        };
+
+        const record = operation;
+
+        record.promise = build(guild, member).then(
+          data => {
+            record.data = data;
+            record.completedAt = Date.now();
+          },
+          error => {
+            record.error = error;
+            record.completedAt = Date.now();
+          }
+        );
+
+        notificationBuilds.set(buildKey, record);
+      }
+
+      if (!operation.data && !operation.error) {
+        let timer;
+
+        try {
+          await Promise.race([
+            operation.promise,
+
+            new Promise(resolve => {
+              timer = setTimeout(resolve, 25);
+            }),
+          ]);
+        } finally {
+          clearTimeout(timer);
+        }
+      }
+
+      if (operation.error) {
+        throw operation.error;
+      }
+
+      if (!operation.data) {
+        return {
+          pending: true,
+          retryAfterMs: 1500,
+        };
+      }
+
+      const seen = state.users[actorKey] || {};
+
+      const data = {
+        ...operation.data,
+
+        groups: operation.data.groups.map(group => {
+          const records = group.records.map(item => ({
+            ...item,
+            seen: Boolean(seen[item.key]),
+          }));
+
+          return {
+            ...group,
+            records,
+
+            unread: records.filter(item =>
+              !item.seen
+            ).length,
+
+            pending: records.filter(item =>
+              item.pending
+            ).length,
+          };
+        }),
+      };
 
       const token = randomUUID();
 

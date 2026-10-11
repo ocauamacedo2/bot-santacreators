@@ -1128,14 +1128,17 @@ const experience = createSiteHubExperience({
           action === 'notifications.snapshot' ||
           action === 'notifications.seen'
         ) {
-          return res.json(
-            await notifications.handle({
-              guild,
-              member,
-              action,
-              payload,
-            })
-          );
+          const result = await notifications.handle({
+            guild,
+            member,
+            action,
+            payload,
+            memberVerified: true,
+          });
+
+          return res
+            .status(result.pending === true ? 202 : 200)
+            .json(result);
         }
 
         if (
