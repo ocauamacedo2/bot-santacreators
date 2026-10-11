@@ -25578,7 +25578,10 @@ async function handleAiTicketAssistMessage(
   // são respondidas imediatamente.
   // =====================================================
 
-  if (!explicitAiCall) {
+  if (
+    personalTicketMode &&
+    !explicitAiCall
+  ) {
     if (
       isAuthorizedStaff &&
       !isOpener
@@ -27493,7 +27496,7 @@ return true;
 // =====================================================
 
 const SC_MANUAL_CHANNEL_ID = "1511984932799385600";
-const SC_QUIET_TICKET_CATEGORY_ID = "1352706815594598420";
+const SC_QUIET_TICKET_CATEGORY_ID = "1384650670145278033";
 const SC_IDLE_MS = 30 * 60 * 1000;
 
 const scManualCache = new Map();

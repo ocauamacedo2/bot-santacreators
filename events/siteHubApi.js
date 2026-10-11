@@ -2127,22 +2127,37 @@ if (await experience.handle({ guild, member, action, payload, res })) return;
         await getCronogramaData();
 
       const eventCovers = {};
+      const eventPublications = {};
+      const eventWarnings = [];
 
-      if (
+      const canViewInternalEvents =
         await canAccessSiteModule(
           client,
           member,
           'events'
-        )
-      ) {
+        );
+
+      const canViewPublishedEvents =
+        isOfficialSantaCreatorsTeamMember(member) ||
+        isCreatorsCommunityMember(member);
+
+      if (canViewInternalEvents || canViewPublishedEvents) {
         try {
           const catalog =
             await eventsLibrary.handle({
               guild,
               member,
-              action: 'events.snapshot',
+              action: canViewInternalEvents
+                ? 'events.snapshot'
+                : 'events.published',
               payload: {}
             });
+
+          if (!Array.isArray(catalog?.events)) {
+            throw new Error(
+              'O catálogo de eventos retornou uma consulta inválida.'
+            );
+          }
 
           const normalize = name => String(
             name || ''
@@ -2157,42 +2172,48 @@ if (await experience.handle({ guild, member, action, payload, res })) return;
 
           const repeated = new Set();
 
-          for (const event of catalog.events || []) {
-            const name = normalize(
-              event.name
-            );
+          for (const event of catalog.events) {
+            const name = normalize(event.name);
 
             if (!name) {
               continue;
             }
 
-            if (
-              Object.hasOwn(
-                eventCovers,
-                name
-              )
-            ) {
+            if (Object.hasOwn(eventCovers, name)) {
               repeated.add(name);
             }
 
-            eventCovers[name] =
-              event.cover || '';
+            eventCovers[name] = event.cover || '';
+
+            if (event.publicationOnline && event.id) {
+              eventPublications[name] = {
+                id: String(event.id),
+                name: event.name
+              };
+            }
           }
 
           for (const name of repeated) {
             delete eventCovers[name];
+            delete eventPublications[name];
           }
         } catch (error) {
           console.warn(
-            '[CRONOGRAMA SITE] Capas indisponíveis:',
+            '[CRONOGRAMA SITE] Capas e publicações indisponíveis:',
             error.message
+          );
+
+          eventWarnings.push(
+            'Não foi possível consultar as imagens e publicações dos eventos. O cronograma foi carregado sem esses complementos.'
           );
         }
       }
 
       return res.json({
         data,
-        eventCovers
+        eventCovers,
+        eventPublications,
+        eventWarnings
       });
         }
 

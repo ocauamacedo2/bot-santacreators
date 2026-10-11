@@ -102,13 +102,29 @@ export function installApprovalAudit(client) {
             return null;
           });
 
+        const isCentralAuditRoute =
+          r.guildId === '1262262852782129183' &&
+          [
+            '1554381360200683581',
+            '1515132246728638574'
+          ].includes(String(r.auditChannelId));
+
+        const expectedAuditGuildId = isCentralAuditRoute
+          ? String(
+              process.env.SANTA_APPROVAL_AUDIT_GUILD_ID ||
+              r.guildId
+            ).trim()
+          : r.guildId;
+
         if (
-          channel?.guildId !== r.guildId ||
-          !channel?.isTextBased()
+          channel?.guildId !== expectedAuditGuildId ||
+          !channel?.isTextBased() ||
+          typeof channel.send !== 'function'
         ) {
           console.error('[ApprovalAudit] Entrega mantida na fila:', {
             channelId: r.auditChannelId,
-            expectedGuildId: r.guildId,
+            sourceGuildId: r.guildId,
+            expectedGuildId: expectedAuditGuildId,
             actualGuildId: channel?.guildId || null,
           });
           continue;

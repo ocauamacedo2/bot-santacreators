@@ -1592,6 +1592,7 @@ worker = await createWorker("por");
 
 await worker.setParameters({
   preserve_interword_spaces: "1",
+  user_defined_dpi: "300",
 });
 
 const textosOCR = [];
