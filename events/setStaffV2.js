@@ -2437,8 +2437,7 @@ updateSetStaffDecision({
 
       // edita a msg do registro (a própria interaction.message)
       await interaction.message
-        .edit({ embeds: [embedFinal], components: [buildRowFinal(acao)] })
-        .catch(() => {});
+        .edit({ embeds: [embedFinal], components: [buildRowFinal(acao)] });
 
       // logzinho compact de extras (no próprio canal do registro)
       if (acao === "aprovar") {
@@ -3229,6 +3228,88 @@ export async function decideSetStaffFromSite({
       pedido.status
     )
   ) {
+    const decisionChannel = await resolveLogChannel(
+      client,
+      CFG.CANAL_REGISTRO
+    );
+
+    if (
+      !decisionChannel?.messages ||
+      decisionChannel.guildId !== guild.id ||
+      !decisionChannel.permissionsFor(actor)?.has([
+        'ViewChannel',
+        'ReadMessageHistory',
+      ])
+    ) {
+      throw Object.assign(
+        new Error(
+          'Não foi possível confirmar a mensagem final deste Set Staff com o seu acesso atual.'
+        ),
+        { status: 503 }
+      );
+    }
+
+    const decisionMessage = await decisionChannel.messages
+      .fetch({
+        message: normalizedMsgId,
+        force: true,
+      })
+      .catch(error => {
+        console.warn(
+          '[SETSTAFF_V2] Falha ao confirmar decisão persistida:',
+          {
+            guildId: guild.id,
+            msgId: normalizedMsgId,
+            status: pedido.status,
+            code: error.code || null,
+            httpStatus: error.status || null,
+            name: error.name,
+          }
+        );
+
+        throw Object.assign(
+          new Error(
+            'O Set Staff possui uma decisão registrada, mas não foi possível confirmá-la no Discord. Nenhuma nova decisão foi executada.'
+          ),
+          { status: 503 }
+        );
+      });
+
+    const finalButtons = (
+      decisionMessage.components || []
+    ).flatMap(
+      row => row.components || []
+    );
+
+    const expectedTitle = pedido.status === 'aprovado'
+      ? '📋 Pedido de Set Staff Aprovado'
+      : '📋 Pedido de Set Staff Reprovado';
+
+    const confirmed =
+      decisionMessage.author.id === client.user.id &&
+      decisionMessage.embeds?.[0]?.title === expectedTitle &&
+      finalButtons.some(
+        button =>
+          button.customId === 'ss2_finalizado' &&
+          button.disabled
+      ) &&
+      !finalButtons.some(
+        button =>
+          /^ss2_(aprovar|reprovar)_/.test(
+            String(button.customId || '')
+          ) &&
+          !button.disabled
+      );
+
+    if (!confirmed) {
+      throw Object.assign(
+        new Error(
+          'O resultado registrado do Set Staff ainda não corresponde à mensagem final no Discord. Nenhuma nova decisão foi executada.'
+        ),
+        { status: 503 }
+      );
+    }
+
     return {
       ok: true,
       msgId: normalizedMsgId,
@@ -3374,8 +3455,81 @@ export async function decideSetStaffFromSite({
     );
 
   const expected = normalizedAction === 'approve' ? 'aprovado' : 'reprovado';
+
   if (updated?.status !== expected) {
-    throw new Error(fakeInteraction.lastReply?.content || 'A decisão não foi confirmada pelo Set Staff.');
+    throw Object.assign(
+      new Error(
+        fakeInteraction.lastReply?.content ||
+        'A decisão não foi confirmada pelo Set Staff.'
+      ),
+      { status: 409 }
+    );
   }
-  return { ok: true, msgId: normalizedMsgId, status: updated.status };
+
+  const confirmedMessage = await canalRegistro.messages
+    .fetch({
+      message: normalizedMsgId,
+      force: true,
+    })
+    .catch(error => {
+      console.warn(
+        '[SETSTAFF_V2] Falha ao consultar mensagem após decisão:',
+        {
+          guildId: guild.id,
+          msgId: normalizedMsgId,
+          expected,
+          code: error.code || null,
+          httpStatus: error.status || null,
+          name: error.name,
+        }
+      );
+
+      throw Object.assign(
+        new Error(
+          'A decisão foi registrada, mas sua mensagem final ainda não pôde ser confirmada no Discord. Atualize antes de tentar outra ação.'
+        ),
+        { status: 503 }
+      );
+    });
+
+  const finalButtons = (
+    confirmedMessage.components || []
+  ).flatMap(
+    row => row.components || []
+  );
+
+  const expectedTitle = expected === 'aprovado'
+    ? '📋 Pedido de Set Staff Aprovado'
+    : '📋 Pedido de Set Staff Reprovado';
+
+  const confirmed =
+    confirmedMessage.author.id === client.user.id &&
+    confirmedMessage.embeds?.[0]?.title === expectedTitle &&
+    finalButtons.some(
+      button =>
+        button.customId === 'ss2_finalizado' &&
+        button.disabled
+    ) &&
+    !finalButtons.some(
+      button =>
+        /^ss2_(aprovar|reprovar)_/.test(
+          String(button.customId || '')
+        ) &&
+        !button.disabled
+    );
+
+  if (!confirmed) {
+    throw Object.assign(
+      new Error(
+        'O Set Staff registrou o resultado, mas a mensagem final do Discord não confirmou esse resultado. Nenhuma segunda decisão foi executada.'
+      ),
+      { status: 503 }
+    );
+  }
+
+  return {
+    ok: true,
+    msgId: normalizedMsgId,
+    status: updated.status,
+  };
 }

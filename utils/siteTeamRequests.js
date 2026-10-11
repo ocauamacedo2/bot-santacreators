@@ -300,7 +300,32 @@ export function createSiteTeamRequests({
     const channel = guild.channels.cache.get(definition.channelId) ||
       await guild.channels
         .fetch(definition.channelId)
-        .catch(() => null);
+        .catch(error => {
+          if (
+            [10003, 50001, 50013].includes(
+              Number(error.code)
+            )
+          ) {
+            return null;
+          }
+
+          console.warn(
+            '[SITE TEAM REQUESTS] Falha ao consultar canal da categoria:',
+            {
+              guildId: guild.id,
+              channelId: definition.channelId,
+              category: key,
+              code: error.code || null,
+              status: error.status || null,
+              name: error.name,
+            }
+          );
+
+          throw fail(
+            'Não foi possível consultar o canal desta categoria agora. Tente novamente.',
+            503
+          );
+        });
 
     const permissions = channel?.permissionsFor(member);
 
@@ -372,6 +397,8 @@ export function createSiteTeamRequests({
   }
 
   async function canView(guild, member) {
+    let unavailable = false;
+
     for (const [key, definition] of Object.entries(DEFINITIONS)) {
       try {
         if (key === 'staff' && typeof canManageStaff === 'function') {
@@ -389,10 +416,47 @@ export function createSiteTeamRequests({
         }
         if (await categoryAccess(guild, member, key)) return true;
       } catch (error) {
-        if (error?.status === 403 || error?.status === 503) continue;
+        if (
+          error?.status === 403 ||
+          [10003, 50001, 50013].includes(
+            Number(error.code)
+          )
+        ) {
+          continue;
+        }
+
+        if (
+          error?.status === 503 ||
+          key === 'staff'
+        ) {
+          unavailable = true;
+
+          console.warn(
+            '[SITE TEAM REQUESTS] Verificação de leitura indisponível:',
+            {
+              guildId: guild.id,
+              actorId: member.id,
+              category: key,
+              code: error.code || null,
+              status: error.status || null,
+              name: error.name,
+            }
+          );
+
+          continue;
+        }
+
         throw error;
       }
     }
+
+    if (unavailable) {
+      throw fail(
+        'Não foi possível confirmar o acesso aos pedidos agora. Tente novamente.',
+        503
+      );
+    }
+
     return false;
   }
 
@@ -775,6 +839,8 @@ export function createSiteTeamRequests({
       customId,
     });
 
+    let handlerError = null;
+
     try {
       if (key === 'leaders') {
         await client.__SC_LEADER_SET_SITE__.handle(interaction);
@@ -786,14 +852,26 @@ export function createSiteTeamRequests({
         ? interaction.__scLeaderSetDecisionApplied
         : interaction.__scSetDecisionApplied;
 
-      if (!committed) throw error;
+      if (!committed) {
+        handlerError = error;
 
-      console.warn('[SITE TEAM REQUESTS] Decisão aplicada; aviso posterior falhou:', {
-        category: key,
-        msgId,
-        name: error.name,
-        message: error.message,
-      });
+        console.warn(
+          '[SITE TEAM REQUESTS] Handler falhou; consultando resultado no Discord:',
+          {
+            category: key,
+            msgId,
+            name: error.name,
+            message: error.message,
+          }
+        );
+      } else {
+        console.warn('[SITE TEAM REQUESTS] Decisão aplicada; aviso posterior falhou:', {
+          category: key,
+          msgId,
+          name: error.name,
+          message: error.message,
+        });
+      }
     }
 
     const applied = key === 'leaders'
@@ -864,6 +942,10 @@ export function createSiteTeamRequests({
             rights: { approve: false, reject: false },
           },
         };
+      }
+
+      if (handlerError) {
+        throw handlerError;
       }
 
       throw fail(

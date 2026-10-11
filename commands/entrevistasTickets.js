@@ -5017,7 +5017,10 @@ if (dados.nome === 'entrevista') {
   let decisionCompleted = false;
 
   try {
-    currentMessage = await interaction.message.fetch();
+    currentMessage = await interaction.channel.messages.fetch({
+      message: interaction.message.id,
+      force: true,
+    });
 
     const expectedIds = new Set([
       `aprovar_set:${reqId}`,
@@ -5150,9 +5153,9 @@ if (dados.nome === 'entrevista') {
 
     decisionCompleted = true;
 
-    deletePending(reqId);
-
     interaction.__scLeaderSetDecisionApplied = true;
+
+    deletePending(reqId);
 
     await interaction.editReply({
       content: approved

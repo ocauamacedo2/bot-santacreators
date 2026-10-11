@@ -164,9 +164,11 @@ export async function pedirSetHandleInteraction(interaction, client) {
         force: true,
       }),
 
-      interaction.message.fetch(),
+      interaction.channel.messages.fetch({
+        message: interaction.message.id,
+        force: true,
+      }),
     ]);
-
     const allowed = isApprove
       ? canApproveCreatorsSetFromSite(member)
       : canRejectCreatorsSetFromSite(member);
@@ -1215,10 +1217,10 @@ if (!podeReprovarSet) {
       embeds: [embedAtualizado]
     });
 
+    interaction.__scSetDecisionApplied = true;
+
     pedidosSet.delete(idUnico);
     savePedidosSet();
-
-    interaction.__scSetDecisionApplied = true;
 
     return true;
   }
