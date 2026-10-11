@@ -11591,20 +11591,17 @@ async function addPaymentEventsToPlayerRankings(
   client
 ) {
   const channel =
-    await client.channels
-      .fetch(
-        PAYMENT_EVENTS_CHANNEL_ID
-      )
-      .catch(
-        () =>
-          null
-      );
+    await client.channels.fetch(
+      PAYMENT_EVENTS_CHANNEL_ID
+    );
 
   if (
     !channel ||
     !channel.isTextBased()
   ) {
-    return rankings;
+    throw new Error(
+      'O canal de pagamentos utilizado pelo ranking está indisponível. A leitura não foi concluída.'
+    );
   }
 
   const paymentOperationTrace =
@@ -11633,9 +11630,9 @@ async function addPaymentEventsToPlayerRankings(
       const batch = await channel.messages.fetch({
         limit: 100,
         ...(beforeId ? { before: beforeId } : {})
-      }).catch(() => null);
+      });
 
-      if (!batch?.size) break;
+      if (!batch.size) break;
 
       const messages = [...batch.values()];
       beforeId = messages[messages.length - 1]?.id;

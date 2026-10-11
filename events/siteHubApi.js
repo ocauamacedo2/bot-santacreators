@@ -350,6 +350,10 @@ async function canAccessSiteModule(
     return false;
   }
 
+  if (moduleKey === 'quiz') {
+    return true;
+  }
+
   if (member.id === '660311795327828008') {
     return true;
   }
@@ -1080,9 +1084,11 @@ const experience = createSiteHubExperience({
         if (
           !isCentralActor &&
           !isRegistrationAction &&
+          requestedAction !== 'events.published' &&
           (
             internalModules.has(requestedModule) ||
-            requestedAction.startsWith('history.')
+            requestedAction.startsWith('history.') ||
+            requestedAction === 'quiz.reset'
           )
         ) {
           return res.status(403).json({

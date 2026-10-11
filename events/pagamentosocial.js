@@ -7196,11 +7196,27 @@ if (id.startsWith("pago__") || id.startsWith("solicitado__") || id.startsWith("r
         );
       } catch {}
 
-      // se já respondeu/deferiu em outro fluxo, só sai quieto
+      // Informa o bloqueio sem responder duas vezes à mesma interação.
       try {
-        await interaction.reply({ content: "🛑 Calma aí — já peguei teu envio. (anti duplicação)", ephemeral: true });
-        await interaction.reply({ content: "🛑 Calma aí — já peguei teu envio. (anti duplicação)", flags: MessageFlags.Ephemeral });
-      } catch {}
+        const content =
+          "🛑 Calma aí — já peguei teu envio. (anti duplicação)";
+
+        if (interaction.deferred || interaction.replied) {
+          await interaction.editReply({ content });
+        } else {
+          await interaction.reply({
+            content,
+            flags: MessageFlags.Ephemeral,
+          });
+        }
+      } catch (error) {
+        console.warn("[PagamentoSocial] Falha ao informar bloqueio de reenvio:", {
+          interactionId: interaction.id,
+          code: error?.code,
+          message: error?.message,
+        });
+      }
+
       return true;
     }
     client.__SC_PAGAMENTO_SOCIAL_USERLOCK__.set(interaction.user.id, now);
@@ -8119,7 +8135,44 @@ void (async () => {
     return false;
   } catch (err) {
     if (isUnknownInteraction(err)) return true; // Ignora erros de interação já respondida/expirada
-    console.warn("Erro no sistema de pagamentos:", err);
+
+    console.error("[PagamentoSocial] Processamento interrompido:", {
+      interactionId: interaction.id,
+      customId: interaction.customId,
+      guildId: interaction.guildId,
+      channelId: interaction.channelId,
+      userId: interaction.user?.id,
+      deferred: interaction.deferred,
+      replied: interaction.replied,
+      name: err?.name,
+      code: err?.code,
+      message: err?.message,
+      stack: err?.stack,
+    });
+
+    const content =
+      "⚠️ O processamento foi interrompido. Confira o canal de pagamentos antes de reenviar: o registro pode ter sido criado antes da falha. A equipe pode identificar o erro pelo ID da interação: " +
+      interaction.id +
+      ".";
+
+    try {
+      if (interaction.deferred || interaction.replied) {
+        await interaction.editReply({ content });
+      } else {
+        await interaction.reply({
+          content,
+          flags: MessageFlags.Ephemeral,
+        });
+      }
+    } catch (replyError) {
+      console.error("[PagamentoSocial] Falha ao informar interrupção:", {
+        interactionId: interaction.id,
+        name: replyError?.name,
+        code: replyError?.code,
+        message: replyError?.message,
+      });
+    }
+
     return true;
   } finally {
     if (key) locks.delete(key);

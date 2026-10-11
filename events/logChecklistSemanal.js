@@ -947,7 +947,43 @@ async function recoverChecklistChecksFromAuditChannel(client, weekKey, responsav
   return recovered;
 }
 
+const CHECKLIST_WEEK_SYNCHRONIZATIONS = new WeakMap();
+
 async function syncWeekData(client, force = false) {
+  const weekKey = weekKeyFromDateSP();
+
+  const previous =
+    CHECKLIST_WEEK_SYNCHRONIZATIONS.get(client);
+
+  if (previous?.weekKey === weekKey) {
+    return previous.promise;
+  }
+
+  const record = {
+    weekKey,
+    promise: null,
+  };
+
+  record.promise = Promise.resolve()
+    .then(() => syncWeekDataLive(client, force))
+    .finally(() => {
+      if (
+        CHECKLIST_WEEK_SYNCHRONIZATIONS.get(client) ===
+        record
+      ) {
+        CHECKLIST_WEEK_SYNCHRONIZATIONS.delete(client);
+      }
+    });
+
+  CHECKLIST_WEEK_SYNCHRONIZATIONS.set(
+    client,
+    record
+  );
+
+  return record.promise;
+}
+
+async function syncWeekDataLive(client, force = false) {
   const checklist = loadJSON(CHECKLIST_FILE, { weeks: {} });
   const weekKey = weekKeyFromDateSP();
 
@@ -1264,6 +1300,109 @@ let checklistPanelTimer = null;
 let checklistPanelRunning = false;
 let checklistPanelDirty = false;
 
+const CHECKLIST_SNAPSHOT_MEMBER_READS = new WeakMap();
+const CHECKLIST_SNAPSHOT_MEMBER_CLIENTS = new WeakSet();
+
+async function checklistSnapshotMember(guild, id) {
+  const client = guild.client;
+
+  if (!CHECKLIST_SNAPSHOT_MEMBER_CLIENTS.has(client)) {
+    CHECKLIST_SNAPSHOT_MEMBER_CLIENTS.add(client);
+
+    const invalidateMember = (first, second) => {
+      const changed = second || first;
+
+      CHECKLIST_SNAPSHOT_MEMBER_READS
+        .get(changed.guild)
+        ?.delete(changed.id);
+    };
+
+    for (const event of [
+      'guildMemberAdd',
+      'guildMemberUpdate',
+      'guildMemberRemove',
+    ]) {
+      client.on(event, invalidateMember);
+    }
+
+    const invalidateRoles = (first, second) => {
+      const changed = second || first;
+
+      CHECKLIST_SNAPSHOT_MEMBER_READS.delete(
+        changed.guild
+      );
+    };
+
+    client.on('roleUpdate', invalidateRoles);
+    client.on('roleDelete', invalidateRoles);
+  }
+
+  let reads = CHECKLIST_SNAPSHOT_MEMBER_READS.get(guild);
+
+  if (!reads) {
+    reads = new Map();
+    CHECKLIST_SNAPSHOT_MEMBER_READS.set(guild, reads);
+  }
+
+  const previous = reads.get(id);
+
+  if (
+    previous &&
+    (
+      previous.pending ||
+      Date.now() - previous.at < 30000
+    )
+  ) {
+    return previous.promise;
+  }
+
+  const record = {
+    pending: true,
+    at: 0,
+    promise: null,
+  };
+
+  record.promise = Promise.resolve()
+    .then(() => guild.members.fetch({
+      user: id,
+      force: true,
+    }))
+    .catch(error => {
+      if (Number(error.code) === 10007) {
+        return null;
+      }
+
+      if (reads.get(id) === record) {
+        reads.delete(id);
+      }
+
+      console.warn(
+        '[CHECKLIST SITE] Falha ao consultar membro:',
+        id,
+        error.code || error.status
+      );
+
+      throw checklistError(
+        'Não foi possível atualizar os membros do checklist. Tente novamente em alguns instantes.',
+        503
+      );
+    })
+    .then(member => {
+      record.pending = false;
+      record.at = Date.now();
+
+      return member;
+    });
+
+  reads.set(id, record);
+
+  while (reads.size > 1024) {
+    reads.delete(reads.keys().next().value);
+  }
+
+  return record.promise;
+}
+
 function checklistError(message, status = 400) {
   return Object.assign(
     new Error(message),
@@ -1503,28 +1642,10 @@ export async function getChecklistSiteSnapshot({
         while (next < memberIds.length) {
           const id = memberIds[next++];
 
-          const found = await guild.members.fetch({
-            user: id,
-            force: true,
-          }).catch(error => {
-            if (
-              Number(error.code) ===
-              10007
-            ) {
-              return null;
-            }
-
-            console.warn(
-              '[CHECKLIST SITE] Falha ao consultar membro:',
-              id,
-              error.code || error.status
-            );
-
-            throw checklistError(
-              'Não foi possível atualizar os membros do checklist. Tente novamente em alguns instantes.',
-              503
-            );
-          });
+          const found = await checklistSnapshotMember(
+            guild,
+            id
+          );
 
           if (found) {
             resolved.add(id);

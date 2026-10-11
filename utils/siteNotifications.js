@@ -298,24 +298,10 @@ export function createSiteNotifications({
       records.push(record);
     };
 
-    const attempt = async (label, task) => {
-      try {
-        await task();
-      } catch (error) {
-        if (error.status === 403) {
-          return;
-        }
+    const jobs = [];
 
-        console.error(
-          '[SITE NOTIFICATIONS]',
-          label,
-          error
-        );
-
-        warnings.push(
-          `${label}: consulta indisponível; os totais podem estar incompletos.`
-        );
-      }
+    const attempt = (label, task) => {
+      jobs.push({ label, task });
     };
 
     await attempt(
@@ -367,6 +353,18 @@ export function createSiteNotifications({
             guild,
             member,
           });
+
+          if (
+            !Array.isArray(data?.categories) ||
+            data.categories.some(category =>
+              !category ||
+              !Array.isArray(category.records)
+            )
+          ) {
+            throw new Error(
+              'Pedidos da equipe retornaram uma consulta incompleta ou inválida.'
+            );
+          }
 
           available.add('approvals');
 
@@ -640,6 +638,37 @@ export function createSiteNotifications({
         }
       );
     }
+
+    let nextJob = 0;
+
+    await Promise.all(
+      Array.from(
+        { length: Math.min(2, jobs.length) },
+        async () => {
+          while (nextJob < jobs.length) {
+            const { label, task } = jobs[nextJob++];
+
+            try {
+              await task();
+            } catch (error) {
+              if (error?.status === 403) {
+                continue;
+              }
+
+              console.error(
+                '[SITE NOTIFICATIONS]',
+                label,
+                error
+              );
+
+              warnings.push(
+                `${label}: consulta indisponível; os totais podem estar incompletos.`
+              );
+            }
+          }
+        }
+      )
+    );
 
     const actorKey =
       `${guild.id}:${member.id}`;
