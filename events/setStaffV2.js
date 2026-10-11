@@ -2593,7 +2593,58 @@ export function getSetStaffSiteOptions() {
   };
 }
 
+const SETSTAFF_SITE_RECOVERY_STATES =
+  new WeakMap();
+
 async function recoverSetStaffPendingFromDiscord(channel) {
+  if (!channel?.messages?.fetch) {
+    return;
+  }
+
+  let state =
+    SETSTAFF_SITE_RECOVERY_STATES.get(channel);
+
+  if (!state) {
+    state = {
+      completedAt: null,
+      pending: null,
+    };
+
+    SETSTAFF_SITE_RECOVERY_STATES.set(
+      channel,
+      state
+    );
+  }
+
+  if (state.pending) {
+    return state.pending;
+  }
+
+  if (
+    state.completedAt !== null &&
+    Date.now() - state.completedAt < 30000
+  ) {
+    return 0;
+  }
+
+  const task =
+    recoverSetStaffPendingFromDiscordLive(channel)
+      .then(count => {
+        state.completedAt = Date.now();
+        return count;
+      })
+      .finally(() => {
+        if (state.pending === task) {
+          state.pending = null;
+        }
+      });
+
+  state.pending = task;
+
+  return task;
+}
+
+async function recoverSetStaffPendingFromDiscordLive(channel) {
   if (!channel?.messages?.fetch) {
     return;
   }

@@ -311,15 +311,27 @@ export function createSiteTeamRequests({
     let staffData = null;
 
     if (key === 'staff') {
-      staffData = await getStaffSnapshot({
-        guild,
-        actorId: member.id,
-      });
+      if (typeof canManageStaff === 'function') {
+        const allowed =
+          Boolean(
+            await canManageStaff(member)
+          );
 
-      rights = {
-        approve: Boolean(staffData.rights?.decide),
-        reject: Boolean(staffData.rights?.decide),
-      };
+        rights = {
+          approve: allowed,
+          reject: allowed,
+        };
+      } else {
+        staffData = await getStaffSnapshot({
+          guild,
+          actorId: member.id,
+        });
+
+        rights = {
+          approve: Boolean(staffData.rights?.decide),
+          reject: Boolean(staffData.rights?.decide),
+        };
+      }
     } else if (key === 'leaders') {
       const provider = client.__SC_LEADER_SET_SITE__;
 
@@ -450,8 +462,28 @@ export function createSiteTeamRequests({
       let nextCursor = null;
 
       if (key === 'staff') {
+        const staffData =
+          access.staffData ||
+          await getStaffSnapshot({
+            guild,
+            actorId: member.id,
+          });
+
+        const canDecide =
+          Boolean(staffData.rights?.decide);
+
+        access.rights = {
+          approve:
+            access.rights.approve &&
+            canDecide,
+
+          reject:
+            access.rights.reject &&
+            canDecide,
+        };
+
         records = (
-          access.staffData.requests || []
+          staffData.requests || []
         ).map(item => ({
           ...item,
 
@@ -541,11 +573,6 @@ export function createSiteTeamRequests({
         }
       }
 
-      await enrichTeamRequestProfiles(
-        guild,
-        records
-      );
-
       categories.push({
         key,
         ...DEFINITIONS[key],
@@ -576,6 +603,13 @@ export function createSiteTeamRequests({
       );
     }
 
+    await enrichTeamRequestProfiles(
+      guild,
+      categories.flatMap(
+        category => category.records
+      )
+    );
+
     return {
       categories,
       warnings,
@@ -603,7 +637,27 @@ export function createSiteTeamRequests({
     const freshMember = await guild.members.fetch({
       user: member.id,
       force: true,
-    }).catch(() => null);
+    }).catch(error => {
+      if (Number(error.code) === 10007) {
+        return null;
+      }
+
+      console.warn(
+        '[SITE TEAM REQUESTS] Falha ao validar membro:',
+        {
+          guildId: guild.id,
+          actorId: member.id,
+          code: error.code || null,
+          status: error.status || null,
+          name: error.name
+        }
+      );
+
+      throw fail(
+        'Não foi possível validar seu acesso agora. A decisão não foi executada. Tente novamente.',
+        503
+      );
+    });
 
     if (!freshMember) {
       throw fail(
@@ -637,7 +691,28 @@ export function createSiteTeamRequests({
 
     const message = await access.channel.messages
       .fetch(msgId)
-      .catch(() => null);
+      .catch(error => {
+        if (Number(error.code) === 10008) {
+          return null;
+        }
+
+        console.warn(
+          '[SITE TEAM REQUESTS] Falha ao consultar pedido:',
+          {
+            guildId: guild.id,
+            channelId: access.channel.id,
+            msgId,
+            code: error.code || null,
+            status: error.status || null,
+            name: error.name
+          }
+        );
+
+        throw fail(
+          'Não foi possível consultar este pedido no Discord. A decisão não foi executada. Tente novamente.',
+          503
+        );
+      });
 
     if (
       !message ||

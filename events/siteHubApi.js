@@ -1326,7 +1326,11 @@ const experience = createSiteHubExperience({
   !action.startsWith('history.') &&
   !action.startsWith('profile.')) {
           // Toda escrita real passa pelas validações originais; a próxima consulta será refeita.
-          snapshots.invalidate();
+          snapshots.invalidate(
+            action === 'teamRequests.decide'
+              ? 'staff'
+              : null
+          );
         }
 
         if (action.startsWith('events.')) {
@@ -1843,6 +1847,9 @@ if (await experience.handle({ guild, member, action, payload, res })) return;
               cityKey:
                 payload.city ||
                 null,
+
+              refresh:
+                payload.refresh === true,
             })
           );
         }

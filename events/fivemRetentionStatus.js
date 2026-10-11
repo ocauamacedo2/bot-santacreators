@@ -2139,8 +2139,22 @@ async function fetchCityStatusFromDynamic(city) {
    }
  });
 
- const results = await Promise.all(attempts);
- return results.find(Boolean) || null;
+ const result = await Promise.any(
+   attempts.map(
+     attempt =>
+       attempt.then(status => {
+         if (!status) {
+           throw new Error(
+             "O endpoint não retornou dados válidos."
+           );
+         }
+
+         return status;
+       })
+   )
+ ).catch(() => null);
+
+ return result;
 }
 
 async function fetchCityStatus(city) {
@@ -4123,12 +4137,19 @@ function buildFivemSiteWeeklyEventPeaks(current, peaks) {
 
 export async function getFivemRetentionSiteSnapshot({
   cityKey = null,
+  refresh = false,
 } = {}) {
   const cached = FIVEM_SNAPSHOT_CACHE.value;
   const cacheAge = Date.now() - FIVEM_SNAPSHOT_CACHE.createdAt;
-  const safe = cached?.snapshot && cacheAge >= 0 && cacheAge < 90000
-    ? cached
-    : await createSafeCurrentSnapshot({ forceFresh: false });
+  const safe =
+    !refresh &&
+    cached?.snapshot &&
+    cacheAge >= 0 &&
+    cacheAge < 90000
+      ? cached
+      : await createSafeCurrentSnapshot({
+          forceFresh: refresh === true,
+        });
 
   const current =
     safe?.snapshot;
