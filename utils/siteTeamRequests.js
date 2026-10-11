@@ -125,24 +125,20 @@ function messageRecord(message, category, rights) {
 
   let status = 'indisponivel';
 
-  if (approveId || rejectId) {
-    status = 'pendente';
-  } else if (/reprovado|recusado/i.test(decisionText)) {
+  if (/reprovado|recusado/i.test(decisionText)) {
     status = 'reprovado';
   } else if (
     /aprovado/i.test(decisionText) ||
-    buttons.some(
-      button => button.customId === 'set_aprovado'
-    )
+    buttons.some(button => button.customId === 'set_aprovado')
   ) {
     status = 'aprovado';
   } else if (
     /processando/i.test(decisionText) ||
-    buttons.some(
-      button => button.customId === 'set_processando'
-    )
+    buttons.some(button => button.customId === 'set_processando')
   ) {
     status = 'processando';
+  } else if (approveId || rejectId) {
+    status = 'pendente';
   }
 
   const requesterField = (embed.fields || []).find(
@@ -200,10 +196,12 @@ function messageRecord(message, category, rights) {
 
     rights: {
       approve:
+        status === 'pendente' &&
         rights.approve &&
         Boolean(approveId),
 
       reject:
+        status === 'pendente' &&
         rights.reject &&
         Boolean(rejectId),
     },
@@ -282,6 +280,16 @@ export function createSiteTeamRequests({
   handleCreators,
   canManageStaff,
 }) {
+  const decisionBuild = '20261011-decisions-9';
+
+  console.info('[SITE TEAM REQUESTS] Módulo carregado:', {
+    build: decisionBuild,
+    module: import.meta.url,
+    pid: process.pid,
+  });
+
+  const decisionOperations = new Map();
+
   async function categoryAccess(guild, member, key) {
     const definition = DEFINITIONS[key];
 
@@ -607,13 +615,25 @@ export function createSiteTeamRequests({
     );
 
     return {
-      categories,
+      categories: categories.map(category => ({
+        ...category,
+        records: category.records.map(record => {
+          const key = `${guild.id}:${category.key}:${record.msgId}`;
+          return decisionOperations.has(key)
+            ? {
+                ...record,
+                status: 'processando',
+                rights: { approve: false, reject: false },
+              }
+            : record;
+        }),
+      })),
       warnings,
       updatedAt: Date.now(),
     };
   }
 
-  async function decide({
+  async function executeDecision({
     guild,
     member,
     payload = {},
@@ -686,7 +706,7 @@ export function createSiteTeamRequests({
     }
 
     const message = await access.channel.messages
-      .fetch(msgId)
+      .fetch({ message: msgId, force: true })
       .catch(error => {
         if (Number(error.code) === 10008) {
           return null;
@@ -729,13 +749,21 @@ export function createSiteTeamRequests({
       action
     );
 
-    if (
-      !record ||
-      record.status !== 'pendente' ||
-      !customId
-    ) {
+    if (record && ['aprovado', 'reprovado'].includes(record.status)) {
+      return {
+        ok: true,
+        status: record.status,
+        alreadyDecided: true,
+        record: {
+          ...record,
+          rights: { approve: false, reject: false },
+        },
+      };
+    }
+
+    if (!record || record.status !== 'pendente' || !customId) {
       throw fail(
-        'Este pedido já foi decidido ou está em processamento.',
+        'Este pedido está em processamento ou seus controles não estão disponíveis. Atualize para confirmar o estado no Discord.',
         409
       );
     }
@@ -773,6 +801,71 @@ export function createSiteTeamRequests({
       : interaction.__scSetDecisionApplied;
 
     if (!applied) {
+      console.warn('[SITE TEAM REQUESTS] Handler não confirmou a decisão:', {
+        build: decisionBuild,
+        module: import.meta.url,
+        pid: process.pid,
+        guildId: guild.id,
+        category: key,
+        msgId,
+        action,
+        handler: key === 'leaders'
+          ? 'client.__SC_LEADER_SET_SITE__.handle'
+          : 'handleCreators',
+        leaderDecisionApplied:
+          interaction.__scLeaderSetDecisionApplied === true,
+        creatorsDecisionApplied:
+          interaction.__scSetDecisionApplied === true,
+        replyContent: interaction.lastReply?.content || null,
+      });
+
+      const currentMessage = await access.channel.messages
+        .fetch({ message: msgId, force: true })
+        .catch(error => {
+          console.warn(
+            '[SITE TEAM REQUESTS] Falha ao reconciliar decisão:',
+            {
+              guildId: guild.id,
+              channelId: access.channel.id,
+              msgId,
+              category: key,
+              action,
+              code: error.code || null,
+              status: error.status || null,
+              name: error.name,
+            }
+          );
+
+          throw fail(
+            'Não foi possível confirmar o resultado atual no Discord. Atualize este pedido antes de tentar outra decisão.',
+            503
+          );
+        });
+
+      const currentRecord =
+        currentMessage.author.id === client.user.id
+          ? messageRecord(
+              currentMessage,
+              key,
+              access.rights
+            )
+          : null;
+
+      if (
+        currentRecord &&
+        ['aprovado', 'reprovado'].includes(currentRecord.status)
+      ) {
+        return {
+          ok: true,
+          status: currentRecord.status,
+          alreadyDecided: true,
+          record: {
+            ...currentRecord,
+            rights: { approve: false, reject: false },
+          },
+        };
+      }
+
       throw fail(
         interaction.lastReply?.content ||
         'O bot não confirmou a conclusão da decisão.',
@@ -787,6 +880,84 @@ export function createSiteTeamRequests({
         ? 'aprovado'
         : 'reprovado',
     };
+  }
+
+  async function decide(args) {
+    const key = `${args.guild.id}:${args.payload?.category || ''}:${args.payload?.msgId || ''}`;
+    const previous = decisionOperations.get(key);
+
+    if (previous) {
+      if (
+        previous.actorId === args.member.id &&
+        previous.action === args.payload?.action
+      ) {
+        return previous.promise;
+      }
+
+      console.warn('[SITE TEAM REQUESTS] Decisão concorrente:', {
+        build: decisionBuild,
+        pid: process.pid,
+        guildId: args.guild.id,
+        category: args.payload?.category,
+        msgId: args.payload?.msgId,
+      });
+
+      throw fail('Outra decisão está em andamento neste pedido.', 409);
+    }
+
+    const operation = {
+      actorId: args.member.id,
+      action: args.payload?.action,
+      promise: null,
+    };
+
+    console.info('[SITE TEAM REQUESTS] Decisão recebida:', {
+      build: decisionBuild,
+      pid: process.pid,
+      guildId: args.guild.id,
+      category: args.payload?.category,
+      msgId: args.payload?.msgId,
+      action: args.payload?.action,
+    });
+
+    operation.promise = executeDecision(args)
+      .then(result => {
+        console.info('[SITE TEAM REQUESTS] Decisão concluída:', {
+          build: decisionBuild,
+          pid: process.pid,
+          category: args.payload?.category,
+          msgId: args.payload?.msgId,
+          status: result?.status,
+          alreadyDecided: result?.alreadyDecided === true,
+        });
+
+        return {
+          ...result,
+          decisionBuild,
+        };
+      })
+      .catch(error => {
+        console.warn('[SITE TEAM REQUESTS] Decisão falhou:', {
+          build: decisionBuild,
+          module: import.meta.url,
+          pid: process.pid,
+          category: args.payload?.category,
+          msgId: args.payload?.msgId,
+          action: args.payload?.action,
+          status: error.status || error.statusCode || null,
+          message: error.message,
+        });
+
+        throw error;
+      })
+      .finally(() => {
+        if (decisionOperations.get(key) === operation) {
+          decisionOperations.delete(key);
+        }
+      });
+
+    decisionOperations.set(key, operation);
+    return operation.promise;
   }
 
   return {

@@ -3222,11 +3222,30 @@ export async function decideSetStaffFromSite({
   }
 
   if (
+    [
+      "aprovado",
+      "reprovado",
+    ].includes(
+      pedido.status
+    )
+  ) {
+    return {
+      ok: true,
+      msgId: normalizedMsgId,
+      status: pedido.status,
+      alreadyDecided: true,
+    };
+  }
+
+  if (
     pedido.status !==
     "pendente"
   ) {
-    throw new Error(
-      `Este pedido já está como ${pedido.status}.`
+    throw Object.assign(
+      new Error(
+        `Este pedido já está como ${pedido.status}.`
+      ),
+      { status: 409 }
     );
   }
 
