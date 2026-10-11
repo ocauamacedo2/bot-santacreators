@@ -1617,8 +1617,22 @@ client.once("ready", async () => {
 
   try {
     console.log("[CORE] PRIORIDADE: iniciando Hall da Fama + rankings.");
-    await hallDaFamaOnReady(client);
-    console.log("[CORE] Hall da Fama + rankings iniciados com prioridade.");
+    void hallDaFamaOnReady(client)
+      .then(() => {
+        console.log(
+          "[CORE] Hall da Fama + rankings inicializados."
+        );
+      })
+      .catch(error => {
+        console.error(
+          "[BOOT] Erro ao iniciar Hall da Fama em segundo plano:",
+          error
+        );
+      });
+
+    console.log(
+      "[CORE] Hall da Fama iniciado em segundo plano."
+    );
   } catch (e) {
     console.error("[BOOT] Erro ao iniciar Hall da Fama com prioridade:", e);
   }

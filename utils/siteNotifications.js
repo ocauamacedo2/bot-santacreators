@@ -737,6 +737,8 @@ export function createSiteNotifications({
     };
   }
 
+  const notificationBuilds = new Map();
+
   async function handle({
     guild,
     member,
@@ -752,10 +754,38 @@ export function createSiteNotifications({
       `${guild.id}:${member.id}`;
 
     if (action === 'notifications.snapshot') {
-      const data = await build(
-        guild,
-        member
+      const buildKey = JSON.stringify([
+        actorKey,
+        [...member.roles.cache.keys()].sort(),
+        member.permissions.bitfield.toString(),
+      ]);
+
+      let operation = notificationBuilds.get(
+        buildKey
       );
+
+      if (!operation) {
+        operation = build(
+          guild,
+          member
+        ).finally(() => {
+          if (
+            notificationBuilds.get(buildKey) ===
+            operation
+          ) {
+            notificationBuilds.delete(
+              buildKey
+            );
+          }
+        });
+
+        notificationBuilds.set(
+          buildKey,
+          operation
+        );
+      }
+
+      const data = await operation;
 
       const token = randomUUID();
 

@@ -169,10 +169,10 @@ function readJSON(file, fallback) {
 }
 
 function writeJSON(file, data) {
-  try {
-    ensureDir(file);
-    fs.writeFileSync(file, JSON.stringify(data, null, 2));
-  } catch {}
+  ensureDir(file);
+  const temporary = file + ".tmp";
+  fs.writeFileSync(temporary, JSON.stringify(data, null, 2));
+  fs.renameSync(temporary, file);
 }
 
 // ===============================
@@ -211,6 +211,40 @@ function loadStore() {
 
 function saveStore(s) {
   writeJSON(FACSMENU_STORE, s);
+}
+
+export function facsSemanaisDuplicateFromRM(orgId, orgName) {
+  const weekKey = getCurrentWeekSP().weekKey;
+  const stored = fs.existsSync(FACSMENU_STORE)
+    ? JSON.parse(fs.readFileSync(FACSMENU_STORE, "utf8"))
+    : facsState;
+
+  if (!stored || typeof stored.lista !== "string" || !stored.weekKey) {
+    throw new Error("O JSON do FACs está inválido. Corrija o arquivo antes de aprovar.");
+  }
+
+  if (String(stored.weekKey) !== String(weekKey)) {
+    return { byId: false, byName: false };
+  }
+
+  const id = String(orgId || "").trim().replace(/^0+(?=\d)/, "");
+  const name = norm(orgName);
+  let byId = false;
+  let byName = false;
+
+  for (const line of _lines(stored.lista)) {
+    const parts = String(line).split("|").map(value => value.trim());
+    const first = parts[0] || "";
+    const lineId = /^\d{1,4}$/.test(first)
+      ? first.replace(/^0+(?=\d)/, "")
+      : "";
+    const lineName = lineId ? parts.slice(1).join(" | ") : String(line);
+
+    if (id && lineId === id) byId = true;
+    if (name && norm(lineName) === name) byName = true;
+  }
+
+  return { byId, byName };
 }
 
 let facsState = loadStore();
@@ -1770,20 +1804,19 @@ hasOrgNameInWeek: async (orgName) => {
 // ===============================
 // APPEND DIRETO DO REGISTRO MANAGER
 // ===============================
+let rmFacsRefreshQueue = Promise.resolve();
+
 export async function facsSemanaisAppendFromRM(client, displayOrg, options = {}) {
+  const cleanDisplay = String(displayOrg || "").trim();
+
+  if (!cleanDisplay || cleanDisplay === "|") {
+    throw new Error("A organização do registro está vazia.");
+  }
+
+  const previousState = { ...facsState };
+  const weekKey = getCurrentWeekSP().weekKey;
+
   try {
-    const cleanDisplay = String(displayOrg || "").trim();
-
-    if (!cleanDisplay || cleanDisplay === "|") {
-      console.error("[FACS_SEMANAIS] append direto RM ignorado: display inválido", {
-        displayOrg,
-        options,
-      });
-      return false;
-    }
-
-    const { weekKey } = getCurrentWeekSP();
-
     if (String(facsState.weekKey || "") !== String(weekKey)) {
       pushBackup("rm_append_week_changed_force");
       facsState.weekKey = weekKey;
@@ -1795,45 +1828,57 @@ export async function facsSemanaisAppendFromRM(client, displayOrg, options = {})
     facsState.lista = _addLine(facsState.lista, cleanDisplay);
     saveStore(facsState);
 
-    await _refreshMenu(client);
-
-    const added = before !== facsState.lista;
+    const after = facsState.lista;
+    const added = before !== after;
 
     console.log("[FACS_SEMANAIS] append DIRETO RM executado:", {
       added,
       displayOrg: cleanDisplay,
       beforeTotal: _countLines(before),
-      afterTotal: _countLines(facsState.lista),
+      afterTotal: _countLines(after),
       rmMsgId: options?.rmMsgId || options?.msgId || null,
     });
 
-    await logAudit(
-      client,
-      "ADD ORG (RM DIRETO FORÇADO)",
-      [
-        `ORG: ${cleanDisplay}`,
-        `Adicionou nova linha: ${added ? "SIM" : "NÃO / já existia"}`,
-        `Total antes: ${_countLines(before)}`,
-        `Total depois: ${_countLines(facsState.lista)}`,
-      ],
-      {
-        byUserId: options?.byUserId || null,
-        interaction: null,
-        beforeState: before,
-        afterState: facsState.lista,
-        extra: {
-          via: "rm_direct_forced",
-          options,
-        },
-      }
-    );
+    rmFacsRefreshQueue = rmFacsRefreshQueue
+      .catch(() => {})
+      .then(async () => {
+        await _refreshMenu(client);
 
-    await globalThis.__FACS_COMPARATIVO_FORCE_UPDATE__?.().catch(() => {});
+        await logAudit(
+          client,
+          "ADD ORG (RM DIRETO FORÇADO)",
+          [
+            `ORG: ${cleanDisplay}`,
+            `Adicionou nova linha: ${added ? "SIM" : "NÃO / já existia"}`,
+            `Total antes: ${_countLines(before)}`,
+            `Total depois: ${_countLines(after)}`,
+          ],
+          {
+            byUserId: options?.byUserId || null,
+            interaction: null,
+            beforeState: before,
+            afterState: after,
+            extra: {
+              via: "rm_direct_forced",
+              options,
+            },
+          }
+        );
+
+        await globalThis.__FACS_COMPARATIVO_FORCE_UPDATE__?.();
+      })
+      .catch(error => {
+        console.error(
+          "[FACS_SEMANAIS] Aprovação salva; falha na atualização dos painéis:",
+          error
+        );
+      });
 
     return true;
-  } catch (e) {
-    console.error("[FACS_SEMANAIS] erro no append direto RM:", e);
-    return false;
+  } catch (error) {
+    facsState = previousState;
+    console.error("[FACS_SEMANAIS] erro no append direto RM:", error);
+    throw error;
   }
 }
 

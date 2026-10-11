@@ -2572,6 +2572,28 @@ async function readHallRecoveryAuditRecords(client) {
   const records = [];
   const seenMessageIds = new Set();
 
+  const cacheDirectory = path.join(
+    DATA_DIR,
+    "hall_audit_read_cache"
+  );
+
+  fs.mkdirSync(cacheDirectory, {
+    recursive: true,
+  });
+
+  const startedAt = Date.now();
+  let attachmentsRead = 0;
+
+  const assertDeadline = () => {
+    if (Date.now() - startedAt > 15 * 60 * 1000) {
+      throw new Error(
+        "A leitura da auditoria atingiu 15 minutos. " +
+        "Os arquivos já lidos foram preservados; " +
+        "nenhum Hall será restaurado com leitura incompleta."
+      );
+    }
+  };
+
   const maximumPages = 200;
 
   let beforeId = null;
@@ -2582,6 +2604,8 @@ async function readHallRecoveryAuditRecords(client) {
     page < maximumPages;
     page++
   ) {
+    assertDeadline();
+
     const messages =
       await auditChannel.messages.fetch(
         beforeId
@@ -2600,8 +2624,17 @@ async function readHallRecoveryAuditRecords(client) {
     }
 
     let addedMessages = 0;
+    const pageMessages = [...messages.values()];
+    let nextMessage = 0;
 
-    for (const message of messages.values()) {
+    const readResults = await Promise.allSettled(
+      Array.from(
+        {
+          length: Math.min(4, pageMessages.length),
+        },
+        async () => {
+          while (nextMessage < pageMessages.length) {
+            const message = pageMessages[nextMessage++];
       if (
         seenMessageIds.has(message.id)
       ) {
@@ -2640,31 +2673,39 @@ async function readHallRecoveryAuditRecords(client) {
           );
         }
 
-        const response =
-          await fetch(
+        assertDeadline();
+
+        const cacheFile = path.join(
+          cacheDirectory,
+          `${message.id}_${attachment.id}.json`
+        );
+
+        let text;
+
+        if (fs.existsSync(cacheFile)) {
+          text = fs.readFileSync(
+            cacheFile,
+            "utf8"
+          );
+        } else {
+          const response = await fetch(
             attachment.url,
             {
-              signal:
-                AbortSignal.timeout(
-                  15000
-                )
+              signal: AbortSignal.timeout(15000),
             }
           );
 
-        if (!response.ok) {
-          throw new Error(
-            `Falha ao ler ${attachment.name}: HTTP ${response.status}.`
-          );
+          if (!response.ok) {
+            throw new Error(
+              `Falha ao ler ${attachment.name}: HTTP ${response.status}.`
+            );
+          }
+
+          text = await response.text();
         }
 
-        const text =
-          await response.text();
-
         if (
-          Buffer.byteLength(
-            text,
-            "utf8"
-          ) >
+          Buffer.byteLength(text, "utf8") >
           2 * 1024 * 1024
         ) {
           throw new Error(
@@ -2672,10 +2713,23 @@ async function readHallRecoveryAuditRecords(client) {
           );
         }
 
-        // Se um JSON estiver inválido, interrompe antes
-        // de restaurar usando um histórico incompleto.
-        const record =
-          JSON.parse(text);
+        const record = JSON.parse(text);
+
+        if (!fs.existsSync(cacheFile)) {
+          const temporary = cacheFile + ".tmp";
+
+          fs.writeFileSync(
+            temporary,
+            text
+          );
+
+          fs.renameSync(
+            temporary,
+            cacheFile
+          );
+        }
+
+        attachmentsRead++;
 
         const snapshot =
           record.after;
@@ -2735,6 +2789,37 @@ async function readHallRecoveryAuditRecords(client) {
             message.id
         });
       }
+    }
+  }
+));
+
+    const failedRead = readResults.find(
+      result => result.status === "rejected"
+    );
+
+    if (failedRead) {
+      throw failedRead.reason;
+    }
+
+    if (
+      page === 0 ||
+      (page + 1) % 5 === 0
+    ) {
+      await updateHallScanProgress(
+        client,
+        {
+          status:
+            `Auditoria: ${seenMessageIds.size} mensagens examinadas; ` +
+            `${attachmentsRead} arquivos lidos.`,
+          totalMessages:
+            seenMessageIds.size,
+          processed:
+            records.length,
+          edited: 0,
+          phase:
+            "Recuperação pelos logs",
+        }
+      ).catch(() => {});
     }
 
     const oldest =

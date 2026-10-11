@@ -38,7 +38,10 @@ import {
 } from "discord.js";
 
 import { dashEmit } from "../utils/dashHub.js";
-import { facsSemanaisAppendFromRM } from "./facsSemanais.js";
+import {
+  facsSemanaisAppendFromRM,
+  facsSemanaisDuplicateFromRM,
+} from "./facsSemanais.js";
 import { graficoManagersEmitUpdate } from "./GraficoManagers.js";
 import {
   rankingAprovadoresManagersEmitUpdate,
@@ -2946,7 +2949,10 @@ export async function registroManagerHandleInteraction(interaction, client) {
     decisionId.startsWith("sc_rm_approve_") ||
     decisionId.startsWith("sc_rm_modal_reject_");
   const locks = globalThis.__SC_RM_DECISION_LOCKS__ ||= new Set();
-  const lockKey = isDecision ? String(interaction.guildId || interaction.guild?.id || "") : null;
+  const guildKey = String(interaction.guildId || interaction.guild?.id || "");
+  const recordId = decisionId.match(/_(\d+)$/)?.[1] || interaction.message?.id;
+  const lockKey = isDecision && recordId ? `${guildKey}:record:${recordId}` : null;
+  const orgLockKeys = [];
 
   if (lockKey && locks.has(lockKey)) {
     const response = {
@@ -3317,7 +3323,10 @@ if (!pode) {
     return true;
   }
 
-  const msg = await canal.messages.fetch(msgId).catch(() => null);
+  const msg = await canal.messages.fetch({
+    message: msgId,
+    force: true,
+  }).catch(() => null);
   if (!msg || !msg.embeds?.length) {
     if (!interaction.replied && !interaction.deferred) {
       await interaction.reply({ content: "❌ Não achei a mensagem do registro.", ephemeral: true }).catch(() => {});
@@ -3462,6 +3471,36 @@ const orgNameForCheck = _extractOrgNameFromDisplay(displayForCheck);
 // ✅ REGRA: ID 00 = pode repetir (org do legal)
 const isLegalOrg = orgIdForCheck === "00";
 
+if (!isLegalOrg) {
+  const keys = [
+    orgIdForCheck
+      ? `${guildKey}:org-id:${String(Number(orgIdForCheck))}`
+      : null,
+    orgNameForCheck
+      ? `${guildKey}:org-name:${_normLine(orgNameForCheck)}`
+      : null,
+  ].filter(Boolean);
+
+  if (keys.some(key => locks.has(key))) {
+    await interaction.editReply({
+      content:
+        "⏳ Esta organização já está sendo analisada em outro registro. Aguarde a decisão.",
+    });
+
+    return true;
+  }
+
+  for (const key of keys) {
+    locks.add(key);
+    orgLockKeys.push(key);
+  }
+}
+
+const facsDuplicate = facsSemanaisDuplicateFromRM(
+  orgIdForCheck,
+  orgNameForCheck
+);
+
 // ✅ helper: checa SOMENTE no FACs.
 // O Registro Manager não pode voltar a usar registros verdes antigos como fonte,
 // pois uma ORG removida do FACs precisa ficar imediatamente liberada para nova aprovação.
@@ -3529,7 +3568,7 @@ async function _isDuplicateByNameConsideringFacs(name) {
 
 // ✅ se tiver ID (e não for 00), bloqueia por ID
 if (orgIdForCheck && !isLegalOrg) {
-  const duplicateInWeek = await _isDuplicateByIdConsideringFacs(orgIdForCheck);
+  const duplicateInWeek = facsDuplicate.byId;
 
   if (duplicateInWeek) {
     const msgTxt =
@@ -3547,8 +3586,8 @@ if (orgIdForCheck && !isLegalOrg) {
 }
 
 // ✅ se NÃO tiver ID, usa fallback por NOME
-if (!orgIdForCheck && orgNameForCheck) {
-  const duplicateInWeek = await _isDuplicateByNameConsideringFacs(orgNameForCheck);
+if (!isLegalOrg && orgNameForCheck) {
+  const duplicateInWeek = facsDuplicate.byName;
 
   if (duplicateInWeek) {
     const msgTxt =
@@ -3577,7 +3616,6 @@ emb.setColor("Green").addFields({
 });
 
 await msg.edit({ embeds: [emb], components: [] });
-interaction.__scRmDecisionApplied = true;
 
 // ===== DONO DO PONTO = MANAGER RESPONSÁVEL (FIX) =====
 // 1) tenta pegar do embed ORIGINAL (mais confiável)
@@ -3623,6 +3661,16 @@ const facsDirectOk = await facsSemanaisAppendFromRM(client, display, facsPayload
 const facsBridgeOk = facsDirectOk
   ? true
   : await bridgeAppendApproved(display, facsPayload);
+
+if (facsBridgeOk) {
+  interaction.__scRmDecisionApplied = true;
+
+  for (const key of orgLockKeys.splice(0)) {
+    locks.delete(key);
+  }
+
+  interaction.__scRmDecisionCommitted?.();
+}
 
 try {
   dashEmit("rm:approved", {
@@ -3994,6 +4042,10 @@ if (
     return true;
   } finally {
     if (lockKey) locks.delete(lockKey);
+
+    for (const key of orgLockKeys) {
+      locks.delete(key);
+    }
   }
 }
 
@@ -4504,11 +4556,32 @@ export async function registroManagerSiteDecision({
     },
   };
 
-  const handled =
-    await registroManagerHandleInteraction(
-      fakeInteraction,
-      client
+  let resolveCommitted;
+
+  const committed = new Promise(resolve => {
+    resolveCommitted = resolve;
+  });
+
+  fakeInteraction.__scRmDecisionCommitted = () => {
+    resolveCommitted(true);
+  };
+
+  const operation = registroManagerHandleInteraction(
+    fakeInteraction,
+    client
+  );
+
+  operation.catch(error => {
+    console.error(
+      "[SC_RM] Falha no processamento da decisão enviada pelo site:",
+      error
     );
+  });
+
+  const handled = await Promise.race([
+    operation,
+    committed,
+  ]);
 
   if (!handled) {
     throw new Error(

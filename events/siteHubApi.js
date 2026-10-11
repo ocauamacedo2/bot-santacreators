@@ -1244,17 +1244,19 @@ const experience = createSiteHubExperience({
           const key = snapshotKey(guild, member, action, payload);
           const saved = snapshots.get(key);
           const deliver = record => {
-            const value = JSON.parse(JSON.stringify(record.value));
-            const readonly = node => {
-              if (!node || typeof node !== 'object') return;
-              if (node.rights) for (const flag of Object.keys(node.rights)) {
-                if (typeof node.rights[flag] === 'boolean' && !['orgs', 'players', 'view'].includes(flag)) node.rights[flag] = false;
-              }
-              Object.values(node).forEach(readonly);
+            const value = JSON.parse(
+              JSON.stringify(record.value)
+            );
+
+            return {
+              ...value,
+              cacheScope: key,
+              delivery: {
+                savedAt: record.at,
+                updating: !record.fresh,
+                source: 'consulta-salva',
+              },
             };
-            if (!record.fresh) readonly(value);
-            return { ...value, cacheScope: key,
-              delivery: { savedAt: record.at, updating: !record.fresh, source: 'consulta-salva' } };
           };
           const previousError = snapshots.error(key);
           if (previousError) {
