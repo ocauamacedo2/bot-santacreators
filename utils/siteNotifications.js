@@ -794,6 +794,7 @@ export function createSiteNotifications({
   }
 
   const notificationBuilds = new Map();
+  const activeNotificationBuilds = new Map();
 
   async function handle({
     guild,
@@ -845,13 +846,31 @@ export function createSiteNotifications({
       if (
         operation?.completedAt &&
         payload.refresh === true &&
-        payload.poll !== true
+        payload.poll !== true &&
+        (
+          payload.requireFresh === true ||
+          Date.now() - operation.completedAt >= 15000
+        )
       ) {
         notificationBuilds.delete(buildKey);
         operation = null;
       }
 
       if (!operation) {
+        const active = activeNotificationBuilds.get(
+          actorKey
+        );
+
+        if (
+          active &&
+          !active.completedAt
+        ) {
+          return {
+            pending: true,
+            retryAfterMs: 3000,
+          };
+        }
+
         if (notificationBuilds.size >= 256) {
           throw Object.assign(
             new Error(
@@ -872,6 +891,11 @@ export function createSiteNotifications({
 
         const record = operation;
 
+        activeNotificationBuilds.set(
+          actorKey,
+          record
+        );
+
         record.promise = build(guild, member).then(
           data => {
             record.data = data;
@@ -881,7 +905,15 @@ export function createSiteNotifications({
             record.error = error;
             record.completedAt = Date.now();
           }
-        );
+        ).finally(() => {
+          if (
+            activeNotificationBuilds.get(actorKey) === record
+          ) {
+            activeNotificationBuilds.delete(
+              actorKey
+            );
+          }
+        });
 
         notificationBuilds.set(buildKey, record);
       }
@@ -909,7 +941,7 @@ export function createSiteNotifications({
       if (!operation.data) {
         return {
           pending: true,
-          retryAfterMs: 1500,
+          retryAfterMs: 3000,
         };
       }
 

@@ -6454,7 +6454,7 @@ ${historicalHallBlock
   ? `${historicalHallBlock}\n`
   : ""}
 
-${parts.seasonMarker
+${historicalHallBlock && parts.seasonMarker
   ? `${parts.seasonMarker}\n`
   : ""}
 
@@ -6571,7 +6571,7 @@ ${historicalHallBlock
   ? `${historicalHallBlock}\n`
   : ""}
 
-${parts.seasonMarker
+${historicalHallBlock && parts.seasonMarker
   ? `${parts.seasonMarker}\n`
   : ""}
 
@@ -21158,9 +21158,13 @@ const introLine =
   );
 
 const preservedSeasonMarker =
-  extractHallPlayerSeasonMarker(
+  getHistoricalHallBlock(
     oldContent
-  );
+  )
+    ? extractHallPlayerSeasonMarker(
+        oldContent
+      )
+    : "";
 
 const preservedClosing =
   extractHallClosingText(
@@ -21999,7 +22003,9 @@ ${introLine}
 
 ${historicalVictoryBlock}
 
-${hallSeasonMarker}
+${data.historicalMigration && hallSeasonMarker
+  ? `${hallSeasonMarker}\n`
+  : ""}
 
 ${data.winnersText}
 

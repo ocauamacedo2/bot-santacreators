@@ -8523,6 +8523,235 @@ if (client.isReady()) {
   client.once('ready', startInterviewAnalysisMaintenance);
 }
 
+const ticketNotificationPages = new Map();
+
+function invalidateTicketNotificationPage(message) {
+  if (!message?.channelId) {
+    return;
+  }
+
+  const key =
+    `${message.guildId}:${message.channelId}`;
+
+  const record = ticketNotificationPages.get(key);
+
+  if (record) {
+    record.invalidated = true;
+
+    if (!record.pending) {
+      ticketNotificationPages.delete(key);
+    }
+  }
+}
+
+client.on(
+  'messageCreate',
+  invalidateTicketNotificationPage
+);
+
+client.on(
+  'messageUpdate',
+  (previous, current) => {
+    invalidateTicketNotificationPage(
+      current || previous
+    );
+  }
+);
+
+client.on(
+  'messageDelete',
+  invalidateTicketNotificationPage
+);
+
+client.on(
+  'messageDeleteBulk',
+  messages => {
+    for (const message of messages.values()) {
+      invalidateTicketNotificationPage(message);
+    }
+  }
+);
+
+client.on(
+  'channelDelete',
+  channel => {
+    ticketNotificationPages.delete(
+      `${channel.guildId}:${channel.id}`
+    );
+  }
+);
+
+async function readTicketNotificationPage(channel) {
+  const key =
+    `${channel.guildId}:${channel.id}`;
+
+  const lastMessageId = String(
+    channel.lastMessageId || ''
+  );
+
+  let record = ticketNotificationPages.get(key);
+
+  if (
+    record &&
+    record.pending &&
+    (
+      record.invalidated ||
+      record.lastMessageId !== lastMessageId
+    )
+  ) {
+    await record.promise;
+
+    return readTicketNotificationPage(channel);
+  }
+
+  if (
+    !record ||
+    record.invalidated ||
+    record.lastMessageId !== lastMessageId ||
+    (
+      !record.pending &&
+      Date.now() - record.completedAt >= 30000
+    )
+  ) {
+    record = {
+      pending: true,
+      invalidated: false,
+      lastMessageId,
+      completedAt: 0,
+      promise: null,
+    };
+
+    const currentRecord = record;
+
+    currentRecord.promise = channel.messages.fetch({
+      limit: 100,
+    }).then(
+      page => {
+        currentRecord.completedAt = Date.now();
+        return page;
+      },
+      error => {
+        if (
+          ticketNotificationPages.get(key) === currentRecord
+        ) {
+          ticketNotificationPages.delete(key);
+        }
+
+        throw error;
+      }
+    ).finally(() => {
+      currentRecord.pending = false;
+    });
+
+    ticketNotificationPages.set(
+      key,
+      currentRecord
+    );
+  }
+
+  const page = await record.promise;
+
+  if (
+    record.invalidated ||
+    record.lastMessageId !== String(
+      channel.lastMessageId || ''
+    )
+  ) {
+    return readTicketNotificationPage(channel);
+  }
+
+  return page;
+}
+
+async function classifyTicketNotification(
+  guild,
+  messages,
+  openerId
+) {
+  const humanMessages = [
+    ...messages.values(),
+  ].filter(
+    message => !message.author?.bot
+  ).sort(
+    (first, second) =>
+      second.createdTimestamp - first.createdTimestamp
+  );
+
+  const lastOpenerMessage = humanMessages.find(
+    message => message.author?.id === openerId
+  ) || null;
+
+  if (!lastOpenerMessage) {
+    return {
+      waitingOn: 'indefinido',
+      lastOpenerMessage: null,
+    };
+  }
+
+  const checkedAuthors = new Map();
+
+  for (const message of humanMessages) {
+    if (
+      message.createdTimestamp <=
+      lastOpenerMessage.createdTimestamp
+    ) {
+      break;
+    }
+
+    const userId = message.author?.id;
+
+    if (
+      !userId ||
+      userId === openerId
+    ) {
+      continue;
+    }
+
+    let isStaff = checkedAuthors.get(userId);
+
+    if (isStaff === undefined) {
+      if (USERS_SEMPRE_PODEM.includes(userId)) {
+        isStaff = true;
+      } else {
+        const authorMember =
+          guild.members.cache.get(userId) ||
+          await guild.members.fetch(userId).catch(error => {
+            if (Number(error.code) === 10007) {
+              return null;
+            }
+
+            throw error;
+          });
+
+        isStaff = Boolean(
+          authorMember &&
+          (
+            temCargoDeResp(authorMember) ||
+            temCargoQuePodeAbrir(authorMember)
+          )
+        );
+      }
+
+      checkedAuthors.set(
+        userId,
+        isStaff
+      );
+    }
+
+    if (isStaff) {
+      return {
+        waitingOn: 'cidadao',
+        lastOpenerMessage,
+      };
+    }
+  }
+
+  return {
+    waitingOn: 'equipe',
+    lastOpenerMessage,
+  };
+}
+
 client.__SC_TICKET_NOTIFICATION_SITE__ = {
   async list({
     guild,
@@ -8590,12 +8819,13 @@ client.__SC_TICKET_NOTIFICATION_SITE__ = {
                 continue;
               }
 
-              const page = await channel.messages.fetch({
-                limit: 100,
-              });
+              const page =
+                await readTicketNotificationPage(
+                  channel
+                );
 
               const classification =
-                await classifyTicketWaitingSide(
+                await classifyTicketNotification(
                   guild,
                   page,
                   openerId

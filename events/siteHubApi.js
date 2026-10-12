@@ -1134,16 +1134,21 @@ const experience = createSiteHubExperience({
         ) {
           const startedAt = Date.now();
 
-          console.info(
-            '[SITE HUB] Notificações recebidas:',
-            {
-              guildId: guild.id,
-              actorId: member.id,
-              action,
-              poll: payload.poll === true,
-              refresh: payload.refresh === true,
-            }
-          );
+          if (
+            action !== 'notifications.snapshot' ||
+            payload.poll !== true
+          ) {
+            console.info(
+              '[SITE HUB] Notificações recebidas:',
+              {
+                guildId: guild.id,
+                actorId: member.id,
+                action,
+                poll: payload.poll === true,
+                refresh: payload.refresh === true,
+              }
+            );
+          }
 
           try {
             const result = await notifications.handle({
@@ -1154,20 +1159,28 @@ const experience = createSiteHubExperience({
               memberVerified: true,
             });
 
-            console.info(
-              '[SITE HUB] Notificações respondidas:',
-              {
-                guildId: guild.id,
-                actorId: member.id,
-                action,
-                durationMs:
-                  Date.now() - startedAt,
-                status:
-                  result.pending === true ? 202 : 200,
-                pending:
-                  result.pending === true,
-              }
-            );
+            const durationMs =
+              Date.now() - startedAt;
+
+            if (
+              payload.poll !== true ||
+              result.pending !== true ||
+              durationMs >= 2000
+            ) {
+              console.info(
+                '[SITE HUB] Notificações respondidas:',
+                {
+                  guildId: guild.id,
+                  actorId: member.id,
+                  action,
+                  durationMs,
+                  status:
+                    result.pending === true ? 202 : 200,
+                  pending:
+                    result.pending === true,
+                }
+              );
+            }
 
             return res
               .status(result.pending === true ? 202 : 200)
