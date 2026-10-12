@@ -1349,9 +1349,23 @@ if (customId.startsWith('enviar|')) {
 
 // ===== ENVIAR PERGUNTA =====
 async function enviarPergunta(channel, membro, index) {
-   const dados = entrevistas.get(membro.id);
-  if (!dados || dados.cancelled || String(dados.channelId) !== String(channel.id) ||
-      dados.index !== index || dados.collector) return;
+  const dados = entrevistas.get(membro.id);
+
+  if (
+    !dados ||
+    dados.cancelled ||
+    String(dados.channelId) !== String(channel.id) ||
+    dados.index !== index ||
+    dados.collector
+  ) {
+    return;
+  }
+
+  // Segura o início das próximas fontes de notificações
+  // durante o envio/avanço da entrevista.
+  globalThis.__SC_INTERVIEW_PRIORITY_UNTIL__ =
+    Date.now() + 10000;
+
   if (index >= perguntas.length) {
   if (dados.finishing || dados.respostas.length !== perguntas.length) return;
 
@@ -1563,10 +1577,22 @@ return;
   dados.collector = collector;
   const ended = new Promise((resolve) => {
     collector.on('collect', (message) => {
+      globalThis.__SC_INTERVIEW_PRIORITY_UNTIL__ =
+        Date.now() + 10000;
+
       collected.set(message.id, message);
-      if (perguntaMsg && BigInt(message.id) > BigInt(perguntaMsg.id)) collector.stop('respondida');
+
+      if (
+        perguntaMsg &&
+        BigInt(message.id) > BigInt(perguntaMsg.id)
+      ) {
+        collector.stop('respondida');
+      }
     });
-    collector.once('end', (_, reason) => resolve(reason));
+
+    collector.once('end', (_, reason) => {
+      resolve(reason);
+    });
   });
   try {
     if (!perguntaMsg) {

@@ -639,78 +639,44 @@ export function createSiteNotifications({
       );
     }
 
-    let nextJob = 0;
     const failedSources = [];
 
-    await Promise.all(
-      Array.from(
-        { length: Math.min(2, jobs.length) },
-        async () => {
-          while (nextJob < jobs.length) {
-            const { label, task } = jobs[nextJob++];
-            const startedAt = Date.now();
-            let outcome = 'falha';
+    for (const { label, task } of jobs) {
+      // Aguarda a janela de prioridade da entrevista.
+      // O timer libera o event loop enquanto espera.
+      // Uma consulta já iniciada termina normalmente.
+      while (
+        Date.now() <
+        Number(
+          globalThis.__SC_INTERVIEW_PRIORITY_UNTIL__ || 0
+        )
+      ) {
+        await new Promise(resolve => {
+          setTimeout(resolve, 500);
+        });
+      }
 
-            console.info(
-              '[SITE NOTIFICATIONS] Fonte iniciada:',
-              {
-                guildId: guild.id,
-                actorId: member.id,
-                source: label,
-              }
-            );
-
-            try {
-              await task();
-              outcome = 'concluida';
-            } catch (error) {
-              if (Number(error?.status) === 403) {
-                outcome = 'acesso-negado';
-                continue;
-              }
-
-              console.error(
-                '[SITE NOTIFICATIONS]',
-                label,
-                error
-              );
-
-              failedSources.push(label);
-
-              warnings.push(
-                `${label}: consulta indisponível; os totais podem estar incompletos.`
-              );
-            } finally {
-              const durationMs =
-                Date.now() - startedAt;
-
-              const details = {
-                guildId: guild.id,
-                actorId: member.id,
-                source: label,
-                durationMs,
-                outcome,
-              };
-
-              if (
-                durationMs >= 5000 ||
-                outcome === 'falha'
-              ) {
-                console.warn(
-                  '[SITE NOTIFICATIONS] Fonte encerrada:',
-                  details
-                );
-              } else {
-                console.info(
-                  '[SITE NOTIFICATIONS] Fonte encerrada:',
-                  details
-                );
-              }
-            }
-          }
+      try {
+        await task();
+      } catch (error) {
+        // Sem acesso: não inclui a fonte para este usuário.
+        if (Number(error?.status) === 403) {
+          continue;
         }
-      )
-    );
+
+        console.error(
+          '[SITE NOTIFICATIONS]',
+          label,
+          error
+        );
+
+        failedSources.push(label);
+
+        warnings.push(
+          `${label}: consulta indisponível; os totais podem estar incompletos.`
+        );
+      }
+    }
 
     if (failedSources.length) {
       throw Object.assign(
@@ -797,13 +763,13 @@ export function createSiteNotifications({
   const activeNotificationBuilds = new Map();
   const notificationBuildQueue = [];
 
-  const NOTIFICATION_RESULT_CACHE_MS = 60000;
+  const NOTIFICATION_RESULT_CACHE_MS = 5 * 60 * 1000;
 
   let runningNotificationBuilds = 0;
 
   function drainNotificationBuildQueue() {
     while (
-      runningNotificationBuilds < 2 &&
+      runningNotificationBuilds < 1 &&
       notificationBuildQueue.length
     ) {
       const job = notificationBuildQueue.shift();
@@ -911,7 +877,10 @@ export function createSiteNotifications({
         payload.refresh === true &&
         payload.poll !== true &&
         (
-          payload.requireFresh === true ||
+          (
+            payload.requireFresh === true &&
+            Date.now() - operation.completedAt >= 30000
+          ) ||
           Date.now() - operation.completedAt >= (
             operation.error
               ? 15000
