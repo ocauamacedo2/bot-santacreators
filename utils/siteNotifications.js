@@ -795,6 +795,65 @@ export function createSiteNotifications({
 
   const notificationBuilds = new Map();
   const activeNotificationBuilds = new Map();
+  const notificationBuildQueue = [];
+
+  const NOTIFICATION_RESULT_CACHE_MS = 60000;
+
+  let runningNotificationBuilds = 0;
+
+  function drainNotificationBuildQueue() {
+    while (
+      runningNotificationBuilds < 2 &&
+      notificationBuildQueue.length
+    ) {
+      const job = notificationBuildQueue.shift();
+
+      runningNotificationBuilds += 1;
+
+      Promise.resolve()
+        .then(() => build(
+          job.guild,
+          job.member
+        ))
+        .then(
+          job.resolve,
+          job.reject
+        )
+        .finally(() => {
+          runningNotificationBuilds -= 1;
+          drainNotificationBuildQueue();
+        });
+    }
+  }
+
+  function queueNotificationBuild(
+    guild,
+    member
+  ) {
+    if (notificationBuildQueue.length >= 32) {
+      return Promise.reject(
+        Object.assign(
+          new Error(
+            'A fila de notificações está ocupada. Tente novamente em alguns instantes.'
+          ),
+          { status: 503 }
+        )
+      );
+    }
+
+    return new Promise(
+      (resolve, reject) => {
+        notificationBuildQueue.push({
+          guild,
+          member,
+          resolve,
+          reject,
+        });
+
+        drainNotificationBuildQueue();
+      }
+    );
+  }
 
   async function handle({
     guild,
@@ -833,9 +892,13 @@ export function createSiteNotifications({
       const now = Date.now();
 
       for (const [key, previous] of notificationBuilds) {
+        const lifetimeMs = previous.error
+          ? 15000
+          : NOTIFICATION_RESULT_CACHE_MS;
+
         if (
           previous.completedAt &&
-          now - previous.completedAt >= 15000
+          now - previous.completedAt >= lifetimeMs
         ) {
           notificationBuilds.delete(key);
         }
@@ -849,7 +912,11 @@ export function createSiteNotifications({
         payload.poll !== true &&
         (
           payload.requireFresh === true ||
-          Date.now() - operation.completedAt >= 15000
+          Date.now() - operation.completedAt >= (
+            operation.error
+              ? 15000
+              : NOTIFICATION_RESULT_CACHE_MS
+          )
         )
       ) {
         notificationBuilds.delete(buildKey);
@@ -896,7 +963,10 @@ export function createSiteNotifications({
           record
         );
 
-        record.promise = build(guild, member).then(
+        record.promise = queueNotificationBuild(
+          guild,
+          member
+        ).then(
           data => {
             record.data = data;
             record.completedAt = Date.now();
