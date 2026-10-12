@@ -131,6 +131,50 @@ const VIP_CLIENTS_COM_PROTECAO_DE_EDICAO = new WeakSet();
 const VIP_CORRECOES_EM_ANDAMENTO = new Set();
 const VIP_PRESERVAR_PREMIACAO_ORIGINAL = true;
 
+const VIP_OPEN_PREPARED_MODAL_PREFIX = "vip_open_prepared_modal:";
+const VIP_PREPARED_MODALS = new Map();
+const VIP_PREPARED_MODAL_TTL_MS = 5 * 60_000;
+
+async function VIP_prepareModal(i, modal, onOpened = null) {
+  const key = i.id;
+  const entry = {
+    userId: i.user.id,
+    guildId: i.guildId,
+    modal,
+    onOpened,
+    expiresAt: Date.now() + VIP_PREPARED_MODAL_TTL_MS,
+  };
+
+  VIP_PREPARED_MODALS.set(key, entry);
+
+  const timer = setTimeout(() => {
+    if (VIP_PREPARED_MODALS.get(key) === entry) {
+      VIP_PREPARED_MODALS.delete(key);
+    }
+  }, VIP_PREPARED_MODAL_TTL_MS);
+
+  timer.unref?.();
+
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`${VIP_OPEN_PREPARED_MODAL_PREFIX}${key}`)
+      .setLabel("Abrir formulário")
+      .setEmoji("📝")
+      .setStyle(ButtonStyle.Primary)
+  );
+
+  try {
+    await i.editReply({
+      content: "✅ Validação concluída. Clique abaixo para abrir o formulário.",
+      components: [row],
+    });
+  } catch (error) {
+    VIP_PREPARED_MODALS.delete(key);
+    clearTimeout(timer);
+    throw error;
+  }
+}
+
 function VIP_hasHandled(i) {
   try {
     if (!i?.id) return false;
@@ -1502,12 +1546,96 @@ const isVipModalCriar =
   (i.customId === VIP_MODAL_ID || i.customId.startsWith(`${VIP_MODAL_ID}:`));
     const isVipRegistroButtons = i.isButton?.() && [VIP_BTN_SOLICITADO_ID, VIP_BTN_PAGO_ID, VIP_BTN_REPROVAR_ID].includes(i.customId);
     const isVipModalReprovar = i.isModalSubmit?.() && i.customId?.startsWith(`${VIP_REPROVE_MODAL_ID}:`);
+    const isVipPreparedModalButton =
+      i.isButton?.() &&
+      i.customId?.startsWith(VIP_OPEN_PREPARED_MODAL_PREFIX);
 
-    if (!isVipMenuButton && !isVipModalCriar && !isVipRegistroButtons && !isVipModalReprovar && !isVipCitySelect) {
+    if (!isVipMenuButton && !isVipModalCriar && !isVipRegistroButtons && !isVipModalReprovar && !isVipCitySelect && !isVipPreparedModalButton) {
       return false;
     }
 
     if (VIP_hasHandled(i)) return true;
+
+    if (isVipPreparedModalButton) {
+      if (!canRegister(i.member)) {
+        await safeReply(i, {
+          content: "🚫 Você não tem permissão para registrar.",
+          ephemeral: true,
+        });
+        return true;
+      }
+
+      const key = i.customId.slice(VIP_OPEN_PREPARED_MODAL_PREFIX.length);
+      const entry = VIP_PREPARED_MODALS.get(key);
+
+      if (!entry || Date.now() >= entry.expiresAt) {
+        if (entry) VIP_PREPARED_MODALS.delete(key);
+
+        await safeReply(i, {
+          content: "⌛ Este formulário expirou. Clique novamente em Abrir formulário no menu de VIP.",
+          ephemeral: true,
+        });
+        return true;
+      }
+
+      if (entry.userId !== i.user.id || entry.guildId !== i.guildId) {
+        await safeReply(i, {
+          content: "🚫 Este formulário não pertence a você ou a este servidor.",
+          ephemeral: true,
+        });
+        return true;
+      }
+
+      if (i.deferred || i.replied) {
+        console.warn("[VIP] A abertura do modal chegou com a interação já respondida.", {
+          interactionId: i.id,
+          customId: i.customId,
+          deferred: i.deferred,
+          replied: i.replied,
+        });
+
+        await safeReply(i, {
+          content: "⚠️ Não consegui abrir o formulário neste clique. Clique novamente no botão Abrir formulário.",
+          ephemeral: true,
+        });
+        return true;
+      }
+
+      try {
+        await i.showModal(entry.modal);
+      } catch (error) {
+        console.error("[VIP] Falha ao abrir formulário preparado:", {
+          code: error?.code ?? error?.rawError?.code ?? null,
+          message: error?.message ?? String(error),
+          interactionId: i.id,
+          ageMs: typeof i.createdTimestamp === "number"
+            ? Date.now() - i.createdTimestamp
+            : null,
+        });
+
+        if (!isUnknownInteractionError(error)) {
+          await safeReply(i, {
+            content: "⚠️ Não consegui abrir o formulário. Tente clicar novamente.",
+            ephemeral: true,
+          });
+        }
+
+        return true;
+      }
+
+      if (typeof entry.onOpened === "function") {
+        try {
+          await entry.onOpened(i);
+        } catch (error) {
+          console.error("[VIP] Falha na auditoria do formulário aberto:", {
+            code: error?.code ?? error?.rawError?.code ?? null,
+            message: error?.message ?? String(error),
+          });
+        }
+      }
+
+      return true;
+    }
 
     // ── 1) BOTÕES DO MENU: abrir + filtros ────────────────────────
     if (isVipMenuButton) {
@@ -1515,6 +1643,10 @@ const isVipModalCriar =
         if (!canRegister(i.member)) {
           await safeReply(i, { content: "🚫 Você não tem permissão para registrar.", ephemeral: true });
           return true;
+        }
+
+        if (!i.deferred && !i.replied) {
+          await i.deferReply({ ephemeral: true });
         }
 
         const leaderContext = await VIP_getLeaderRequestContext(i.member);
@@ -1544,27 +1676,37 @@ const isVipModalCriar =
           modal.setCustomId(`${VIP_MODAL_ID}:${directCityKey}`);
 
           try {
-            await i.showModal(modal);
-
-            await VIP_sendAuditLog(client, i.guild, {
-              title: "🌆 Modal de VIP aberto automaticamente",
-              color: MENU_COLOR,
-              action: "ABRIU_MODAL_VIP_AUTO",
-              interaction: i,
-              actor: i.user,
-              channel: i.channel,
-              during: "O sistema validou automaticamente o líder e abriu o modal de VIP.",
-              before: "Antes: usuário clicou em Abrir formulário.",
-              after: [
-                `Depois: modal aberto para **${CITIES[directCityKey].label}**.`,
-                leaderContext.orgName
-                  ? `Organização detectada: **${leaderContext.orgName}**.`
-                  : "Organização: preenchimento manual.",
-              ].join("\n"),
-              extra: `Fonte da validação: \`${leaderContext.source}\``,
+            await VIP_prepareModal(i, modal, async (modalInteraction) => {
+              await VIP_sendAuditLog(client, modalInteraction.guild, {
+                title: "🌆 Modal de VIP aberto automaticamente",
+                color: MENU_COLOR,
+                action: "ABRIU_MODAL_VIP_AUTO",
+                interaction: modalInteraction,
+                actor: modalInteraction.user,
+                channel: modalInteraction.channel,
+                during: "O sistema validou automaticamente o líder e abriu o modal de VIP.",
+                before: "Antes: usuário clicou em Abrir formulário.",
+                after: [
+                  `Depois: modal aberto para **${CITIES[directCityKey].label}**.`,
+                  leaderContext.orgName
+                    ? `Organização detectada: **${leaderContext.orgName}**.`
+                    : "Organização: preenchimento manual.",
+                ].join("\n"),
+                extra: `Fonte da validação: \`${leaderContext.source}\``,
+              });
             });
           } catch (err) {
-            console.error('[VIP] showModal automático falhou:', err);
+            console.error("[VIP] Preparação do modal automático falhou:", {
+              code: err?.code ?? err?.rawError?.code ?? null,
+              message: err?.message ?? String(err),
+              interactionId: i.id,
+            });
+
+            await safeReply(i, {
+              content: "⚠️ Não consegui preparar o formulário. Tente novamente pelo menu de VIP.",
+              components: [],
+              ephemeral: true,
+            });
           }
 
           return true;
@@ -1641,6 +1783,10 @@ const isVipModalCriar =
         return true;
       }
 
+      if (!i.deferred && !i.replied) {
+        await i.deferReply({ ephemeral: true });
+      }
+
       const leaderContext = await VIP_getLeaderRequestContext(i.member);
 
       if (leaderContext.strict && !leaderContext.ok) {
@@ -1670,22 +1816,32 @@ const isVipModalCriar =
       modal.setCustomId(`${VIP_MODAL_ID}:${cityKey}`);
 
       try {
-        await i.showModal(modal);
-
-        await VIP_sendAuditLog(client, i.guild, {
-          title: "🌆 Modal de VIP aberto",
-          color: MENU_COLOR,
-          action: "ABRIU_MODAL_VIP",
-          interaction: i,
-          actor: i.user,
-          channel: i.channel,
-          during: "Usuário selecionou a cidade e o sistema abriu o modal de registro de VIP.",
-          before: "Antes: usuário estava no seletor de cidade.",
-          after: `Depois: modal aberto para preenchimento.\nCidade selecionada: **${CITIES[cityKey].label}** (\`${cityKey}\`)`,
-          extra: `Dados automáticos do cronograma:\n\`\`\`json\n${VIP_cut(JSON.stringify(eventData || {}, null, 2), 900)}\n\`\`\``,
+        await VIP_prepareModal(i, modal, async (modalInteraction) => {
+          await VIP_sendAuditLog(client, modalInteraction.guild, {
+            title: "🌆 Modal de VIP aberto",
+            color: MENU_COLOR,
+            action: "ABRIU_MODAL_VIP",
+            interaction: modalInteraction,
+            actor: modalInteraction.user,
+            channel: modalInteraction.channel,
+            during: "Usuário selecionou a cidade e o sistema abriu o modal de registro de VIP.",
+            before: "Antes: usuário estava no seletor de cidade.",
+            after: `Depois: modal aberto para preenchimento.\nCidade selecionada: **${CITIES[cityKey].label}** (\`${cityKey}\`)`,
+            extra: `Dados automáticos do cronograma:\n\`\`\`json\n${VIP_cut(JSON.stringify(eventData || {}, null, 2), 900)}\n\`\`\``,
+          });
         });
       } catch (err) {
-        console.error('[VIP] showModal (city select) falhou:', err);
+        console.error("[VIP] Preparação do modal da cidade falhou:", {
+          code: err?.code ?? err?.rawError?.code ?? null,
+          message: err?.message ?? String(err),
+          interactionId: i.id,
+        });
+
+        await safeReply(i, {
+          content: "⚠️ Não consegui preparar o formulário. Selecione a cidade novamente pelo menu de VIP.",
+          components: [],
+          ephemeral: true,
+        });
       }
 
       return true;

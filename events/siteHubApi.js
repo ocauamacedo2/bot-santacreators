@@ -1132,17 +1132,66 @@ const experience = createSiteHubExperience({
           action === 'notifications.snapshot' ||
           action === 'notifications.seen'
         ) {
-          const result = await notifications.handle({
-            guild,
-            member,
-            action,
-            payload,
-            memberVerified: true,
-          });
+          const startedAt = Date.now();
 
-          return res
-            .status(result.pending === true ? 202 : 200)
-            .json(result);
+          console.info(
+            '[SITE HUB] Notificações recebidas:',
+            {
+              guildId: guild.id,
+              actorId: member.id,
+              action,
+              poll: payload.poll === true,
+              refresh: payload.refresh === true,
+            }
+          );
+
+          try {
+            const result = await notifications.handle({
+              guild,
+              member,
+              action,
+              payload,
+              memberVerified: true,
+            });
+
+            console.info(
+              '[SITE HUB] Notificações respondidas:',
+              {
+                guildId: guild.id,
+                actorId: member.id,
+                action,
+                durationMs:
+                  Date.now() - startedAt,
+                status:
+                  result.pending === true ? 202 : 200,
+                pending:
+                  result.pending === true,
+              }
+            );
+
+            return res
+              .status(result.pending === true ? 202 : 200)
+              .json(result);
+          } catch (error) {
+            console.warn(
+              '[SITE HUB] Notificações falharam:',
+              {
+                guildId: guild.id,
+                actorId: member.id,
+                action,
+                durationMs:
+                  Date.now() - startedAt,
+                status:
+                  error.status || error.statusCode || null,
+                code:
+                  error.code || null,
+                name:
+                  error.name,
+              }
+            );
+
+            throw error;
+          }
         }
 
         if (

@@ -648,11 +648,24 @@ export function createSiteNotifications({
         async () => {
           while (nextJob < jobs.length) {
             const { label, task } = jobs[nextJob++];
+            const startedAt = Date.now();
+            let outcome = 'falha';
+
+            console.info(
+              '[SITE NOTIFICATIONS] Fonte iniciada:',
+              {
+                guildId: guild.id,
+                actorId: member.id,
+                source: label,
+              }
+            );
 
             try {
               await task();
+              outcome = 'concluida';
             } catch (error) {
               if (Number(error?.status) === 403) {
+                outcome = 'acesso-negado';
                 continue;
               }
 
@@ -667,6 +680,32 @@ export function createSiteNotifications({
               warnings.push(
                 `${label}: consulta indisponível; os totais podem estar incompletos.`
               );
+            } finally {
+              const durationMs =
+                Date.now() - startedAt;
+
+              const details = {
+                guildId: guild.id,
+                actorId: member.id,
+                source: label,
+                durationMs,
+                outcome,
+              };
+
+              if (
+                durationMs >= 5000 ||
+                outcome === 'falha'
+              ) {
+                console.warn(
+                  '[SITE NOTIFICATIONS] Fonte encerrada:',
+                  details
+                );
+              } else {
+                console.info(
+                  '[SITE NOTIFICATIONS] Fonte encerrada:',
+                  details
+                );
+              }
             }
           }
         }
