@@ -497,6 +497,9 @@ export function createApprovalWorkflow(cfg) {
     token,
     interaction,
   }) {
+    const receivedAt = Date.now();
+    const preparedAtStart = tokens.get(token);
+
     const lockKey =
       `${guild.id}:${message.id}`;
 
@@ -545,21 +548,60 @@ export function createApprovalWorkflow(cfg) {
       if (
         !bypassConfirmation(member)
       ) {
-        const prepared =
-          tokens.get(token);
+        const prepared = preparedAtStart;
 
-        if (
-          !prepared ||
-          prepared.expiresAt < Date.now() ||
+        let confirmationFailure = null;
+
+        if (!prepared) {
+          confirmationFailure = 'ausente';
+        } else if (
+          !Number.isFinite(prepared.expiresAt) ||
+          prepared.expiresAt < receivedAt
+        ) {
+          confirmationFailure = 'expirada';
+        } else if (
           prepared.guildId !== guild.id ||
           prepared.actorId !== member.id ||
           prepared.msgId !== message.id ||
           prepared.action !== action ||
-          prepared.reqId !== reqId ||
+          prepared.reqId !== reqId
+        ) {
+          confirmationFailure = 'vinculo-diferente';
+        } else if (
           prepared.revision !== fingerprint(data)
         ) {
+          confirmationFailure = 'pedido-alterado';
+        }
+
+        if (confirmationFailure) {
+          console.warn(
+            '[APPROVAL WORKFLOW] Confirmação recusada:',
+            {
+              workflow: cfg.key,
+              guildId: guild.id,
+              actorId: member.id,
+              msgId: message.id,
+              action,
+              reqId,
+              reason: confirmationFailure,
+              validationDurationMs:
+                Date.now() - receivedAt,
+            }
+          );
+
+          const confirmationMessages = {
+            ausente:
+              'A confirmação não está disponível. Abra novamente o pedido e confirme a decisão.',
+            expirada:
+              'A confirmação já estava expirada quando o bot recebeu a decisão. Confirme novamente.',
+            'vinculo-diferente':
+              'A confirmação não corresponde a esta conta, pedido ou ação. Abra novamente o pedido e confirme a decisão.',
+            'pedido-alterado':
+              'Os dados do pedido mudaram depois da confirmação. Confira os dados atuais e confirme novamente.',
+          };
+
           throw error(
-            'Confirmação expirada ou pedido alterado. Confirme novamente.',
+            confirmationMessages[confirmationFailure],
             409
           );
         }
