@@ -365,7 +365,23 @@ function installInterviewLifecycle(client) {
         String(newChannel.parentId) !== '1359244725781266492') stop(newChannel);
   });
 }
-async function reanexar(client) {
+let interviewReattachPromise = null;
+
+function reanexar(client) {
+  if (interviewReattachPromise) {
+    return interviewReattachPromise;
+  }
+
+  interviewReattachPromise = Promise.resolve()
+    .then(() => executarReanexacao(client))
+    .finally(() => {
+      interviewReattachPromise = null;
+    });
+
+  return interviewReattachPromise;
+}
+
+async function executarReanexacao(client) {
   installInterviewLifecycle(client);
  if (entrevistas.size === 0) {
  console.log('[Entrevista] Nenhuma entrevista pendente para reanexar.');
@@ -422,7 +438,7 @@ async function reanexar(client) {
 
       await salvarEntrevistasEmDisco();
 
-      await startInterviewIntelligence({
+      void startInterviewIntelligence({
         client,
 
         channel,
@@ -448,8 +464,8 @@ async function reanexar(client) {
         console.warn(
           '[INTERVIEW_INTELLIGENCE] Falha não crítica ao reanexar telemetria:',
           error?.message || error
-);
- });
+        );
+      });
       // Preserva perguntas e respostas para reconstrução e auditoria.
       // enviarPergunta reutiliza a pergunta pendente quando possível.
  console.log(

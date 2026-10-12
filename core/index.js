@@ -1580,6 +1580,14 @@ client.once("ready", async () => {
   if (client.__coreBootState.readyBootExecuted) return;
   client.__coreBootState.readyBootExecuted = true;
 
+  try {
+    console.log("[CORE] PRIORIDADE: retomando entrevistas preservadas.");
+    await entrevista.reanexar(client);
+    console.log("[CORE] Retomada inicial das entrevistas concluída.");
+  } catch (error) {
+    console.error("[CORE] Falha ao retomar entrevistas no início do Ready:", error);
+  }
+
   // 🚀 PRIORIDADE MÁXIMA: Entrar na call antes de carregar módulos pesados
   try {
     console.log("[CORE] PRIORIDADE MÁXIMA: Iniciando AutoJoin.");

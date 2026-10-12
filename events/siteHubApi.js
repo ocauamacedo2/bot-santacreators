@@ -1135,8 +1135,11 @@ const experience = createSiteHubExperience({
           const startedAt = Date.now();
 
           if (
-            action !== 'notifications.snapshot' ||
-            payload.poll !== true
+            process.env.SITE_NOTIFICATIONS_DEBUG === '1' &&
+            (
+              action !== 'notifications.snapshot' ||
+              payload.poll !== true
+            )
           ) {
             console.info(
               '[SITE HUB] Notificações recebidas:',
@@ -1163,8 +1166,13 @@ const experience = createSiteHubExperience({
               Date.now() - startedAt;
 
             if (
-              payload.poll !== true ||
-              result.pending !== true ||
+              (
+                process.env.SITE_NOTIFICATIONS_DEBUG === '1' &&
+                (
+                  payload.poll !== true ||
+                  result.pending !== true
+                )
+              ) ||
               durationMs >= 2000
             ) {
               console.info(
