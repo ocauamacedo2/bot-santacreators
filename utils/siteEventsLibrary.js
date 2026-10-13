@@ -1577,6 +1577,25 @@ export function createSiteEventsLibrary({ client }) {
             decision.value;
         }
 
+        const eventAliases = new Set(event.aliasIds || [event.id]);
+        eventAliases.add(event.id);
+
+        for (const [key, publication] of Object.entries(state.publications || {})) {
+          if (
+            !key.startsWith(guild.id + ':') ||
+            !publication ||
+            typeof publication !== 'object' ||
+            Array.isArray(publication) ||
+            !eventAliases.has(publication.eventId)
+          ) continue;
+
+          if (decision.field === 'name') {
+            publication.name = decision.value;
+          } else {
+            publication.cover = decision.value;
+          }
+        }
+
         await save(state);
 
         return { ok: true };
