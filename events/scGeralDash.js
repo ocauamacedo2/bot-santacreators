@@ -1178,9 +1178,22 @@ function freezeLastWeekIfNeeded(items) {
   // ✅ já congelado → não mexe
   if (snap.totals[lastWeekKey] != null) return;
 
-  const total = items.filter(
+  const historicalItems = items.filter(
     (x) => weekKeyFromDateSP(x.ts) === lastWeekKey
-  ).length;
+  );
+
+  if (!historicalItems.length) {
+    console.warn(
+      "[SC_GERAL_DASH] Semana não congelada: a coleta não trouxe registros históricos.",
+      {
+        weekKey: lastWeekKey
+      }
+    );
+
+    return;
+  }
+
+  const total = historicalItems.length;
 
   snap.totals[lastWeekKey] = total;
   saveWeeklySnapshot(snap);
@@ -3400,16 +3413,55 @@ async function rebuildRecentWeeklySnapshots(items, weeksBack = 5) {
   snap.totals = snap.totals || {};
 
   const wkNow = weekKeyFromDateSP(nowSP());
+  let changed = false;
 
   for (let weeksAgo = 1; weeksAgo <= weeksBack; weeksAgo++) {
     const historicalWeekKey = addDaysToWeekKey(wkNow, -(weeksAgo * 7));
     if (!historicalWeekKey) continue;
 
-    const historical = await aggregateByWeek(items, historicalWeekKey);
-    snap.totals[historicalWeekKey] = historical.total;
+    const hasHistoricalItems = items.some(
+      item =>
+        weekKeyFromDateSP(item.ts) === historicalWeekKey
+    );
+
+    if (!hasHistoricalItems) {
+      console.warn(
+        "[SC_GERAL_DASH] Histórico preservado: a coleta não trouxe registros da semana.",
+        {
+          weekKey: historicalWeekKey,
+          previousTotal:
+            snap.totals[historicalWeekKey] ?? null
+        }
+      );
+
+      continue;
+    }
+
+    const historical = await aggregateByWeek(
+      items,
+      historicalWeekKey
+    );
+
+    const total = Number(historical.total);
+
+    if (
+      !Number.isSafeInteger(total) ||
+      total < 0
+    ) {
+      throw new Error(
+        `Total histórico inválido para a semana ${historicalWeekKey}.`
+      );
+    }
+
+    if (snap.totals[historicalWeekKey] !== total) {
+      snap.totals[historicalWeekKey] = total;
+      changed = true;
+    }
   }
 
-  saveWeeklySnapshot(snap);
+  if (changed) {
+    saveWeeklySnapshot(snap);
+  }
 }
 
 // ============================================================================
