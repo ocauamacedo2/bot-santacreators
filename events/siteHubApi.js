@@ -1407,7 +1407,10 @@ const experience = createSiteHubExperience({
           );
 
           return res.json(
-            getNpsSiteSnapshot({ guild })
+            getNpsSiteSnapshot({
+              guild,
+              client
+            })
           );
         }
 

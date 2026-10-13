@@ -14283,16 +14283,46 @@ function saveNpsSiteSnapshot(results) {
   fs.renameSync(temporary, file);
 }
 
-export function getNpsSiteSnapshot({ guild }) {
+let npsSiteRecoveryRequestedAt = 0;
+
+export function getNpsSiteSnapshot({
+  guild,
+  client = activeClient
+}) {
   const file = path.join(
     DATA_DIR,
     'sc_nps_site_snapshot.json'
   );
 
   if (!fs.existsSync(file)) {
+    const now =
+      Date.now();
+
+    if (
+      client &&
+      now - npsSiteRecoveryRequestedAt >= 60000
+    ) {
+      npsSiteRecoveryRequestedAt =
+        now;
+
+      void updateDashboard(
+        client,
+        "missing_site_snapshot"
+      ).catch(error => {
+        console.error(
+          "[NPS Cultura] Falha ao recuperar o snapshot ausente:",
+          {
+            file,
+            error
+          }
+        );
+      });
+    }
+
     throw Object.assign(
       new Error(
-        'O NPS ainda não gerou uma atualização válida para o site.'
+        'O NPS ainda não possui snapshot disponível. ' +
+        'A geração foi solicitada quando havia um cliente Discord disponível.'
       ),
       { status: 503 }
     );

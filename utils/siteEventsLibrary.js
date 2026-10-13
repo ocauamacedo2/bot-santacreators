@@ -261,6 +261,70 @@ export function createSiteEventsLibrary({ client }) {
       state = { evt3Events: {} };
     }
 
+    if (
+      !state ||
+      typeof state !== 'object' ||
+      Array.isArray(state)
+    ) {
+      throw fail(
+        503,
+        'O estado dos eventos possui estrutura inválida. Nenhum catálogo vazio foi criado para substituir os dados.'
+      );
+    }
+
+    if (state.evt3Events == null) {
+      state.evt3Events = {};
+    }
+
+    if (
+      typeof state.evt3Events !== 'object' ||
+      Array.isArray(state.evt3Events)
+    ) {
+      throw fail(
+        503,
+        'O campo evt3Events está inválido. Os dados existentes foram preservados.'
+      );
+    }
+
+    for (const [id, value] of Object.entries(state.evt3Events)) {
+      if (
+        !value ||
+        typeof value !== 'object' ||
+        Array.isArray(value)
+      ) {
+        throw fail(
+          503,
+          'O evento ' + id + ' possui estrutura inválida. Os dados existentes foram preservados.'
+        );
+      }
+
+      if (
+        value.areas != null &&
+        (
+          typeof value.areas !== 'object' ||
+          Array.isArray(value.areas)
+        )
+      ) {
+        throw fail(
+          503,
+          'As áreas do evento ' + id + ' estão inválidas. Os dados existentes foram preservados.'
+        );
+      }
+
+      for (const [section, area] of Object.entries(value.areas || {})) {
+        if (
+          !area ||
+          typeof area !== 'object' ||
+          Array.isArray(area)
+        ) {
+          throw fail(
+            503,
+            'A área ' + section + ' do evento ' + id + ' está inválida. Os dados existentes foram preservados.'
+          );
+        }
+      }
+    }
+
     const grouped = new Map();
     for (const [id, value] of Object.entries(state.evt3Events || {})) {
       const name = String(value.eventName || 'Evento')
@@ -394,7 +458,19 @@ export function createSiteEventsLibrary({ client }) {
     }
 
     for (const embed of message.embeds) {
-      if (embed.image?.url) add(embed.image.url, 'image');
+      if (embed.image?.url) {
+        add(
+          embed.image.url,
+          'image'
+        );
+      }
+
+      if (embed.thumbnail?.url) {
+        add(
+          embed.thumbnail.url,
+          'image'
+        );
+      }
     }
 
     for (

@@ -3981,6 +3981,95 @@ async function autoCorrectDuplications(channel, client, options = {}) {
       throw new Error("O ranking foi alterado durante a varredura. A reconstrução não foi publicada.");
     }
 
+    const previousRankings =
+      loadHallRankings();
+
+    const previousOrgs =
+      getLifetimeHallOrgs(
+        previousRankings
+      );
+
+    const rebuiltOrgs =
+      getLifetimeHallOrgs(
+        rankings
+      );
+
+    const sumOrgVictories = items => {
+      let total = 0;
+
+      for (const item of items) {
+        const value =
+          Number(item.total);
+
+        if (
+          !Number.isSafeInteger(value) ||
+          value < 0
+        ) {
+          throw new Error(
+            "Foi encontrado um total inválido no ranking de organizações. A reconstrução não foi publicada."
+          );
+        }
+
+        total += value;
+      }
+
+      return total;
+    };
+
+    const previousOrgTotal =
+      sumOrgVictories(
+        previousOrgs
+      );
+
+    const rebuiltOrgTotal =
+      sumOrgVictories(
+        rebuiltOrgs
+      );
+
+    if (
+      rebuiltOrgTotal <
+      previousOrgTotal
+    ) {
+      const diagnosticFile =
+        path.join(
+          DATA_DIR,
+          `hall_org_rebuild_review_${checkpoint.generation}.json`
+        );
+
+      const temporary =
+        diagnosticFile + ".tmp";
+
+      fs.writeFileSync(
+        temporary,
+        JSON.stringify(
+          {
+            generatedAt:
+              Date.now(),
+            generation:
+              checkpoint.generation,
+            previousOrgTotal,
+            rebuiltOrgTotal,
+            previousOrgs,
+            rebuiltOrgs
+          },
+          null,
+          2
+        ),
+        "utf8"
+      );
+
+      fs.renameSync(
+        temporary,
+        diagnosticFile
+      );
+
+      throw new Error(
+        `A reconstrução reduziria o histórico de organizações de ${previousOrgTotal} para ${rebuiltOrgTotal} GGs. ` +
+        "O ranking existente foi preservado. " +
+        `Comparação salva em ${diagnosticFile}.`
+      );
+    }
+
     rankings.lastUpdatedAt = Date.now();
     checkpoint.phase = "publishing";
     checkpoint.processed = processed;

@@ -1076,26 +1076,13 @@ async function executarAtualizacaoDashboardAusenciasMensal(client) {
       AUSENCIAS_GERAIS_CHANNEL_ID
     );
 
-  const canalDestino =
-    await client.channels.fetch(
-      AUSENCIAS_DASHBOARD_CHANNEL_ID
-    );
-
   if (
     !canalFonte?.isTextBased?.() ||
-    !canalFonte.messages
+    !canalFonte.messages ||
+    !canalFonte.guild
   ) {
     throw new Error(
       'O canal geral de ausências está indisponível ou não permite leitura de mensagens.'
-    );
-  }
-
-  if (
-    !canalDestino?.isTextBased?.() ||
-    !canalDestino.messages
-  ) {
-    throw new Error(
-      'O canal do dashboard de ausências está indisponível ou não é textual.'
     );
   }
 
@@ -1287,12 +1274,12 @@ while (atual.getTime() <= fimLimitado.getTime()) {
     const isDiscordUser = !String(rankingId).startsWith('nome:');
 
     const nomeResolvido = isDiscordUser
-      ? await resolverNomeDashboardAusencias(client, canalDestino.guild, rankingId)
+      ? await resolverNomeDashboardAusencias(client, canalFonte.guild, rankingId)
       : limparNomeRanking(String(rankingId).replace('nome:', ''));
 
     const membro =
       isDiscordUser
-        ? canalDestino.guild.members.cache.get(
+        ? canalFonte.guild.members.cache.get(
             String(rankingId)
           )
         : null;
@@ -1337,6 +1324,20 @@ while (atual.getTime() <= fimLimitado.getTime()) {
     rankingOrdenado,
     totalAusencias,
   });
+
+  const canalDestino =
+    await client.channels.fetch(
+      AUSENCIAS_DASHBOARD_CHANNEL_ID
+    );
+
+  if (
+    !canalDestino?.isTextBased?.() ||
+    !canalDestino.messages
+  ) {
+    throw new Error(
+      'O snapshot de ausências foi salvo, mas o canal de publicação do dashboard está indisponível.'
+    );
+  }
 
   const svg = montarSvgDashboardAusencias({
     mesNome,
@@ -1486,21 +1487,41 @@ async function enviarBotaoFixoPorCanal(client, canalId) {
 // ===== EXPORTS =====
 
 export async function ausenciasOnReady(client) {
-  console.log('✅ [AUSÊNCIAS] (somente registro) online');
-  for (const canalId of Object.values(CANAIS_REGISTRO)) {
-    await enviarBotaoFixoPorCanal(client, canalId);
+  console.log(
+    '[AUSÊNCIAS] Inicializando registros e snapshot mensal.'
+  );
+
+  if (!globalThis.__AUSENCIAS_DASHBOARD_INTERVAL__) {
+    globalThis.__AUSENCIAS_DASHBOARD_INTERVAL__ =
+      setInterval(() => {
+        atualizarDashboardAusenciasMensal(client).catch(err => {
+          console.error(
+            '[AUSÊNCIAS DASHBOARD] erro ao atualizar dashboard mensal:',
+            err
+          );
+        });
+      }, 60 * 60 * 1000);
   }
 
   await atualizarDashboardAusenciasMensal(client).catch(err => {
-    console.error('[AUSÊNCIAS DASHBOARD] erro ao atualizar dashboard mensal:', err);
+    console.error(
+      '[AUSÊNCIAS DASHBOARD] falha na geração inicial do snapshot:',
+      err
+    );
   });
 
-  if (!globalThis.__AUSENCIAS_DASHBOARD_INTERVAL__) {
-    globalThis.__AUSENCIAS_DASHBOARD_INTERVAL__ = setInterval(() => {
-      atualizarDashboardAusenciasMensal(client).catch(err => {
-        console.error('[AUSÊNCIAS DASHBOARD] erro ao atualizar dashboard mensal:', err);
-      });
-    }, 60 * 60 * 1000);
+  for (const canalId of Object.values(CANAIS_REGISTRO)) {
+    try {
+      await enviarBotaoFixoPorCanal(
+        client,
+        canalId
+      );
+    } catch (error) {
+      console.error(
+        `[AUSÊNCIAS] Não foi possível instalar o botão no canal ${canalId}:`,
+        error
+      );
+    }
   }
 }
 

@@ -4228,8 +4228,12 @@ function wireHub(client) {
   if (client.__scGeralWeeklyRankHubWired) return;
   client.__scGeralWeeklyRankHubWired = true;
 
+let dirtyRevision = 0;
+
 const markDirty = (opts = {}) => {
+  dirtyRevision += 1;
   DIRTY = true;
+
   if (opts.invalidateScanCache) {
     CACHE = { at: 0, payload: null };
     DEBUG.weekKeysFound = {};
@@ -4238,18 +4242,41 @@ const markDirty = (opts = {}) => {
 
 const scheduleFastSync = () => {
   if (client.__SC_GERAL_RANK_FAST_SYNC_TIMER__) {
-    clearTimeout(client.__SC_GERAL_RANK_FAST_SYNC_TIMER__);
+    return;
   }
 
   client.__SC_GERAL_RANK_FAST_SYNC_TIMER__ = setTimeout(async () => {
     client.__SC_GERAL_RANK_FAST_SYNC_TIMER__ = null;
 
+    const revisionAtStart =
+      dirtyRevision;
+
     try {
       clearWeeklyRankCache();
-      await safeUpdate(client, "hub fast sync", { scanMode: "full" });
-      DIRTY = false;
+
+      const didRun =
+        await safeUpdate(
+          client,
+          "hub fast sync",
+          { scanMode: "full" }
+        );
+
+      if (
+        didRun &&
+        dirtyRevision === revisionAtStart
+      ) {
+        DIRTY = false;
+      } else {
+        DIRTY = true;
+        scheduleFastSync();
+      }
     } catch (e) {
-      console.error("[SC_GERAL_WEEKLY_RANK] erro no fast sync:", e);
+      DIRTY = true;
+
+      console.error(
+        "[SC_GERAL_WEEKLY_RANK] erro no fast sync:",
+        e
+      );
     }
   }, 5000);
 };
@@ -4412,13 +4439,30 @@ dashOn("identity:migrated", () => {
       const now = Date.now();
       if (now - LAST_LIGHT_AT < COOLDOWN_LIGHT_MS) return;
 
-      // ✅ SÓ limpa o DIRTY se a atualização rodar com sucesso
-      const didRun = await safeUpdate(client, "hub dirty (light)", { scanMode: "light" });
+      const revisionAtStart =
+        dirtyRevision;
+
+      const didRun =
+        await safeUpdate(
+          client,
+          "hub dirty (light)",
+          { scanMode: "light" }
+        );
+
       if (didRun) {
         LAST_LIGHT_AT = now;
-        DIRTY = false;
+
+        DIRTY =
+          dirtyRevision !== revisionAtStart;
       }
-    } catch {}
+    } catch (error) {
+      DIRTY = true;
+
+      console.error(
+        "[SC_GERAL_WEEKLY_RANK] Falha na atualização de segurança:",
+        error
+      );
+    }
   }, 30 * 1000);
 }
 
@@ -6577,17 +6621,11 @@ export async function adjustWeeklyPointsFromSite({
   LAST_LIGHT_AT =
     0;
 
-  await safeUpdate(
-    client,
-    `site ${mode} points`,
-    {
-      scanMode:
-        "full",
-    }
-  );
-
   return {
     ok:
+      true,
+
+    refreshPending:
       true,
 
     weekKey,
