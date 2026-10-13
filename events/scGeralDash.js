@@ -14,7 +14,10 @@ import {
   TextInputStyle,
 } from "discord.js";
 
-import { dashOn } from "../utils/dashHub.js";
+import {
+  dashOn,
+  dashEmit,
+} from "../utils/dashHub.js";
 
 import {
   registerOperationalMetricProvider,
@@ -169,13 +172,41 @@ const MANUAL_ADJUST_ROLE_HIERARCHY = new Map([
 
 const MANUAL_ADJUST_PATH = path.join(DATA_DIR, "sc_points_adjustments.json");
 function loadManualAdjustments() {
-  const manual =
-    readJSON(
-      MANUAL_ADJUST_PATH,
-      {
-        byWeek: {},
-      }
+  let manual = {
+    byWeek: {},
+  };
+
+  if (
+    fs.existsSync(
+      MANUAL_ADJUST_PATH
+    )
+  ) {
+    manual =
+      JSON.parse(
+        fs.readFileSync(
+          MANUAL_ADJUST_PATH,
+          "utf8"
+        )
+      );
+  }
+
+  if (
+    !manual ||
+    typeof manual !== "object" ||
+    Array.isArray(manual) ||
+    (
+      manual.byWeek !== undefined &&
+      (
+        !manual.byWeek ||
+        typeof manual.byWeek !== "object" ||
+        Array.isArray(manual.byWeek)
+      )
+    )
+  ) {
+    throw new Error(
+      "O JSON de ajustes de pontos está inválido. O arquivo existente foi preservado."
     );
+  }
 
   manual.byWeek =
     manual.byWeek || {};
@@ -199,7 +230,32 @@ function loadManualAdjustments() {
 }
 
 function saveManualAdjustments(data) {
-  writeJSON(MANUAL_ADJUST_PATH, data);
+  fs.mkdirSync(
+    path.dirname(
+      MANUAL_ADJUST_PATH
+    ),
+    {
+      recursive: true,
+    }
+  );
+
+  const temporary =
+    MANUAL_ADJUST_PATH + ".tmp";
+
+  fs.writeFileSync(
+    temporary,
+    JSON.stringify(
+      data,
+      null,
+      2
+    ),
+    "utf8"
+  );
+
+  fs.renameSync(
+    temporary,
+    MANUAL_ADJUST_PATH
+  );
 }
 
 // =====================================================
@@ -797,6 +853,30 @@ function applyManualAdjustment({ weekKey, userId, delta }) {
   saveManualAdjustments(
     manual
   );
+
+  try {
+    dashEmit(
+      "sc:points_adjusted",
+      {
+        weekKey,
+        userId:
+          canonicalUserId,
+        delta:
+          Number(delta || 0),
+        before,
+        after,
+        source:
+          "scGeralDash",
+        __at:
+          Date.now(),
+      }
+    );
+  } catch (error) {
+    console.error(
+      "[SC_GERAL_DASH] Ajuste salvo, mas não foi possível comunicar a atualização:",
+      error
+    );
+  }
 
   return {
     before,
@@ -5239,6 +5319,17 @@ const scheduleFastSync = () => {
     }
   }, 5000);
 };
+
+dashOn("sc:points_adjusted", () => {
+  markDirty({
+    invalidateScanCache:
+      true,
+  });
+
+  NEXT_ALLOWED_AT = 0;
+
+  scheduleFastSync();
+});
 
 dashOn("identity:migrated", () => {
   markDirty({ invalidateScanCache: true });

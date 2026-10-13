@@ -13,7 +13,10 @@ import {
   TextInputStyle,
 } from "discord.js";
 
-import { dashOn } from "../utils/dashHub.js";
+import {
+  dashOn,
+  dashEmit,
+} from "../utils/dashHub.js";
 
 import {
   registerOperationalMetricProvider,
@@ -321,12 +324,41 @@ async function canRemovePointsFromTarget({ guild, executorId, targetUserId }) {
 }
 
 function loadAdjustments() {
-  const data = readJSON(
-    ADJUSTMENTS_FILE,
-    {
-      byWeek: {},
-    }
-  );
+  let data = {
+    byWeek: {},
+  };
+
+  if (
+    fs.existsSync(
+      ADJUSTMENTS_FILE
+    )
+  ) {
+    data =
+      JSON.parse(
+        fs.readFileSync(
+          ADJUSTMENTS_FILE,
+          "utf8"
+        )
+      );
+  }
+
+  if (
+    !data ||
+    typeof data !== "object" ||
+    Array.isArray(data) ||
+    (
+      data.byWeek !== undefined &&
+      (
+        !data.byWeek ||
+        typeof data.byWeek !== "object" ||
+        Array.isArray(data.byWeek)
+      )
+    )
+  ) {
+    throw new Error(
+      "O JSON de ajustes de pontos está inválido. O arquivo existente foi preservado."
+    );
+  }
 
   data.byWeek =
     data.byWeek || {};
@@ -350,7 +382,32 @@ function loadAdjustments() {
 }
 
 function saveAdjustments(data) {
-  writeJSON(ADJUSTMENTS_FILE, data);
+  fs.mkdirSync(
+    path.dirname(
+      ADJUSTMENTS_FILE
+    ),
+    {
+      recursive: true,
+    }
+  );
+
+  const temporary =
+    ADJUSTMENTS_FILE + ".tmp";
+
+  fs.writeFileSync(
+    temporary,
+    JSON.stringify(
+      data,
+      null,
+      2
+    ),
+    "utf8"
+  );
+
+  fs.renameSync(
+    temporary,
+    ADJUSTMENTS_FILE
+  );
 }
 
 // =====================================================
@@ -739,6 +796,30 @@ function applyManualAdjustment({
     after;
 
   saveAdjustments(data);
+
+  try {
+    dashEmit(
+      "sc:points_adjusted",
+      {
+        weekKey,
+        userId:
+          canonicalUserId,
+        delta:
+          Number(delta || 0),
+        before,
+        after,
+        source:
+          "scGeralWeeklyRanking",
+        __at:
+          Date.now(),
+      }
+    );
+  } catch (error) {
+    console.error(
+      "[SC_GERAL_WEEKLY_RANK] Ajuste salvo, mas não foi possível comunicar a atualização:",
+      error
+    );
+  }
 
   return {
     before,
@@ -4174,6 +4255,17 @@ const scheduleFastSync = () => {
 };
 
   // eventos que mexem no ranking (tudo que vira log / msg / registro)
+dashOn("sc:points_adjusted", () => {
+  markDirty({
+    invalidateScanCache:
+      true,
+  });
+
+  LAST_LIGHT_AT = 0;
+
+  scheduleFastSync();
+});
+
 dashOn("bp:punch", () => markDirty({ invalidateScanCache: true }));
 dashOn("doacao:registrada", () => {
   markDirty({ invalidateScanCache: true });
@@ -6021,9 +6113,23 @@ if (interaction.isModalSubmit() && interaction.customId === "SC_REMOVE_POINTS_MO
   const userId = interaction.fields.getTextInputValue("userId").trim();
   const points = Number(interaction.fields.getTextInputValue("points"));
 
-  if (!/^\d{17,20}$/.test(userId) || !Number.isFinite(points) || points <= 0) {
-    return interaction.reply({ content: "❌ Dados inválidos.", ephemeral: true });
+  if (
+    !/^\d{17,20}$/.test(userId) ||
+    !Number.isSafeInteger(points) ||
+    points <= 0
+  ) {
+    return interaction.reply({
+      content:
+        "❌ Dados inválidos. Informe um ID completo e uma quantidade inteira positiva.",
+      ephemeral:
+        true,
+    });
   }
+
+  await interaction.deferReply({
+    flags:
+      64,
+  });
 
   const perm = await canRemovePointsFromTarget({
     guild: interaction.guild,
@@ -6032,9 +6138,8 @@ if (interaction.isModalSubmit() && interaction.customId === "SC_REMOVE_POINTS_MO
   });
 
   if (!perm.ok) {
-    return interaction.reply({
+    return interaction.editReply({
       content: `❌ ${perm.reason}`,
-      ephemeral: true,
     });
   }
 
@@ -6069,12 +6174,11 @@ if (interaction.isModalSubmit() && interaction.customId === "SC_REMOVE_POINTS_MO
     bypass: perm.bypass,
   });
 
-  return interaction.reply({
+  return interaction.editReply({
     content:
       `✅ Removidos **${points} pts** de <@${userId}> na semana atual.\n` +
       `🗓️ Semana: \`${wk}\`\n` +
       `📉 Ajuste do alvo: ${before} → ${after}`,
-    ephemeral: true,
   });
 }
 }
@@ -6209,6 +6313,37 @@ function canAdjustWeeklyPoints(
   );
 }
 
+function canAddWeeklyPoints(member) {
+  if (
+    !member ||
+    member.user?.bot ||
+    !member.roles?.cache
+  ) {
+    return false;
+  }
+
+  if (
+    String(member.id) ===
+    "660311795327828008"
+  ) {
+    return true;
+  }
+
+  const allowedRoles =
+    new Set([
+      "1262262852949905408",
+      "1352408327983861844",
+      "1262262852949905409",
+    ]);
+
+  return member.roles.cache.some(
+    role =>
+      allowedRoles.has(
+        role.id
+      )
+  );
+}
+
 function buildWeeklySiteAnalytics(items, ranking, weekKey) {
   const visible = new Set(ranking.map(item => String(item.userId || item.id || '')));
   const sourceTotals = {}, days = {};
@@ -6266,6 +6401,19 @@ export async function getWeeklyRankingSiteSnapshot({
       adjust:
         canAdjustWeeklyPoints(
           member
+        ) ||
+        canAddWeeklyPoints(
+          member
+        ),
+
+      add:
+        canAddWeeklyPoints(
+          member
+        ),
+
+      remove:
+        canAdjustWeeklyPoints(
+          member
         ),
     },
   };
@@ -6280,19 +6428,32 @@ export async function adjustWeeklyPointsFromSite({
   mode,
 }) {
   const qty =
-    Math.trunc(
-      Number(amount)
-    );
+    Number(amount);
+
+  targetId =
+    String(
+      targetId || ""
+    ).trim();
 
   if (
-    !Number.isFinite(
+    !/^\d{17,20}$/.test(
+      targetId
+    )
+  ) {
+    throw new Error(
+      "ID do Discord do alvo inválido."
+    );
+  }
+
+  if (
+    !Number.isSafeInteger(
       qty
     ) ||
     qty <= 0 ||
     qty > 1000
   ) {
     throw new Error(
-      "Quantidade de pontos inválida."
+      "Quantidade de pontos inválida. Informe um número inteiro entre 1 e 1000."
     );
   }
 
@@ -6309,25 +6470,62 @@ export async function adjustWeeklyPointsFromSite({
     );
   }
 
-  const perm =
-    await canRemovePointsFromTarget({
-      guild,
+  if (
+    mode === "add"
+  ) {
+    const actor =
+      await guild.members.fetch({
+        user:
+          String(actorId),
+        force:
+          true,
+      });
 
-      executorId:
-        String(
-          actorId
-        ),
+    if (
+      !canAddWeeklyPoints(
+        actor
+      )
+    ) {
+      throw new Error(
+        "Adicionar pontos é exclusivo de Resp. Influ, Resp. Creators, Owner e Macedo."
+      );
+    }
 
-      targetUserId:
-        String(
-          targetId
-        ),
-    });
+    const target =
+      await guild.members.fetch({
+        user:
+          targetId,
+        force:
+          true,
+      });
 
-  if (!perm.ok) {
-    throw new Error(
-      perm.reason
-    );
+    if (
+      !target ||
+      target.user?.bot
+    ) {
+      throw new Error(
+        "O alvo precisa ser uma pessoa presente no servidor."
+      );
+    }
+  } else {
+    const perm =
+      await canRemovePointsFromTarget({
+        guild,
+
+        executorId:
+          String(
+            actorId
+          ),
+
+        targetUserId:
+          targetId,
+      });
+
+    if (!perm.ok) {
+      throw new Error(
+        perm.reason
+      );
+    }
   }
 
   const weekKey =

@@ -11,6 +11,8 @@ import {
 } from "discord.js";
 
 import sharp from "sharp";
+import fs from "node:fs";
+import path from "node:path";
 
 import { findFormsCreatorThreadIdByUserId } from "./formscreator.js";
 
@@ -70,21 +72,81 @@ function pad(n) {
 function parseDataBr(str) {
   if (!str) return null;
 
-  const texto = String(str).trim();
-  const match = texto.match(/(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?/);
+  const texto =
+    String(str).trim();
 
-  if (!match) return null;
+  const match =
+    texto.match(
+      /^(\d{1,2})\/(\d{1,2})(?:\/(\d{2}|\d{4}))?$/
+    );
 
-  const d = Number(match[1]);
-  const m = Number(match[2]);
+  if (!match) {
+    return null;
+  }
 
-  let y = match[3] ? Number(match[3]) : new Date().getFullYear();
-  if (y < 100) y += 2000;
+  const d =
+    Number(match[1]);
 
-  if (!d || !m || !y) return null;
+  const m =
+    Number(match[2]);
 
-  const dt = new Date(y, m - 1, d, 0, 0, 0, 0);
-  if (isNaN(dt.getTime())) return null;
+  const anoAtual =
+    Number(
+      new Intl.DateTimeFormat(
+        'en-US',
+        {
+          timeZone:
+            'America/Sao_Paulo',
+          year:
+            'numeric',
+        }
+      ).format(
+        new Date()
+      )
+    );
+
+  let y =
+    match[3]
+      ? Number(match[3])
+      : anoAtual;
+
+  if (y < 100) {
+    y += 2000;
+  }
+
+  if (
+    !Number.isInteger(y) ||
+    y < 1000 ||
+    y > 9999 ||
+    m < 1 ||
+    m > 12 ||
+    d < 1 ||
+    d > 31
+  ) {
+    return null;
+  }
+
+  const dt =
+    new Date(
+      y,
+      m - 1,
+      d,
+      0,
+      0,
+      0,
+      0
+    );
+
+  if (
+    !Number.isFinite(
+      dt.getTime()
+    ) ||
+    dt.getFullYear() !== y ||
+    dt.getMonth() !== m - 1 ||
+    dt.getDate() !== d
+  ) {
+    return null;
+  }
 
   return dt;
 }
@@ -153,7 +215,12 @@ function extrairCampoEmbed(embed, nomeCampo) {
 }
 
 function extrairPrimeiraMencaoId(content) {
-  const match = String(content || '').match(/<@!?(\d+)>/);
+  const match =
+    String(content || '')
+      .match(
+        /<@!?(\d{17,20})>/
+      );
+
   return match?.[1] || null;
 }
 
@@ -176,32 +243,41 @@ function extrairNomeAusencia(embed) {
 }
 
 function resolverUserIdPorNomeAusencia(nome, content = '') {
-  const chaveNome = normalizarChaveAusencia(nome);
-  const chaveContent = normalizarChaveAusencia(content);
+  const chaveNome =
+    normalizarChaveAusencia(nome);
 
-  if (AUSENCIAS_NOMES_PARA_USER_IDS[chaveNome]) {
-    return AUSENCIAS_NOMES_PARA_USER_IDS[chaveNome];
+  if (!chaveNome) {
+    return null;
   }
 
-  for (const [nomeMapeado, userId] of Object.entries(AUSENCIAS_NOMES_PARA_USER_IDS)) {
-    const chaveMapeada = normalizarChaveAusencia(nomeMapeado);
+  const userId =
+    AUSENCIAS_NOMES_PARA_USER_IDS[
+      chaveNome
+    ];
 
-    if (
-      chaveNome.includes(chaveMapeada) ||
-      chaveMapeada.includes(chaveNome) ||
-      chaveContent.includes(chaveMapeada)
-    ) {
-      return userId;
-    }
+  if (
+    !/^\d{17,20}$/.test(
+      String(userId || '')
+    )
+  ) {
+    return null;
   }
 
-  return null;
+  return String(userId);
 }
 
-function criarChaveRegistroAusencia({ userId, nome, dataTxt, horaTxt, motivoTxt }) {
+function criarChaveRegistroAusencia({
+  userId,
+  nome,
+  dataTxt,
+  ateTxt,
+  horaTxt,
+  motivoTxt,
+}) {
   return [
     userId || normalizarChaveAusencia(nome),
     normalizarChaveAusencia(dataTxt),
+    normalizarChaveAusencia(ateTxt),
     normalizarChaveAusencia(horaTxt),
     normalizarChaveAusencia(motivoTxt),
   ].join('|');
@@ -304,36 +380,143 @@ function montarLinhasSemanaSvg(semanas, x, y) {
 
 async function buscarMensagensMesAtual(canal, inicioMes, fimMes) {
   const mensagens = [];
+  const idsColetados = new Set();
+
+  const inicioChave =
+    dateToIso(
+      inicioMes
+    );
+
+  const fimChave =
+    dateToIso(
+      fimMes
+    );
+
+  const formatadorPublicacao =
+    new Intl.DateTimeFormat(
+      'en-US',
+      {
+        timeZone:
+          'America/Sao_Paulo',
+        year:
+          'numeric',
+        month:
+          '2-digit',
+        day:
+          '2-digit',
+      }
+    );
+
   let before;
 
   for (let pagina = 0; pagina < 80; pagina++) {
     const lote = await canal.messages.fetch({
       limit: 100,
-      ...(before ? { before } : {})
-    }).catch(() => null);
+      ...(before ? { before } : {}),
+    });
 
-    if (!lote || lote.size === 0) break;
+    if (lote.size === 0) {
+      return mensagens;
+    }
 
     let encontrouMensagemAntesDoMes = false;
 
     for (const msg of lote.values()) {
-      if (msg.createdAt < inicioMes) {
+      if (idsColetados.has(msg.id)) {
+        continue;
+      }
+
+      idsColetados.add(msg.id);
+
+      const partesPublicacao =
+        Object.fromEntries(
+          formatadorPublicacao
+            .formatToParts(
+              msg.createdAt
+            )
+            .filter(parte =>
+              [
+                'year',
+                'month',
+                'day',
+              ].includes(
+                parte.type
+              )
+            )
+            .map(parte => [
+              parte.type,
+              parte.value,
+            ])
+        );
+
+      const diaPublicacao =
+        partesPublicacao.year +
+        '-' +
+        partesPublicacao.month +
+        '-' +
+        partesPublicacao.day;
+
+      if (
+        diaPublicacao <
+        inicioChave
+      ) {
         encontrouMensagemAntesDoMes = true;
         continue;
       }
 
-      if (msg.createdAt <= fimMes) {
+      if (
+        diaPublicacao <=
+        fimChave
+      ) {
         mensagens.push(msg);
       }
     }
 
-    if (encontrouMensagemAntesDoMes) break;
+    if (
+      encontrouMensagemAntesDoMes ||
+      lote.size < 100
+    ) {
+      return mensagens;
+    }
 
-    before = lote.last()?.id;
-    if (!before) break;
+    const mensagemMaisAntiga =
+      [...lote.values()].reduce(
+        (maisAntiga, mensagem) => {
+          if (!maisAntiga) {
+            return mensagem;
+          }
+
+          return BigInt(mensagem.id) <
+            BigInt(maisAntiga.id)
+              ? mensagem
+              : maisAntiga;
+        },
+        null
+      );
+
+    const nextBefore =
+      mensagemMaisAntiga?.id;
+
+    if (
+      !nextBefore ||
+      (
+        before &&
+        BigInt(nextBefore) >= BigInt(before)
+      )
+    ) {
+      throw new Error(
+        `A coleta de ausências não avançou no canal ${canal.id}. ` +
+        'O dashboard não foi substituído por uma consulta incompleta.'
+      );
+    }
+
+    before = nextBefore;
   }
 
-  return mensagens;
+  throw new Error(
+    `A coleta de ausências atingiu 80 páginas no canal ${canal.id}. ` +
+    'O dashboard não foi substituído por uma consulta incompleta.'
+  );
 }
 
 function adicionarDiaNoRanking(ranking, userId, data) {
@@ -346,13 +529,33 @@ function adicionarDiaNoRanking(ranking, userId, data) {
         'Terceira semana do mês': 0,
         'Quarta semana do mês': 0,
         'Quinta semana do mês': 0,
-      }
+      },
+      dias:
+        new Set(),
     });
   }
 
-  const semana = nomeSemanaMes(data.getDate());
-  ranking.get(userId).total += 1;
-  ranking.get(userId).semanas[semana] += 1;
+  const registro =
+    ranking.get(userId);
+
+  const dia =
+    dateToIso(data);
+
+  if (
+    registro.dias.has(dia)
+  ) {
+    return;
+  }
+
+  registro.dias.add(dia);
+
+  const semana =
+    nomeSemanaMes(
+      data.getDate()
+    );
+
+  registro.total += 1;
+  registro.semanas[semana] += 1;
 }
 
 function intervaloAusenciaDentroDoMes(dtInicio, dtFim, inicioMes, fimMes) {
@@ -449,29 +652,553 @@ function montarSvgDashboardAusencias({ mesNome, ano, rankingOrdenado, totalAusen
 </svg>`;
 }
 
-async function atualizarDashboardAusenciasMensal(client) {
-  const canalFonte = await client.channels.fetch(AUSENCIAS_GERAIS_CHANNEL_ID).catch(() => null);
-  const canalDestino = await client.channels.fetch(AUSENCIAS_DASHBOARD_CHANNEL_ID).catch(() => null);
+function salvarSnapshotAusenciasMensal({
+  mesNome,
+  ano,
+  mes,
+  rankingOrdenado,
+  totalAusencias,
+}) {
+  const directory =
+    path.resolve(
+      process.cwd(),
+      'data'
+    );
 
-  if (!canalFonte || !canalFonte.isTextBased()) return;
-  if (!canalDestino || !canalDestino.isTextBased()) return;
+  const file =
+    path.join(
+      directory,
+      'ausencias_dashboard.json'
+    );
 
-  const agora = new Date();
-  const inicioMes = new Date(agora.getFullYear(), agora.getMonth(), 1, 0, 0, 0, 0);
-  const fimMes = new Date(agora.getFullYear(), agora.getMonth() + 1, 0, 23, 59, 59, 999);
-  const mesNome = nomeMesPtBr(agora.getMonth());
+  fs.mkdirSync(
+    directory,
+    {
+      recursive: true,
+    }
+  );
+
+  let stored = {
+    version: 1,
+    months: {},
+  };
+
+  if (
+    fs.existsSync(file)
+  ) {
+    stored =
+      JSON.parse(
+        fs.readFileSync(
+          file,
+          'utf8'
+        )
+      );
+
+    if (
+      stored?.version !== 1 ||
+      !stored.months ||
+      typeof stored.months !== 'object' ||
+      Array.isArray(stored.months)
+    ) {
+      throw new Error(
+        'O JSON do dashboard de ausências está inválido. O arquivo existente foi preservado.'
+      );
+    }
+  }
+
+  const monthKey =
+    String(ano) +
+    '-' +
+    pad(mes + 1);
+
+  stored.months[monthKey] = {
+    monthKey,
+    mesNome,
+    ano,
+    generatedAt:
+      new Date().toISOString(),
+    coverage:
+      'mensagens_publicadas_no_mes',
+    metric:
+      'dias_distintos_por_pessoa',
+    totalAusencias,
+    totalPessoas:
+      rankingOrdenado.length,
+    ranking:
+      rankingOrdenado,
+  };
+
+  const temporary =
+    file + '.tmp';
+
+  fs.writeFileSync(
+    temporary,
+    JSON.stringify(
+      stored,
+      null,
+      2
+    ),
+    'utf8'
+  );
+
+  fs.renameSync(
+    temporary,
+    file
+  );
+}
+
+const ausenciasDashboardJobs =
+  new Map();
+
+const ausenciasDashboardTimers =
+  new Map();
+
+function atualizarDashboardAusenciasMensal(
+  client,
+  options = {}
+) {
+  const key =
+    String(
+      client.user?.id || ''
+    );
+
+  if (!key) {
+    return Promise.reject(
+      new Error(
+        'O cliente Discord ainda não está pronto para atualizar as ausências.'
+      )
+    );
+  }
+
+  const previous =
+    ausenciasDashboardJobs.get(key);
+
+  if (previous) {
+    if (
+      options.requireFresh === true
+    ) {
+      previous.rerun = true;
+    }
+
+    return previous.promise;
+  }
+
+  const job = {
+    rerun:
+      false,
+    promise:
+      null,
+  };
+
+  ausenciasDashboardJobs.set(
+    key,
+    job
+  );
+
+  job.promise =
+    Promise.resolve()
+      .then(async () => {
+        do {
+          job.rerun = false;
+
+          await executarAtualizacaoDashboardAusenciasMensal(
+            client
+          );
+        } while (
+          job.rerun
+        );
+      })
+      .finally(() => {
+        if (
+          ausenciasDashboardJobs.get(key) === job
+        ) {
+          ausenciasDashboardJobs.delete(key);
+        }
+      });
+
+  return job.promise;
+}
+
+function agendarDashboardAusencias(client) {
+  const key =
+    String(
+      client.user?.id || ''
+    );
+
+  if (!key) {
+    return;
+  }
+
+  clearTimeout(
+    ausenciasDashboardTimers.get(key)
+  );
+
+  ausenciasDashboardTimers.set(
+    key,
+    setTimeout(() => {
+      ausenciasDashboardTimers.delete(key);
+
+      void atualizarDashboardAusenciasMensal(
+        client,
+        {
+          requireFresh:
+            true,
+        }
+      ).catch(error => {
+        console.error(
+          '[AUSÊNCIAS DASHBOARD] Falha na atualização após registro:',
+          error
+        );
+      });
+    }, 2500)
+  );
+}
+
+function lerEstadoPainelAusencias() {
+  const file =
+    path.resolve(
+      process.cwd(),
+      'data',
+      'ausencias_dashboard_painel.json'
+    );
+
+  const stored =
+    fs.existsSync(file)
+      ? JSON.parse(
+          fs.readFileSync(
+            file,
+            'utf8'
+          )
+        )
+      : {
+          version:
+            1,
+          panels:
+            {},
+        };
+
+  if (
+    stored?.version !== 1 ||
+    !stored.panels ||
+    typeof stored.panels !== 'object' ||
+    Array.isArray(stored.panels)
+  ) {
+    throw new Error(
+      'O JSON de identificação do painel de ausências está inválido. O arquivo foi preservado.'
+    );
+  }
+
+  return {
+    file,
+    stored,
+  };
+}
+
+function salvarIdPainelAusencias(
+  client,
+  channel,
+  message
+) {
+  if (
+    !/^\d{17,20}$/.test(
+      String(message?.id || '')
+    )
+  ) {
+    throw new Error(
+      'Não foi possível confirmar o ID do painel de ausências.'
+    );
+  }
+
+  const {
+    file,
+    stored,
+  } =
+    lerEstadoPainelAusencias();
+
+  const key =
+    `${client.user.id}:${channel.id}`;
+
+  stored.panels[key] =
+    String(message.id);
+
+  fs.mkdirSync(
+    path.dirname(file),
+    {
+      recursive:
+        true,
+    }
+  );
+
+  const temporary =
+    file + '.tmp';
+
+  fs.writeFileSync(
+    temporary,
+    JSON.stringify(
+      stored,
+      null,
+      2
+    ),
+    'utf8'
+  );
+
+  fs.renameSync(
+    temporary,
+    file
+  );
+}
+
+async function buscarPainelAusencias(
+  client,
+  channel
+) {
+  const {
+    stored,
+  } =
+    lerEstadoPainelAusencias();
+
+  const key =
+    `${client.user.id}:${channel.id}`;
+
+  const savedId =
+    stored.panels[key];
+
+  const painelValido =
+    message =>
+      message?.author?.id === client.user.id &&
+      message.embeds?.[0]?.title === '📊 Dashboard Mensal de Ausências';
+
+  if (
+    savedId !== undefined
+  ) {
+    if (
+      !/^\d{17,20}$/.test(
+        String(savedId)
+      )
+    ) {
+      throw new Error(
+        'O ID salvo do painel de ausências está inválido. O arquivo foi preservado.'
+      );
+    }
+
+    let message;
+
+    try {
+      message =
+        await channel.messages.fetch(
+          String(savedId)
+        );
+    } catch (error) {
+      if (
+        Number(error?.code) !== 10008
+      ) {
+        throw error;
+      }
+    }
+
+    if (
+      painelValido(message)
+    ) {
+      return message;
+    }
+  }
+
+  let before;
+
+  for (
+    let page = 0;
+    page < 20;
+    page++
+  ) {
+    const messages =
+      await channel.messages.fetch({
+        limit:
+          100,
+        ...(before
+          ? {
+              before,
+            }
+          : {}),
+      });
+
+    const existing =
+      messages.find(
+        painelValido
+      );
+
+    if (existing) {
+      return existing;
+    }
+
+    if (
+      messages.size < 100
+    ) {
+      return null;
+    }
+
+    const oldest =
+      [...messages.values()].reduce(
+        (previous, message) =>
+          !previous ||
+          BigInt(message.id) < BigInt(previous.id)
+            ? message
+            : previous,
+        null
+      );
+
+    const nextBefore =
+      oldest?.id;
+
+    if (
+      !nextBefore ||
+      (
+        before &&
+        BigInt(nextBefore) >= BigInt(before)
+      )
+    ) {
+      throw new Error(
+        'A busca pelo painel de ausências não avançou. Nenhum painel novo foi criado.'
+      );
+    }
+
+    before =
+      nextBefore;
+  }
+
+  throw new Error(
+    'A busca inicial pelo painel de ausências atingiu 20 páginas. Nenhum painel novo foi criado para evitar duplicação.'
+  );
+}
+
+async function executarAtualizacaoDashboardAusenciasMensal(client) {
+  const canalFonte =
+    await client.channels.fetch(
+      AUSENCIAS_GERAIS_CHANNEL_ID
+    );
+
+  const canalDestino =
+    await client.channels.fetch(
+      AUSENCIAS_DASHBOARD_CHANNEL_ID
+    );
+
+  if (
+    !canalFonte?.isTextBased?.() ||
+    !canalFonte.messages
+  ) {
+    throw new Error(
+      'O canal geral de ausências está indisponível ou não permite leitura de mensagens.'
+    );
+  }
+
+  if (
+    !canalDestino?.isTextBased?.() ||
+    !canalDestino.messages
+  ) {
+    throw new Error(
+      'O canal do dashboard de ausências está indisponível ou não é textual.'
+    );
+  }
+
+  const partesAgora =
+    Object.fromEntries(
+      new Intl.DateTimeFormat(
+        'en-US',
+        {
+          timeZone:
+            'America/Sao_Paulo',
+          year:
+            'numeric',
+          month:
+            '2-digit',
+          day:
+            '2-digit',
+        }
+      )
+        .formatToParts(
+          new Date()
+        )
+        .filter(parte =>
+          [
+            'year',
+            'month',
+            'day',
+          ].includes(
+            parte.type
+          )
+        )
+        .map(parte => [
+          parte.type,
+          parte.value,
+        ])
+    );
+
+  const agora =
+    new Date(
+      Number(partesAgora.year),
+      Number(partesAgora.month) - 1,
+      Number(partesAgora.day)
+    );
+
+  const inicioMes =
+    new Date(
+      agora.getFullYear(),
+      agora.getMonth(),
+      1,
+      0,
+      0,
+      0,
+      0
+    );
+
+  const fimMes =
+    new Date(
+      agora.getFullYear(),
+      agora.getMonth() + 1,
+      0,
+      23,
+      59,
+      59,
+      999
+    );
+
+  const mesNome =
+    nomeMesPtBr(
+      agora.getMonth()
+    );
 
   const mensagens = [];
   const idsMensagensColetadas = new Set();
 
   for (const canalFonteId of AUSENCIAS_DASHBOARD_FONTES_CHANNEL_IDS) {
-    const canalColeta = await client.channels.fetch(canalFonteId).catch(() => null);
-    if (!canalColeta || !canalColeta.isTextBased()) continue;
+    const canalColeta =
+      await client.channels.fetch(
+        canalFonteId
+      );
 
-    const mensagensCanal = await buscarMensagensMesAtual(canalColeta, inicioMes, fimMes);
+    if (
+      !canalColeta?.isTextBased?.() ||
+      !canalColeta.messages
+    ) {
+      throw new Error(
+        `A fonte de ausências ${canalFonteId} está indisponível. ` +
+        'A atualização foi interrompida para evitar totais incompletos.'
+      );
+    }
+
+    const mensagensCanal =
+      await buscarMensagensMesAtual(
+        canalColeta,
+        inicioMes,
+        fimMes
+      );
 
     for (const msg of mensagensCanal) {
-      if (idsMensagensColetadas.has(msg.id)) continue;
+      if (
+        idsMensagensColetadas.has(msg.id)
+      ) {
+        continue;
+      }
+
       idsMensagensColetadas.add(msg.id);
       mensagens.push(msg);
     }
@@ -481,13 +1208,39 @@ async function atualizarDashboardAusenciasMensal(client) {
   const registrosUnicos = new Set();
 
   for (const msg of mensagens) {
-    const embed = msg.embeds?.[0];
-    if (!embed) continue;
+    const embed =
+      msg.embeds?.[0];
 
-    const nomeAusencia = extrairNomeAusencia(embed);
-    const userId = extrairPrimeiraMencaoId(msg.content) || resolverUserIdPorNomeAusencia(nomeAusencia, msg.content);
+    if (
+      !embed ||
+      !msg.author?.bot ||
+      normalizarChaveAusencia(
+        embed.title
+      ) !== 'registro de ausencia'
+    ) {
+      continue;
+    }
 
-    if (!userId && !nomeAusencia) continue;
+    const nomeAusencia =
+      extrairNomeAusencia(embed);
+
+    const userId =
+      extrairPrimeiraMencaoId(
+        msg.content
+      ) ||
+      resolverUserIdPorNomeAusencia(
+        nomeAusencia,
+        msg.content
+      );
+
+    if (
+      !userId &&
+      !normalizarChaveAusencia(
+        nomeAusencia
+      )
+    ) {
+      continue;
+    }
 
     const dataTxt = extrairCampoEmbed(embed, 'Data');
     const ateTxt = extrairCampoEmbed(embed, 'Até');
@@ -498,6 +1251,7 @@ async function atualizarDashboardAusenciasMensal(client) {
       userId,
       nome: nomeAusencia,
       dataTxt,
+      ateTxt,
       horaTxt,
       motivoTxt,
     });
@@ -548,6 +1302,16 @@ while (atual.getTime() <= fimLimitado.getTime()) {
 
   const totalAusencias = rankingOrdenado.reduce((acc, item) => acc + item.total, 0);
 
+  salvarSnapshotAusenciasMensal({
+    mesNome,
+    ano:
+      agora.getFullYear(),
+    mes:
+      agora.getMonth(),
+    rankingOrdenado,
+    totalAusencias,
+  });
+
   const svg = montarSvgDashboardAusencias({
     mesNome,
     ano: agora.getFullYear(),
@@ -576,23 +1340,60 @@ while (atual.getTime() <= fimLimitado.getTime()) {
     .setImage('attachment://dashboard-ausencias-mensal.png')
     .setTimestamp();
 
-  const mensagensDestino = await canalDestino.messages.fetch({ limit: 20 }).catch(() => null);
-  const msgExistente = mensagensDestino?.find(msg =>
-    msg.author.id === client.user.id &&
-    msg.embeds?.[0]?.title === '📊 Dashboard Mensal de Ausências'
-  );
+  const msgExistente =
+    await buscarPainelAusencias(
+      client,
+      canalDestino
+    );
+
+  let mensagemPublicada;
 
   if (msgExistente) {
-    await msgExistente.edit({
-      embeds: [embed],
-      files: [arquivo],
-      attachments: []
-    }).catch(async () => {
-      await canalDestino.send({ embeds: [embed], files: [arquivo] }).catch(() => {});
-    });
+    try {
+      mensagemPublicada =
+        await msgExistente.edit({
+          embeds: [
+            embed,
+          ],
+          files: [
+            arquivo,
+          ],
+          attachments: [],
+        });
+    } catch (error) {
+      if (
+        Number(error?.code) !== 10008
+      ) {
+        throw error;
+      }
+
+      mensagemPublicada =
+        await canalDestino.send({
+          embeds: [
+            embed,
+          ],
+          files: [
+            arquivo,
+          ],
+        });
+    }
   } else {
-    await canalDestino.send({ embeds: [embed], files: [arquivo] }).catch(() => {});
+    mensagemPublicada =
+      await canalDestino.send({
+        embeds: [
+          embed,
+        ],
+        files: [
+          arquivo,
+        ],
+      });
   }
+
+  salvarIdPainelAusencias(
+    client,
+    canalDestino,
+    mensagemPublicada
+  );
 }
 
 // ===== UI HELPERS =====
@@ -749,8 +1550,9 @@ export async function ausenciasHandleInteraction(interaction, client) {
       if (interaction.isModalSubmit() && interaction.customId.startsWith('modal_ausencia_')) {
         // Resposta imediata para evitar "interação falhou"
         if (!interaction.deferred && !interaction.replied) {
-          await interaction.deferReply({ ephemeral: true }).catch(() => {});
-          await interaction.deferReply({ flags: 64 }).catch(() => {});
+          await interaction.deferReply({
+            flags: 64,
+          });
         }
 
         const canalId = interaction.customId.replace('modal_ausencia_', '');
@@ -766,60 +1568,178 @@ export async function ausenciasHandleInteraction(interaction, client) {
         const hora   = (interaction.fields.getTextInputValue('hora')     ?? '').slice(0, 64);
         const motivo = (interaction.fields.getTextInputValue('motivo')   ?? '').slice(0, 1024);
 
-        // registra em memória
-        const dtInicio = parseDataBr(data);
-        const dtFim    = ate ? parseDataBr(ate) : null;
+        // Valida as datas antes de registrar ou enviar.
+        const dtInicio =
+          parseDataBr(data);
 
-        if (dtInicio) {
-          if (dtFim) registrarAusenciaIntervalo(interaction.user.id, dtInicio, dtFim);
-          else registrarAusenciaMem(interaction.user.id, dateToIso(dtInicio));
+        const possuiDataFim =
+          Boolean(
+            String(ate || '').trim()
+          );
+
+        const dtFim =
+          possuiDataFim
+            ? parseDataBr(ate)
+            : null;
+
+        if (
+          !dtInicio ||
+          (
+            possuiDataFim &&
+            !dtFim
+          )
+        ) {
+          await interaction.editReply({
+            content:
+              '❌ Data inválida. Use DD/MM ou DD/MM/AAAA e informe um dia existente.',
+          });
+
+          return true;
         }
 
-        // Embed origem
-        const embedOrigem = criarEmbedRegistro({
-          user: interaction.user,
-          nome,
-          data,
-          hora,
-          motivo,
-          gifUrl: GIF_URL,
-          addOrigem: false,
-          intervaloAte: ate || null,
-        });
+        if (
+          dtFim &&
+          dtFim.getTime() <
+            dtInicio.getTime()
+        ) {
+          await interaction.editReply({
+            content:
+              '❌ A data final da ausência não pode ser anterior à data inicial.',
+          });
 
-        // Envia no canal de origem (se existir) e reposta o botão único
-        if (canalOrigem) {
-          await canalOrigem.send({ content: `<@${interaction.user.id}>`, embeds: [embedOrigem] }).catch(() => {});
-
-          await enviarBotaoFixoPorCanal(client, canalId);
+          return true;
         }
 
-        // Espelho: Ausências Gerais (com campo Origem)
-        const canalGerais = await client.channels.fetch(AUSENCIAS_GERAIS_CHANNEL_ID).catch(() => null);
-        if (canalGerais) {
-          const origemStr = canalOrigem
+        const canalGerais =
+          await client.channels.fetch(
+            AUSENCIAS_GERAIS_CHANNEL_ID
+          );
+
+        if (
+          !canalGerais?.isTextBased?.() ||
+          typeof canalGerais.send !== 'function' ||
+          canalGerais.guildId !== interaction.guildId
+        ) {
+          throw new Error(
+            'O canal geral de ausências está indisponível para registrar esta ausência.'
+          );
+        }
+
+        const origemStr =
+          canalOrigem
             ? `${canalOrigem.toString()} • (${canalOrigem.id})`
             : 'Canal de origem indisponível';
 
-          const embedGerais = criarEmbedRegistro({
-            user: interaction.user,
+        const embedGerais =
+          criarEmbedRegistro({
+            user:
+              interaction.user,
             nome,
             data,
             hora,
             motivo,
-            gifUrl: GIF_URL,
-            addOrigem: true,
-            origem: origemStr,
-            intervaloAte: ate || null,
+            gifUrl:
+              GIF_URL,
+            addOrigem:
+              true,
+            origem:
+              origemStr,
+            intervaloAte:
+              ate || null,
           });
 
-          await canalGerais
-            .send({ content: `<@${interaction.user.id}>`, embeds: [embedGerais] })
-            .catch(() => {});
+        await canalGerais.send({
+          content:
+            `<@${interaction.user.id}>`,
+          embeds: [
+            embedGerais,
+          ],
+        });
+
+        if (dtFim) {
+          registrarAusenciaIntervalo(
+            interaction.user.id,
+            dtInicio,
+            dtFim
+          );
+        } else {
+          registrarAusenciaMem(
+            interaction.user.id,
+            dateToIso(dtInicio)
+          );
         }
 
-        // Resposta final de sucesso
-        await interaction.editReply({ content: '✅ Registro de ausência enviado com sucesso!' }).catch(() => {});
+        let origemEnviada =
+          canalOrigem?.id ===
+          canalGerais.id;
+
+        if (
+          canalOrigem?.id !== canalGerais.id &&
+          canalOrigem?.guildId === interaction.guildId &&
+          typeof canalOrigem?.send === 'function'
+        ) {
+          const embedOrigem =
+            criarEmbedRegistro({
+              user:
+                interaction.user,
+              nome,
+              data,
+              hora,
+              motivo,
+              gifUrl:
+                GIF_URL,
+              addOrigem:
+                false,
+              intervaloAte:
+                ate || null,
+            });
+
+          try {
+            await canalOrigem.send({
+              content:
+                `<@${interaction.user.id}>`,
+              embeds: [
+                embedOrigem,
+              ],
+            });
+
+            origemEnviada = true;
+          } catch (error) {
+            console.warn(
+              '[AUSÊNCIAS] Registro salvo no canal geral, mas a cópia no canal de origem falhou:',
+              error
+            );
+          }
+
+          if (origemEnviada) {
+            await enviarBotaoFixoPorCanal(
+              client,
+              canalId
+            ).catch(error => {
+              console.warn(
+                '[AUSÊNCIAS] Registro enviado, mas a atualização do botão de origem falhou:',
+                error
+              );
+            });
+          }
+        }
+
+        agendarDashboardAusencias(
+          client
+        );
+
+        await interaction.editReply({
+          content:
+            origemEnviada
+              ? '✅ Ausência registrada com sucesso.'
+              : '✅ Ausência registrada no canal geral. A cópia no canal de origem não foi enviada; não é necessário registrar novamente.',
+        }).catch(error => {
+          console.warn(
+            '[AUSÊNCIAS] Registro publicado, mas a confirmação privada não pôde ser enviada:',
+            error
+          );
+        });
+
         return true;
       }
     } catch (err) {
@@ -888,12 +1808,48 @@ export async function ausenciasHandleMessage(message, client) {
 
     await message.delete().catch(() => {});
 
-    await atualizarDashboardAusenciasMensal(client).catch(err => {
-      console.error('[AUSÊNCIAS DASHBOARD] erro no comando manual:', err);
-    });
+    try {
+      await atualizarDashboardAusenciasMensal(
+        client,
+        {
+          requireFresh:
+            true,
+        }
+      );
 
-    const reply = await message.channel.send("✅ Dashboard mensal de ausências atualizado.").catch(() => {});
-    if (reply) setTimeout(() => reply.delete().catch(() => {}), 8000);
+      const reply =
+        await message.channel.send(
+          '✅ Dashboard mensal de ausências atualizado.'
+        ).catch(() => null);
+
+      if (reply) {
+        setTimeout(() => {
+          reply.delete().catch(() => {});
+        }, 8000);
+      }
+    } catch (error) {
+      console.error(
+        '[AUSÊNCIAS DASHBOARD] erro no comando manual:',
+        error
+      );
+
+      const motivo =
+        String(
+          error?.message || error
+        ).slice(0, 1500);
+
+      const reply =
+        await message.channel.send(
+          '❌ Não foi possível concluir a atualização do dashboard de ausências.\n' +
+          motivo
+        ).catch(() => null);
+
+      if (reply) {
+        setTimeout(() => {
+          reply.delete().catch(() => {});
+        }, 20000);
+      }
+    }
 
     return true;
   }
