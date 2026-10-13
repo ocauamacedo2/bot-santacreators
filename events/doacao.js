@@ -135,32 +135,19 @@ function decodeRankStateFromDiscord(content) {
 }
 
 async function findExistingRankMessage(client, canalRank) {
-  try {
-    // puxa bastante msg (pode ajustar pra 50 se quiser mais leve)
-    const msgs = await canalRank.messages.fetch({ limit: 100 }).catch(() => null);
-    if (!msgs) return null;
+  const msgs = await canalRank.messages.fetch({ limit: 100 });
 
-    // 1) tenta achar por content marker (mais confiável)
-    const byContent = msgs.find((m) => {
-      if (m.author?.id !== client.user.id) return false;
-      if (!m.content) return false;
-      return m.content.includes(RANK_MARKER);
-    });
-    if (byContent) return byContent;
+  const byContent = msgs.find(m =>
+    m.author?.id === client.user.id &&
+    String(m.content || "").includes(RANK_MARKER)
+  );
+  if (byContent) return byContent;
 
-    // 2) fallback: achar por footer marker (caso alguém apagou o content)
-    const byFooter = msgs.find((m) => {
-      if (m.author?.id !== client.user.id) return false;
-      const emb = m.embeds?.[0];
-      const ft = emb?.footer?.text || "";
-      return typeof ft === "string" && ft.includes(RANK_MARKER);
-    });
-    if (byFooter) return byFooter;
-
-    return null;
-  } catch {
-    return null;
-  }
+  const byFooter = msgs.find(m =>
+    m.author?.id === client.user.id &&
+    String(m.embeds?.[0]?.footer?.text || "").includes(RANK_MARKER)
+  );
+  return byFooter || null;
 }
 
 async function limparDuplicatasRanking(client, canalRank, keepMessageId) {
@@ -627,18 +614,29 @@ function buildRankEmbed(rankState) {
 
 }
 
-async function upsertRankingMessage(client) {
-  const canalRank = await client.channels.fetch(CANAL_RANK_ID).catch(() => null);
-  if (!canalRank?.isTextBased?.()) return;
+const doacaoRankingJobs = new WeakMap();
 
-  /*
-   * Durante uma troca de bot, a mensagem antiga continua pertencendo
-   * à aplicação anterior e não pode ser editada pelo bot atual.
-   *
-   * Por isso, removemos primeiro qualquer ranking identificado pelo
-   * marcador SC_DOACAO_RANK::V1 que pertença ao bot anterior.
-   */
-  await limparRankingDoBotAnterior(client, canalRank);
+async function upsertRankingMessage(client) {
+  const pending = doacaoRankingJobs.get(client);
+  if (pending) return pending;
+
+  const task = Promise.resolve()
+    .then(() => performDoacaoRankingUpdate(client))
+    .finally(() => {
+      if (doacaoRankingJobs.get(client) === task) {
+        doacaoRankingJobs.delete(client);
+      }
+    });
+
+  doacaoRankingJobs.set(client, task);
+  return task;
+}
+
+async function performDoacaoRankingUpdate(client) {
+  const canalRank = await client.channels.fetch(CANAL_RANK_ID);
+  if (!canalRank?.isTextBased?.() || !canalRank.messages) {
+    throw new Error("Canal do ranking de doações indisponível.");
+  }
 
   // 1) carrega do arquivo
   let rank = loadRank();
@@ -673,9 +671,15 @@ async function upsertRankingMessage(client) {
 
   // 3) tenta editar a msg salva (ou encontrada)
   if (rank.rankMessageId) {
-    const msg = await canalRank.messages.fetch(rank.rankMessageId).catch(() => null);
-    if (msg) {
-      await msg.edit({ content: contentHidden, embeds: [embed] }).catch(() => {});
+    let msg = null;
+    try {
+      msg = await canalRank.messages.fetch(rank.rankMessageId);
+    } catch (error) {
+      if (Number(error?.code) !== 10008) throw error;
+    }
+
+    if (msg && msg.author?.id === client.user.id) {
+      await msg.edit({ content: contentHidden, embeds: [embed] });
       await msg.pin().catch(() => {});
 
       // remove duplicadas do painel, mantendo só essa
@@ -692,14 +696,19 @@ async function upsertRankingMessage(client) {
       return;
     }
 
-    // se não achou, zera pra recriar (apagaram a msg)
+    if (msg) {
+      console.warn("[DOACAO RANK] Painel de outra aplicação preservado:", {
+        messageId: msg.id,
+        authorId: msg.author?.id || null,
+      });
+    }
+
     rank.rankMessageId = null;
     saveRank(rank);
   }
 
   // 4) se não existe nenhuma, cria UMA e salva
-  const nova = await canalRank.send({ content: contentHidden, embeds: [embed] }).catch(() => null);
-  if (!nova) return;
+  const nova = await canalRank.send({ content: contentHidden, embeds: [embed] });
 
   await nova.pin().catch(() => {});
   setTimeout(async () => {
