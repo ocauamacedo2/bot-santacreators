@@ -137,11 +137,13 @@ async function getFreshPayEvtOperationalData(
   const cacheIsValid =
     sameClient &&
     payEvtOperationalCollection.payload &&
+    Number.isFinite(
+      Number(payEvtOperationalCollection.collectedAt)
+    ) &&
+    Number(payEvtOperationalCollection.collectedAt) > 0 &&
+    now >= Number(payEvtOperationalCollection.collectedAt) &&
     now -
-      Number(
-        payEvtOperationalCollection.collectedAt ||
-        0
-      ) <
+      Number(payEvtOperationalCollection.collectedAt) <
       PAY_EVT_OPERATIONAL_CACHE_MS;
 
   if (
@@ -155,6 +157,14 @@ async function getFreshPayEvtOperationalData(
     payEvtOperationalCollection.promise
   ) {
     return payEvtOperationalCollection.promise;
+  }
+
+  if (!sameClient) {
+    payEvtOperationalCollection.payload =
+      null;
+
+    payEvtOperationalCollection.collectedAt =
+      0;
   }
 
   payEvtOperationalCollection.client =
@@ -181,18 +191,23 @@ async function getFreshPayEvtOperationalData(
    * A camada deste provedor continua controlando seu próprio
    * cache e sua Promise compartilhada normalmente.
    */
-  payEvtOperationalCollection.promise =
+  const collectionPromise =
     collectPayEvtOperationalData(
       client,
       false
     )
       .then(
         payload => {
-          payEvtOperationalCollection.payload =
-            payload;
+          if (
+            payEvtOperationalCollection.client === client &&
+            payEvtOperationalCollection.promise === collectionPromise
+          ) {
+            payEvtOperationalCollection.payload =
+              payload;
 
-          payEvtOperationalCollection.collectedAt =
-            Date.now();
+            payEvtOperationalCollection.collectedAt =
+              Date.now();
+          }
 
           console.log(
             "[NPS Providers] Varredura histórica compartilhada concluída:",
@@ -248,69 +263,29 @@ async function getFreshPayEvtOperationalData(
           return payload;
         }
       )
-      .catch(
-        error => {
-          console.error(
-            "[NPS Providers] Falha na varredura histórica compartilhada:",
-            error
-          );
+      .catch(error => {
+        console.error(
+          '[NPS Providers] Falha na varredura histórica compartilhada:',
+          error
+        );
 
-          /*
-           * Se uma coleta anterior válida existir,
-           * ela é utilizada somente como fallback.
-           */
-          if (
-            payEvtOperationalCollection.payload
-          ) {
-            return payEvtOperationalCollection.payload;
-          }
-
-          return {
-            generatedAt:
-              Date.now(),
-
-            payments:
-              [],
-
-            events:
-              [],
-
-            byWeek:
-              {},
-
-            byMonth:
-              {},
-
-            users:
-              {},
-
-            debug: {
-              scannedChannels:
-                {},
-
-              recoveredFromLogs:
-                0,
-
-              duplicatesIgnored:
-                0,
-
-              error:
-                error?.message ||
-                String(
-                  error
-                ),
-            },
-          };
-        }
-      )
+        throw error;
+      })
       .finally(
         () => {
-          payEvtOperationalCollection.promise =
-            null;
+          if (
+            payEvtOperationalCollection.promise === collectionPromise
+          ) {
+            payEvtOperationalCollection.promise =
+              null;
+          }
         }
       );
 
-  return payEvtOperationalCollection.promise;
+  payEvtOperationalCollection.promise =
+    collectionPromise;
+
+  return collectionPromise;
 }
 
 // ============================================================================
@@ -455,36 +430,37 @@ function readJson(
   fallback
 ) {
   try {
-    if (
-      !fs.existsSync(
-        file
-      )
-    ) {
-      return fallback;
-    }
-
     const raw =
       fs.readFileSync(
         file,
-        "utf8"
+        'utf8'
       );
 
-    if (
-      !raw.trim()
-    ) {
+    if (!raw.trim()) {
+      throw new Error(
+        'A fonte consolidada está vazia.'
+      );
+    }
+
+    return JSON.parse(raw);
+  } catch (error) {
+    if (error.code === 'ENOENT') {
       return fallback;
     }
 
-    return JSON.parse(
-      raw
-    );
-  } catch (error) {
     console.error(
-      "[NPS Providers] Erro ao ler a fonte consolidada:",
+      '[NPS Providers] Erro ao ler a fonte consolidada:',
       error
     );
 
-    return fallback;
+    throw new Error(
+      'Não foi possível ler a fonte ' +
+        file +
+        '.',
+      {
+        cause: error
+      }
+    );
   }
 }
 

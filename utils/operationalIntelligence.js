@@ -103,15 +103,45 @@ export function clampOperationalValue(
   );
 }
 
+function operationalNumber(value) {
+  if (typeof value === 'number') {
+    return Number.isFinite(value)
+      ? value
+      : null;
+  }
+
+  if (
+    typeof value !== 'string' ||
+    !value.trim()
+  ) {
+    return null;
+  }
+
+  const numeric =
+    Number(value);
+
+  return Number.isFinite(numeric)
+    ? numeric
+    : null;
+}
+
+function validOperationalNumbers(values) {
+  return (
+    Array.isArray(values)
+      ? values
+      : []
+  )
+    .map(operationalNumber)
+    .filter(value =>
+      value !== null
+    );
+}
+
 export function operationalAverage(
   values = []
 ) {
   const validValues =
-    values
-      .map(Number)
-      .filter(
-        Number.isFinite
-      );
+    validOperationalNumbers(values);
 
   if (
     !validValues.length
@@ -137,11 +167,7 @@ export function operationalMedian(
   values = []
 ) {
   const validValues =
-    values
-      .map(Number)
-      .filter(
-        Number.isFinite
-      )
+    validOperationalNumbers(values)
       .sort(
         (
           first,
@@ -636,8 +662,7 @@ export function buildResponseTimeStatistics({
   idealMinutes = null,
 } = {}) {
   const validDurations =
-    durations
-      .map(Number)
+    validOperationalNumbers(durations)
       .filter(
         duration =>
           Number.isFinite(
@@ -647,11 +672,8 @@ export function buildResponseTimeStatistics({
       );
 
   const idealMilliseconds =
-    Number.isFinite(
-      Number(
-        idealMinutes
-      )
-    )
+    operationalNumber(idealMinutes) !== null &&
+    Number(idealMinutes) >= 0
       ? Number(
           idealMinutes
         ) *

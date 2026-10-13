@@ -6692,9 +6692,10 @@ console.log(
               .trim();
 
           return {
+            id: message.id,
             authorId:
               message.author?.id ||
-              '0',
+              null,
 
             authorName:
               message.member

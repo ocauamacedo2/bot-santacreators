@@ -32,6 +32,8 @@ if (!globalThis.SC_OPERATIONAL_METRICS_PROVIDERS) {
 const providers =
   globalThis.SC_OPERATIONAL_METRICS_PROVIDERS;
 
+let operationalProviderRevision = 0;
+
 // ============================================================================
 // CONTROLE DE PERFORMANCE
 // ============================================================================
@@ -129,6 +131,8 @@ let operationalCollectionCache = {
 // ============================================================================
 
 function invalidateOperationalCollectionCache() {
+  operationalProviderRevision++;
+
   operationalCollectionCache.key =
     null;
 
@@ -165,11 +169,17 @@ function buildOperationalCollectionKey(
       "no-previous-week"
     );
 
-  return [
+  return JSON.stringify([
     clientId,
+    String(
+      context.guild?.id ||
+      context.guildId ||
+      ''
+    ),
     currentWeekKey,
     previousWeekKey,
-  ].join(":");
+    operationalProviderRevision
+  ]);
 }
 
 /*
@@ -184,71 +194,72 @@ function buildOperationalCollectionKey(
  * Dessa forma, não aumentamos desnecessariamente o tempo
  * permitido para todos os sistemas.
  */
+const operationalProviderRuns = new WeakMap();
+
+function sharedOperationalProviderRun(provider, context) {
+  let runs = operationalProviderRuns.get(provider);
+
+  if (!runs) {
+    runs = new Map();
+    operationalProviderRuns.set(provider, runs);
+  }
+
+  const key = buildOperationalCollectionKey(context);
+
+  if (runs.has(key)) {
+    return runs.get(key);
+  }
+
+  const run = Promise.resolve().then(() => provider(context));
+
+  runs.set(key, run);
+
+  const clear = () => {
+    if (runs.get(key) === run) {
+      runs.delete(key);
+    }
+  };
+
+  void run.then(clear, clear);
+
+  return run;
+}
+
 async function executeProviderWithTimeout(
   providerId,
   provider,
   context
 ) {
-  let timeoutHandle =
-    null;
+  let timeoutHandle = null;
 
-  /*
-   * Decide o limite de tempo baseado no tipo do provider.
-   */
   const providerTimeoutMs =
-    OPERATIONAL_HEAVY_PROVIDER_IDS.has(
-      providerId
-    )
+    OPERATIONAL_HEAVY_PROVIDER_IDS.has(providerId)
       ? OPERATIONAL_HEAVY_PROVIDER_TIMEOUT_MS
       : OPERATIONAL_PROVIDER_TIMEOUT_MS;
 
   try {
     const providerPromise =
-      Promise.resolve()
-        .then(
-          () =>
-            provider(
-              context
-            )
+      sharedOperationalProviderRun(provider, context);
+
+    const timeoutPromise = new Promise((_resolve, reject) => {
+      timeoutHandle = setTimeout(() => {
+        const error = new Error(
+          `O provedor "${providerId}" excedeu o limite de ${providerTimeoutMs / 1000} segundos.`
         );
 
-    const timeoutPromise =
-      new Promise(
-        (
-          _resolve,
-          reject
-        ) => {
-          timeoutHandle =
-            setTimeout(
-              () => {
-                const error =
-                  new Error(
-                    `O provedor "${providerId}" excedeu o limite de ${providerTimeoutMs / 1000} segundos.`
-                  );
+        error.code = "SC_OPERATIONAL_PROVIDER_TIMEOUT";
 
-                error.code =
-                  "SC_OPERATIONAL_PROVIDER_TIMEOUT";
-
-                reject(
-                  error
-                );
-              },
-              providerTimeoutMs
-            );
-        }
-      );
+        reject(error);
+      }, providerTimeoutMs);
+    });
 
     return await Promise.race([
       providerPromise,
       timeoutPromise,
     ]);
   } finally {
-    if (
-      timeoutHandle
-    ) {
-      clearTimeout(
-        timeoutHandle
-      );
+    if (timeoutHandle !== null) {
+      clearTimeout(timeoutHandle);
     }
   }
 }
@@ -327,6 +338,9 @@ export async function collectOperationalMetrics(
     operationalCollectionCache.key ===
       collectionKey &&
     operationalCollectionCache.payload &&
+    now >= Number(
+      operationalCollectionCache.collectedAt || 0
+    ) &&
     now -
       Number(
         operationalCollectionCache.collectedAt ||
@@ -374,7 +388,7 @@ export async function collectOperationalMetrics(
    * A ordem final permanece igual à ordem de registro
    * dos provedores no Map.
    */
-  operationalCollectionCache.promise =
+  const collectionPromise =
     Promise.all(
       [
         ...providers.entries(),
@@ -395,6 +409,20 @@ export async function collectOperationalMetrics(
                 provider,
                 context
               );
+
+            if (
+              result != null &&
+              (
+                typeof result !== 'object' ||
+                Array.isArray(result)
+              )
+            ) {
+              throw new TypeError(
+                'O provedor ' +
+                  providerId +
+                  ' retornou um formato inválido.'
+              );
+            }
 
             return {
               success:
@@ -454,10 +482,10 @@ export async function collectOperationalMetrics(
               }
 
               results.push({
+                ...providerResponse.result,
+
                 providerId:
                   providerResponse.providerId,
-
-                ...providerResponse.result,
               });
 
               continue;
@@ -490,11 +518,16 @@ export async function collectOperationalMetrics(
             collectedAt,
           };
 
-          operationalCollectionCache.payload =
-            payload;
+          if (
+            operationalCollectionCache.key === collectionKey &&
+            operationalCollectionCache.promise === collectionPromise
+          ) {
+            operationalCollectionCache.payload =
+              payload;
 
-          operationalCollectionCache.collectedAt =
-            collectedAt;
+            operationalCollectionCache.collectedAt =
+              collectedAt;
+          }
 
           console.log(
             "[OperationalMetricsHub] Coleta concluída:",
@@ -519,10 +552,17 @@ export async function collectOperationalMetrics(
       )
       .finally(
         () => {
-          operationalCollectionCache.promise =
-            null;
+          if (
+            operationalCollectionCache.promise === collectionPromise
+          ) {
+            operationalCollectionCache.promise =
+              null;
+          }
         }
       );
 
-  return operationalCollectionCache.promise;
+  operationalCollectionCache.promise =
+    collectionPromise;
+
+  return collectionPromise;
 }

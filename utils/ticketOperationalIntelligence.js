@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { GoogleGenAI } from "@google/genai";
+import { createHash } from 'node:crypto';
 import { dashEmit } from "./dashHub.js";
 
 const TZ = "America/Sao_Paulo";
@@ -34,6 +35,52 @@ const AI_TIMEOUT_MS = 18000;
 
 let gemini = null;
 
+const ticketAnalysisJobs = new Map();
+
+function ticketAnalysisFingerprint(input) {
+  return createHash('sha256')
+    .update(
+      JSON.stringify({
+        channelId: input.channelId,
+        guildId: input.guildId || null,
+        ticketType: input.ticketType || null,
+        openerId: input.openerId || null,
+        closerId: input.closerId || null,
+        primaryAttendantId:
+          input.primaryAttendantId || null,
+        humanConclusion:
+          input.humanConclusion || '',
+        autoReasonType:
+          input.autoReasonType || null,
+        openedAt:
+          Number(input.openedAt),
+        closedAt:
+          Number(input.closedAt),
+        messages:
+          input.messages.map(message => ({
+            id: message?.id || null,
+            authorId:
+              message?.authorId || null,
+            authorName:
+              message?.authorName || null,
+            createdTimestamp:
+              message?.createdTimestamp,
+            content:
+              message?.content || '',
+            isOpener:
+              message?.isOpener === true,
+            isStaff:
+              message?.isStaff === true,
+            isBot:
+              message?.isBot === true,
+            attachments:
+              message?.attachments || 0
+          }))
+      })
+    )
+    .digest('hex');
+}
+
 // ============================================================================
 // PERSISTÊNCIA
 // ============================================================================
@@ -48,47 +95,55 @@ function ensureDataDir() {
 
 function loadState() {
   try {
-    ensureDataDir();
-
-    if (!fs.existsSync(TICKET_OPERATIONAL_FILE)) {
-      return {
-        version: 1,
-        records: [],
-      };
-    }
-
-    const raw = fs.readFileSync(
-      TICKET_OPERATIONAL_FILE,
-      "utf8"
-    );
+    const raw =
+      fs.readFileSync(
+        TICKET_OPERATIONAL_FILE,
+        'utf8'
+      );
 
     if (!raw.trim()) {
-      return {
-        version: 1,
-        records: [],
-      };
+      throw new Error(
+        'O estado operacional de tickets está vazio.'
+      );
     }
 
     const parsed = JSON.parse(raw);
 
-    return {
-      version: 1,
+    if (
+      !parsed ||
+      parsed.version !== 1 ||
+      !Array.isArray(parsed.records) ||
+      parsed.records.some(record =>
+        !record ||
+        typeof record !== 'object' ||
+        Array.isArray(record)
+      )
+    ) {
+      throw new Error(
+        'O estado operacional de tickets possui estrutura inválida.'
+      );
+    }
 
-      records:
-        Array.isArray(parsed?.records)
-          ? parsed.records
-          : [],
-    };
+    return parsed;
   } catch (error) {
+    if (error.code === 'ENOENT') {
+      return {
+        version: 1,
+        records: []
+      };
+    }
+
     console.error(
-      "[TICKET IA/NPS] Falha ao ler estado operacional:",
+      '[TICKET IA/NPS] Falha ao ler estado operacional:',
       error
     );
 
-    return {
-      version: 1,
-      records: [],
-    };
+    throw new Error(
+      'O estado de tickets foi preservado e precisa ser recuperado.',
+      {
+        cause: error
+      }
+    );
   }
 }
 
@@ -118,6 +173,8 @@ function saveState(state) {
       "[TICKET IA/NPS] Falha ao salvar estado operacional:",
       error
     );
+
+    throw error;
   }
 }
 
@@ -150,13 +207,32 @@ function clamp(
   );
 }
 
+function ticketNumericValue(value) {
+  if (
+    (typeof value !== "number" && typeof value !== "string") ||
+    (typeof value === "string" && !value.trim())
+  ) {
+    return null;
+  }
+
+  const numeric = Number(value);
+
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
+function ticketDurationValue(value) {
+  const numeric = ticketNumericValue(value);
+
+  return numeric !== null && numeric >= 0 ? numeric : null;
+}
+
 function average(
   values = []
 ) {
   const valid =
-    values
-      .map(Number)
-      .filter(Number.isFinite);
+    (Array.isArray(values) ? values : [])
+      .map(ticketNumericValue)
+      .filter(value => value !== null);
 
   if (
     valid.length ===
@@ -184,9 +260,9 @@ function percentile(
   percentileValue = 0.9
 ) {
   const valid =
-    values
-      .map(Number)
-      .filter(Number.isFinite)
+    (Array.isArray(values) ? values : [])
+      .map(ticketNumericValue)
+      .filter(value => value !== null)
       .sort(
         (
           first,
@@ -561,7 +637,10 @@ function normalizeTeamPerformance(
   const normalized =
     normalizeText(
       value
-    ).toLowerCase();
+    )
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase();
 
   if (
     normalized.includes(
@@ -640,43 +719,68 @@ function calculateTicketMetrics({
   closedAt,
   messages = [],
 }) {
-  const sorted =
-    [...messages]
-      .filter(
-        message =>
-          Number.isFinite(
-            Number(
-              message.createdTimestamp
-            )
-          )
-      )
-      .sort(
-        (
-          first,
-          second
-        ) =>
-          Number(
-            first.createdTimestamp
-          ) -
-          Number(
-            second.createdTimestamp
-          )
+  const seenMessageIds = new Set();
+
+  const sorted = [...messages]
+    .filter(message => {
+      const timestamp = ticketNumericValue(
+        message.createdTimestamp
       );
 
+      if (
+        timestamp === null ||
+        timestamp <= 0 ||
+        !Number.isFinite(new Date(timestamp).getTime()) ||
+        timestamp < Number(openedAt) ||
+        timestamp > Number(closedAt)
+      ) {
+        return false;
+      }
+
+      const messageId = message.id == null
+        ? null
+        : String(message.id);
+
+      if (messageId !== null) {
+        if (seenMessageIds.has(messageId)) {
+          return false;
+        }
+
+        seenMessageIds.add(messageId);
+      }
+
+      return true;
+    })
+    .sort((first, second) => {
+      const difference =
+        Number(first.createdTimestamp) -
+        Number(second.createdTimestamp);
+
+      if (difference !== 0) {
+        return difference;
+      }
+
+      const firstId = String(first.id || "");
+      const secondId = String(second.id || "");
+
+      return firstId < secondId ? -1 : firstId > secondId ? 1 : 0;
+    });
+
   const openerMessages =
-    sorted.filter(
-      message =>
-        message.isOpener ===
-          true ||
-        message.authorId ===
-          openerId
+    sorted.filter(message =>
+      message.isBot !== true &&
+      (
+        message.isOpener === true ||
+        String(message.authorId || "") === String(openerId || "")
+      )
     );
 
   const staffMessages =
-    sorted.filter(
-      message =>
-        message.isStaff ===
-        true
+    sorted.filter(message =>
+      message.isStaff === true &&
+      message.isBot !== true &&
+      message.isOpener !== true &&
+      String(message.authorId || "") !== String(openerId || "")
     );
 
   const botMessages =
@@ -692,19 +796,23 @@ function calculateTicketMetrics({
 
   const firstStaffAfterOpener =
     firstOpenerMessage
-      ? staffMessages.find(
-          message =>
-            Number(
-              message.createdTimestamp
-            ) >
-            Number(
-              firstOpenerMessage
-                .createdTimestamp
-            )
-        ) ||
-        null
-      : staffMessages[0] ||
-        null;
+      ? staffMessages.find(message => {
+          const staffTimestamp = Number(message.createdTimestamp);
+          const openerTimestamp = Number(
+            firstOpenerMessage.createdTimestamp
+          );
+
+          if (staffTimestamp !== openerTimestamp) {
+            return staffTimestamp > openerTimestamp;
+          }
+
+          if (message.id && firstOpenerMessage.id) {
+            return BigInt(message.id) > BigInt(firstOpenerMessage.id);
+          }
+
+          return true;
+        }) || null
+      : staffMessages[0] || null;
 
   const firstHumanResponseMs =
     firstOpenerMessage &&
@@ -1124,12 +1232,12 @@ async function evaluateWithGemini({
       .map(
         message => {
           const actor =
-            message.isOpener
-              ? "CIDADAO"
-              : message.isStaff
-                ? "EQUIPE"
-                : message.isBot
-                  ? "BOT_IA"
+            message.isBot === true
+              ? "BOT_IA"
+              : message.isOpener === true
+                ? "CIDADAO"
+                : message.isStaff === true
+                  ? "EQUIPE"
                   : "OUTRO";
 
           const attachments =
@@ -1270,10 +1378,25 @@ RETORNE EXATAMENTE UM JSON NESTE FORMATO:
 }
 `;
 
+ 
+
+  const aiDeadlineAt =
+    Date.now() + AI_TIMEOUT_MS;
+
   for (
     const model of
     GEMINI_MODEL_FALLBACKS
   ) {
+    if (
+      Date.now() >= aiDeadlineAt
+    ) {
+      break;
+    }
+    if (
+      Date.now() >= aiDeadlineAt
+    ) {
+      break;
+    }
     try {
       const response =
         await withTimeout(
@@ -1292,7 +1415,10 @@ RETORNE EXATAMENTE UM JSON NESTE FORMATO:
             },
           }),
 
-          AI_TIMEOUT_MS,
+          Math.max(
+            1,
+            aiDeadlineAt - Date.now()
+          ),
 
           `Gemini ${model}`
         );
@@ -1316,7 +1442,22 @@ RETORNE EXATAMENTE UM JSON NESTE FORMATO:
         );
 
       if (
-        !parsed
+        !parsed ||
+        typeof parsed !== 'object' ||
+        Array.isArray(parsed) ||
+        typeof parsed.resolved !== 'string' ||
+        typeof parsed.confidence !== 'number' ||
+        !Number.isFinite(parsed.confidence) ||
+        parsed.confidence < 0 ||
+        parsed.confidence > 100 ||
+        !["sim", "parcial", "nao", "inconclusivo"].includes(parsed.resolved) ||
+        !["excelente", "bom", "atencao", "critico"].includes(parsed.teamPerformance) ||
+        !["humano", "ia", "misto", "nao_identificado"].includes(parsed.whoSolved) ||
+        typeof parsed.citizenAbandoned !== "boolean" ||
+        typeof parsed.teamAbandoned !== "boolean" ||
+        ["summaryShort", "mainReason", "closingContext", "evidence"].some(field =>
+          typeof parsed[field] !== "string"
+        )
       ) {
         continue;
       }
@@ -1369,7 +1510,7 @@ closingContext:
             "cidadao"
           ? "O ticket fechou por inatividade depois que a SantaCreators respondeu e o cidadão não retornou."
           : "O ticket fechou automaticamente por inatividade."
-      : "Atendimento encerrado normalmente pela equipe."
+      : "Atendimento encerrado pela equipe, sem descrição conclusiva do resultado."
   ),
 
 teamPerformance:
@@ -1417,7 +1558,7 @@ whoSolved:
 // FUNÇÃO PRINCIPAL
 // ============================================================================
 
-export async function analyzeAndRecordTicket({
+async function performTicketAnalysis({
   channelId,
   guildId,
   ticketType = null,
@@ -1429,6 +1570,7 @@ export async function analyzeAndRecordTicket({
   openedAt = Date.now(),
   closedAt = Date.now(),
   messages = [],
+  analysisFingerprint = null,
 } = {}) {
   if (
     !channelId
@@ -1438,12 +1580,54 @@ export async function analyzeAndRecordTicket({
     );
   }
 
+  if (
+    ![openedAt, closedAt].every(value =>
+      Number.isFinite(Number(value)) &&
+      Number(value) > 0
+    ) ||
+    Number(closedAt) < Number(openedAt)
+  ) {
+    throw new Error(
+      'O período do ticket é inválido.'
+    );
+  }
+
+  for (
+    const id of [
+      guildId,
+      openerId,
+      closerId,
+      primaryAttendantId
+    ]
+  ) {
+    if (
+      id != null &&
+      !/^\d{17,20}$/.test(String(id))
+    ) {
+      throw new Error(
+        'Uma identificação do ticket é inválida.'
+      );
+    }
+  }
+
   const safeMessages =
     Array.isArray(
       messages
     )
       ? messages
       : [];
+
+  if (
+    safeMessages.some(message =>
+      !message ||
+      typeof message !== 'object' ||
+      Array.isArray(message)
+    )
+  ) {
+    throw new TypeError(
+      'Uma mensagem do ticket possui formato inválido.'
+    );
+  }
 
   const metrics =
     calculateTicketMetrics({
@@ -1555,6 +1739,8 @@ export async function analyzeAndRecordTicket({
     metrics,
 
     evaluation,
+
+    analysisFingerprint,
 
     userFeedback:
       null,
@@ -1702,11 +1888,182 @@ export async function analyzeAndRecordTicket({
 // FEEDBACK DO CIDADÃO
 // ============================================================================
 
+export async function analyzeAndRecordTicket(input = {}) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("Os dados do ticket devem ser um objeto.");
+  }
+
+  const normalizeId = (value, label, required = false) => {
+    if (value == null) {
+      if (required) throw new Error(label + " é obrigatório.");
+      return null;
+    }
+
+    if (typeof value !== "string" && typeof value !== "bigint") {
+      throw new TypeError(label + " deve ser informado sem perda de precisão.");
+    }
+
+    const id = String(value).trim();
+
+    if (!/^\d{17,20}$/.test(id)) {
+      throw new Error(label + " inválido.");
+    }
+
+    return id;
+  };
+
+  const channelId = normalizeId(input.channelId, "ID do ticket", true);
+  const now = Date.now();
+  const openedAt = ticketNumericValue(input.openedAt ?? now);
+  const closedAt = ticketNumericValue(input.closedAt ?? now);
+
+  if (
+    openedAt === null || closedAt === null ||
+    openedAt <= 0 || closedAt < openedAt ||
+    !Number.isFinite(new Date(openedAt).getTime()) ||
+    !Number.isFinite(new Date(closedAt).getTime())
+  ) {
+    throw new Error("O período do ticket é inválido.");
+  }
+
+  const sourceMessages = input.messages ?? [];
+
+  if (!Array.isArray(sourceMessages)) {
+    throw new TypeError("As mensagens do ticket devem ser uma lista.");
+  }
+
+  const seenMessageIds = new Set();
+
+  const messages = sourceMessages.map(message => {
+    if (!message || typeof message !== "object" || Array.isArray(message)) {
+      throw new TypeError("Uma mensagem do ticket possui formato inválido.");
+    }
+
+    const timestamp = ticketNumericValue(message.createdTimestamp);
+
+    if (
+      timestamp === null || timestamp <= 0 ||
+      !Number.isFinite(new Date(timestamp).getTime())
+    ) {
+      throw new TypeError("Uma mensagem do ticket possui data inválida.");
+    }
+
+    if (message.content != null && typeof message.content !== "string") {
+      throw new TypeError("Uma mensagem do ticket possui texto inválido.");
+    }
+
+    for (const flag of ["isOpener", "isStaff", "isBot"]) {
+      if (message[flag] != null && typeof message[flag] !== "boolean") {
+        throw new TypeError("Uma mensagem do ticket possui marcador inválido: " + flag);
+      }
+    }
+
+    const attachments = ticketDurationValue(message.attachments ?? 0);
+
+    if (attachments === null || !Number.isSafeInteger(attachments)) {
+      throw new TypeError("Uma mensagem do ticket possui quantidade de anexos inválida.");
+    }
+
+    return {
+      ...message,
+      id: normalizeId(message.id, "ID da mensagem"),
+      authorId: normalizeId(message.authorId, "ID do autor"),
+      createdTimestamp: timestamp,
+      content: message.content ?? "",
+      isOpener: message.isOpener === true,
+      isStaff: message.isStaff === true,
+      isBot: message.isBot === true,
+      attachments,
+    };
+  }).filter(message => {
+    if (message.id === null) return true;
+    if (seenMessageIds.has(message.id)) return false;
+
+    seenMessageIds.add(message.id);
+
+    return true;
+  }).sort((first, second) => {
+    const difference = first.createdTimestamp - second.createdTimestamp;
+
+    if (difference !== 0) return difference;
+
+    const firstId = String(first.id || "");
+    const secondId = String(second.id || "");
+
+    return firstId < secondId ? -1 : firstId > secondId ? 1 : 0;
+  });
+
+  const normalized = {
+    ...input,
+    channelId,
+    guildId: normalizeId(input.guildId, "ID do servidor"),
+    openerId: normalizeId(input.openerId, "ID do autor do ticket"),
+    closerId: normalizeId(input.closerId, "ID de quem encerrou"),
+    primaryAttendantId: normalizeId(input.primaryAttendantId, "ID do atendente"),
+    openedAt,
+    closedAt,
+    messages,
+  };
+
+  const fingerprint = ticketAnalysisFingerprint(normalized);
+  const previous = ticketAnalysisJobs.get(channelId);
+
+  if (previous?.fingerprint === fingerprint) {
+    return previous.promise;
+  }
+
+  const job = {
+    fingerprint,
+    promise: null,
+  };
+
+  job.promise = (previous?.promise || Promise.resolve())
+    .catch(() => {})
+    .then(() => {
+      const existing = loadState().records.find(record =>
+        String(record.channelId) === channelId &&
+        record.analysisFingerprint === fingerprint
+      );
+
+      if (existing) {
+        return existing;
+      }
+
+      return performTicketAnalysis({
+        ...normalized,
+        analysisFingerprint: fingerprint,
+      });
+    })
+    .finally(() => {
+      if (ticketAnalysisJobs.get(channelId) === job) {
+        ticketAnalysisJobs.delete(channelId);
+      }
+    });
+
+  ticketAnalysisJobs.set(channelId, job);
+
+  return job.promise;
+}
+
 export function recordTicketFeedback({
   channelId,
   userId,
   feedback,
 } = {}) {
+  if (
+    !/^\d{17,20}$/.test(
+      String(channelId || '')
+    ) ||
+    !/^\d{17,20}$/.test(
+      String(userId || '')
+    )
+  ) {
+    return {
+      ok: false,
+      reason: 'identificacao_invalida'
+    };
+  }
+
   const validFeedbacks =
     new Set([
       "resolvido",
@@ -1772,6 +2129,16 @@ export function recordTicketFeedback({
 
       reason:
         "usuario_nao_autorizado",
+    };
+  }
+
+  if (
+    record.userFeedback === feedback
+  ) {
+    return {
+      ok: true,
+      record,
+      alreadyRecorded: true
     };
   }
 
@@ -2041,20 +2408,14 @@ function calculateQualityScore(
   );
 }
 
-function responseTimeScore(
-  milliseconds
-) {
-  if (
-    milliseconds == null
-  ) {
+function responseTimeScore(milliseconds) {
+  const duration = ticketDurationValue(milliseconds);
+
+  if (duration === null) {
     return 0;
   }
 
-  const minutes =
-    Number(
-      milliseconds
-    ) /
-    60000;
+  const minutes = duration / 60000;
 
   if (minutes <= 30) return 100;
   if (minutes <= 120) return 90;
@@ -2078,9 +2439,9 @@ function calculateResponseScore(
     records.map(
       record => {
         if (
-          record?.metrics
-            ?.firstHumanResponseMs ==
-            null
+          ticketDurationValue(
+            record?.metrics?.firstHumanResponseMs
+          ) === null
         ) {
           if (
             record?.metrics
@@ -2625,23 +2986,21 @@ export function buildTicketResponseOperationalMetric(
 
   const currentResponseTimes =
     currentRecords
-      .map(
-        record =>
-          record?.metrics
-            ?.firstHumanResponseMs
+      .map(record =>
+        ticketDurationValue(
+          record?.metrics?.firstHumanResponseMs
+        )
       )
-      .map(Number)
-      .filter(Number.isFinite);
+      .filter(value => value !== null);
 
   const previousResponseTimes =
     previousRecords
-      .map(
-        record =>
-          record?.metrics
-            ?.firstHumanResponseMs
+      .map(record =>
+        ticketDurationValue(
+          record?.metrics?.firstHumanResponseMs
+        )
       )
-      .map(Number)
-      .filter(Number.isFinite);
+      .filter(value => value !== null);
 
   const currentScore =
     calculateResponseScore(
@@ -2672,9 +3031,9 @@ export function buildTicketResponseOperationalMetric(
   const unansweredByTeam =
     currentRecords.filter(
       record =>
-        record?.metrics
-          ?.firstHumanResponseMs ==
-          null &&
+        ticketDurationValue(
+          record?.metrics?.firstHumanResponseMs
+        ) === null &&
         record?.metrics
           ?.waitingOn ===
           "equipe"
@@ -2879,13 +3238,10 @@ export function buildTicketResponseOperationalMetric(
 
       averageTotalOpenMs:
         average(
-          currentRecords.map(
-            record =>
-              Number(
-                record?.metrics
-                  ?.totalOpenMs ||
-                0
-              )
+          currentRecords.map(record =>
+            ticketDurationValue(
+              record?.metrics?.totalOpenMs
+            )
           )
         ),
 

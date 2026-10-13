@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile, rename } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, rename, unlink } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
 import { PermissionFlagsBits } from 'discord.js';
@@ -165,11 +165,32 @@ export function createSiteEventsLibrary({ client }) {
       mode: 0o700
     });
 
-    await writeFile(file + '.tmp', JSON.stringify(state), {
-      mode: 0o600
-    });
+    const temporary =
+      file + '.' + randomUUID() + '.tmp';
 
-    await rename(file + '.tmp', file);
+    try {
+      await writeFile(
+        temporary,
+        JSON.stringify(state),
+        {
+          mode: 0o600
+        }
+      );
+
+      await rename(
+        temporary,
+        file
+      );
+    } finally {
+      await unlink(temporary).catch(error => {
+        if (error.code !== 'ENOENT') {
+          console.warn(
+            '[EVENT LIBRARY] Limpeza temporária:',
+            error.message
+          );
+        }
+      });
+    }
   }
 
   const mayEdit = member =>
@@ -502,7 +523,7 @@ export function createSiteEventsLibrary({ client }) {
   }
 
   async function messages(value) {
-    const result = [];
+    const result = new Map();
     let before;
 
     for (let page = 0; page < 5; page++) {
@@ -511,16 +532,76 @@ export function createSiteEventsLibrary({ client }) {
         ...(before ? { before } : {})
       });
 
-      result.push(...batch.values());
-
-      if (batch.size < 100) {
-        return { items: result, truncated: false };
+      if (!batch.size) {
+        return {
+          items: [...result.values()],
+          truncated: false
+        };
       }
 
-      before = batch.last().id;
+      let oldest;
+
+      for (const message of batch.values()) {
+        const id = String(message.id);
+
+        if (!/^\d{17,20}$/.test(id)) {
+          throw fail(
+            503,
+            'Uma mensagem da biblioteca possui ID inválido.'
+          );
+        }
+
+        if (
+          before &&
+          BigInt(id) >= BigInt(before)
+        ) {
+          if (result.has(id)) {
+            continue;
+          }
+
+          throw fail(
+            503,
+            'A paginação da biblioteca retornou uma mensagem fora do período solicitado.'
+          );
+        }
+
+        result.set(id, message);
+
+        if (
+          !oldest ||
+          BigInt(id) < BigInt(oldest)
+        ) {
+          oldest = id;
+        }
+      }
+
+      if (
+        !oldest ||
+        (
+          before &&
+          BigInt(oldest) >= BigInt(before)
+        )
+      ) {
+        throw fail(
+          503,
+          'A paginação da biblioteca não avançou. Os dados anteriores devem ser preservados.'
+        );
+      }
+
+      if (batch.size < 100) {
+        return {
+          items: [...result.values()],
+          truncated: false
+        };
+      }
+
+      before = oldest;
     }
 
-    return { items: result, truncated: true };
+    return {
+      items: [...result.values()],
+      truncated: true
+    };
   }
 
   async function snapshot(guild, member, payload) {
@@ -531,19 +612,65 @@ export function createSiteEventsLibrary({ client }) {
       events: events.map(event => ({
         ...event,
 
-        publicationOnline:
-          Boolean(
-            state.publications?.[
-              guild.id + ':' + event.id
-            ]?.online
+               publicationOnline:
+          (event.aliasIds || [event.id]).some(id =>
+            Boolean(
+              state.publications?.[
+                guild.id + ':' + id
+              ]?.online
+            )
           ),
 
-        name: state.names?.[guild.id + ':' + event.id] || event.name,
+        name:
+          state.names?.[guild.id + ':' + event.id] ||
+          (event.aliasIds || [event.id])
+            .map(
+              id =>
+                state.names?.[guild.id + ':' + id]
+            )
+            .find(Boolean) ||
+          event.name,
         metadataRevision: digest([
-          state.names?.[guild.id + ':' + event.id] || event.name,
-          Object.hasOwn(state.covers, guild.id + ':' + event.id)
-          ? state.covers[guild.id + ':' + event.id]
-          : (event.aliasIds || [event.id]).map(id => state.covers[guild.id + ':' + id]).find(Boolean) || ''
+          (event.aliasIds || [event.id])
+            .slice()
+            .sort(),
+
+          Object.values(state.items)
+            .filter(item =>
+              item.guildId === guild.id &&
+              (event.aliasIds || [event.id]).includes(
+                item.eventId
+              )
+            )
+            .map(item => [
+              item.id,
+              item.revision
+            ])
+            .sort((a, b) =>
+              String(a[0]).localeCompare(
+                String(b[0])
+              )
+            ),
+
+          state.names?.[guild.id + ':' + event.id] ||
+          (event.aliasIds || [event.id])
+            .map(
+              id =>
+                state.names?.[guild.id + ':' + id]
+            )
+            .find(Boolean) ||
+          event.name,
+
+          Object.hasOwn(
+            state.covers,
+            guild.id + ':' + event.id
+          )
+            ? state.covers[guild.id + ':' + event.id]
+            : (event.aliasIds || [event.id])
+                .map(id =>
+                  state.covers[guild.id + ':' + id]
+                )
+                .find(Boolean) || ''
         ]),
         cover: Object.hasOwn(state.covers, guild.id + ':' + event.id)
           ? state.covers[guild.id + ':' + event.id]
@@ -636,8 +763,24 @@ export function createSiteEventsLibrary({ client }) {
           }
           }
         } catch (error) {
-          if (error.status === 403 || error.status === 401) throw error;
-          result.warnings.push(error.message);
+          if (
+            error.status === 403 ||
+            error.status === 401
+          ) {
+            throw error;
+          }
+
+          throw Object.assign(
+            fail(
+              503,
+              'Não foi possível ler a seção ' +
+              section +
+              '. A consulta anterior deve ser preservada.'
+            ),
+            {
+              cause: error
+            }
+          );
         }
       }
 
@@ -665,12 +808,30 @@ export function createSiteEventsLibrary({ client }) {
       cover: payload.cover ? eventMediaUrl(payload.cover) : '',
       media: (
         Array.isArray(payload.media) ? payload.media : []
-      ).map(item => ({
-        kind: ['image', 'audio', 'video', 'link'].includes(item.kind)
-          ? item.kind
-          : 'link',
-        url: eventMediaUrl(item.url)
-      }))
+      ).map(item => {
+        if (
+          !item ||
+          typeof item !== 'object' ||
+          Array.isArray(item)
+        ) {
+          throw fail(
+            400,
+            'Uma mídia do evento possui formato inválido.'
+          );
+        }
+
+        return {
+          kind:
+            ['image', 'audio', 'video', 'link'].includes(
+              item.kind
+            )
+              ? item.kind
+              : 'link',
+
+          url:
+            eventMediaUrl(item.url)
+        };
+      })
     };
 
     if (
@@ -1171,6 +1332,17 @@ export function createSiteEventsLibrary({ client }) {
       );
     }
 
+    if (
+      !member ||
+      member.guild?.id !== guild.id ||
+      member.user?.bot === true
+    ) {
+      throw fail(
+        403,
+        'Membro inválido para acessar a biblioteca de eventos.'
+      );
+    }
+
     if (action === 'events.snapshot') {
       await writes;
       return snapshot(guild, member, payload);
@@ -1363,9 +1535,42 @@ export function createSiteEventsLibrary({ client }) {
 
         const state = await read();
 
-        if (decision.field === 'name') {
+        if (
+          decision.field === 'name'
+        ) {
+          const normalizeName =
+            value =>
+              String(value || '')
+                .normalize('NFD')
+                .replace(
+                  /[\u0300-\u036f]/g,
+                  ''
+                )
+                .replace(
+                  /\s+/g,
+                  ' '
+                )
+                .trim()
+                .toLowerCase();
+
+          if (
+            current.events.some(other =>
+              other.id !== event.id &&
+              normalizeName(other.name) ===
+                normalizeName(decision.value)
+            )
+          ) {
+            throw fail(
+              409,
+              'Já existe outro evento com esse nome na biblioteca.'
+            );
+          }
+
           state.names ||= {};
-          state.names[guild.id + ':' + event.id] =
+
+          state.names[
+            guild.id + ':' + event.id
+          ] =
             decision.value;
         } else {
           state.covers[guild.id + ':' + event.id] =
@@ -1455,31 +1660,98 @@ export function createSiteEventsLibrary({ client }) {
       throw fail(409, 'Confirme novamente esta alteração.');
     }
 
-    let source;
+        let source;
 
-    if (action === 'events.delete') {
-      const sources = await eventSources(
-        guild,
-        member,
-        event,
-        value.section
-      );
+    if (
+      value.id
+    ) {
+      const current =
+        (
+          await snapshot(
+            guild,
+            member,
+            {
+              eventId:
+                value.eventId,
 
-      source = sources[0];
+              section:
+                value.section
+            }
+          )
+        ).sections[
+          value.section
+        ]?.find(
+          item =>
+            item.id === value.id
+        );
 
-      if (!source) {
+      if (
+        !current ||
+        current.revision !== value.revision
+      ) {
+        throw fail(
+          409,
+          'Este conteúdo mudou. Atualize antes de editar ou excluir.'
+        );
+      }
+
+      const sourceId =
+        String(
+          current.messageChannelId ||
+          String(
+            current.sourceId ||
+            current.id
+          ).split(':')[0]
+        );
+
+      if (
+        /^\d{17,20}$/.test(sourceId)
+      ) {
+        source =
+          await channel(
+            guild,
+            member,
+            sourceId,
+            value.section === 'cds'
+              ? null
+              : MENUS
+          );
+      }
+    }
+
+    if (
+      !source &&
+      action === 'events.delete'
+    ) {
+      const sources =
+        await eventSources(
+          guild,
+          member,
+          event,
+          value.section
+        );
+
+      source =
+        sources[0];
+
+      if (
+        !source
+      ) {
         throw fail(
           409,
           'O tópico deste conteúdo não foi encontrado. Atualize antes de excluir.'
         );
       }
-    } else {
-      source = await target(
-        guild,
-        member,
-        event,
-        value.section
-      );
+    } else if (
+      !source
+    ) {
+      source =
+        await target(
+          guild,
+          member,
+          event,
+          value.section
+        );
     }
 
     return serial(async () => {
@@ -1572,6 +1844,7 @@ export function createSiteEventsLibrary({ client }) {
         guildId: guild.id,
         sourceId: old?.sourceId || (value.id && !old ? value.id : ''),
         messageIds: [],
+        messageChannelId: source.id,
         updatedBy: member.id,
         updatedAt: Date.now(),
         revision: randomUUID()

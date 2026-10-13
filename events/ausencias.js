@@ -13,6 +13,7 @@ import {
 import sharp from "sharp";
 import fs from "node:fs";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 
 import { findFormsCreatorThreadIdByUserId } from "./formscreator.js";
 
@@ -69,7 +70,7 @@ function pad(n) {
   return n < 10 ? '0' + n : '' + n;
 }
 
-function parseDataBr(str) {
+function parseDataBr(str, reference = Date.now()) {
   if (!str) return null;
 
   const texto =
@@ -101,7 +102,11 @@ function parseDataBr(str) {
             'numeric',
         }
       ).format(
-        new Date()
+        new Date(
+          Number.isFinite(Number(reference))
+            ? Number(reference)
+            : Date.now()
+        )
       )
     );
 
@@ -208,10 +213,32 @@ function nomeSemanaMes(dia) {
   return 'Quinta semana do mês';
 }
 
-function extrairCampoEmbed(embed, nomeCampo) {
-  const fields = embed?.fields || [];
-  const campo = fields.find(f => String(f.name || '').toLowerCase().includes(nomeCampo.toLowerCase()));
-  return campo?.value || null;
+function extrairCampoEmbed(
+  embed,
+  nomeCampo
+) {
+  const chave =
+    normalizarChaveAusencia(
+      nomeCampo
+    );
+
+  const fields =
+    Array.isArray(embed?.fields)
+      ? embed.fields
+      : [];
+
+  const campo =
+    fields.find(field =>
+      field &&
+      typeof field.name === "string" &&
+      normalizarChaveAusencia(
+        field.name
+      ) === chave
+    );
+
+  return typeof campo?.value === "string"
+    ? campo.value.trim() || null
+    : null;
 }
 
 function extrairPrimeiraMencaoId(content) {
@@ -222,6 +249,68 @@ function extrairPrimeiraMencaoId(content) {
       );
 
   return match?.[1] || null;
+}
+
+function resolverIdentidadeRegistroAusencia(
+  message,
+  embed,
+  nome
+) {
+  const explicit =
+    extrairCampoEmbed(
+      embed,
+      'ID Discord'
+    );
+
+  if (
+    explicit != null
+  ) {
+    const id =
+      String(explicit).replace(
+        /[`\s]/g,
+        ''
+      );
+
+    const match = id.match(
+      /^(?:<@!?(\d{17,20})>|(\d{17,20}))$/
+    );
+
+    return match
+      ? match[1] || match[2]
+      : null;
+  }
+
+  const mentions = [
+    ...new Set(
+      [
+        ...String(
+          message.content || ''
+        ).matchAll(
+          /<@!?(\d{17,20})>/g
+        )
+      ].map(
+        match =>
+          match[1]
+      )
+    )
+  ];
+
+  if (
+    mentions.length === 1
+  ) {
+    return mentions[0];
+  }
+
+  if (
+    mentions.length > 1
+  ) {
+    return null;
+  }
+
+  return resolverUserIdPorNomeAusencia(
+    nome,
+    message.content
+  );
 }
 
 function normalizarChaveAusencia(str) {
@@ -309,42 +398,108 @@ function limitarTexto(str, limite = 38) {
   return texto.slice(0, limite - 3).trim() + '...';
 }
 
-async function buscarNomePorFormsCreator(client, userId) {
-  const threadId = await findFormsCreatorThreadIdByUserId(client, userId).catch(() => null);
-  if (!threadId) return null;
+async function buscarNomePorFormsCreator(
+  client,
+  userId
+) {
+  userId = String(userId || "");
 
-  const thread = await client.channels.fetch(threadId).catch(() => null);
-  if (!thread || !thread.isTextBased()) return null;
+  if (!/^\d{17,20}$/.test(userId)) {
+    return null;
+  }
 
-  const mensagens = await thread.messages.fetch({ limit: 50 }).catch(() => null);
-  if (!mensagens) return null;
+  const threadId =
+    await lerAusenciasComPrazo(
+      "forms.find_thread:" + userId,
+      () => findFormsCreatorThreadIdByUserId(
+        client,
+        userId
+      )
+    );
 
-  const msgRegistro = mensagens.find(msg => {
-    const embed = msg.embeds?.[0];
-    if (!embed) return false;
+  if (!threadId) {
+    return null;
+  }
 
-    const raw = [
-      embed.title || '',
-      embed.description || '',
-      ...(embed.fields || []).flatMap(field => [field.name || '', field.value || ''])
-    ].join('\n');
+  const thread =
+    await lerAusenciasComPrazo(
+      "forms.thread_channel:" + threadId,
+      () => client.channels.fetch(
+        threadId
+      )
+    );
 
-    return raw.includes(`<@${userId}>`) || raw.includes(`<@!${userId}>`) || raw.includes(userId);
-  });
+  if (
+    !thread ||
+    !thread.isTextBased()
+  ) {
+    return null;
+  }
 
-  const embed = msgRegistro?.embeds?.[0];
-  if (!embed) return null;
+  const mensagens =
+    await lerAusenciasComPrazo(
+      "forms.messages:" + threadId,
+      () => thread.messages.fetch({
+        limit: 50,
+      })
+    );
 
-  const nome = String(embed.title || '')
-    .replace(/^👤\s*/i, '')
+  if (!mensagens) {
+    return null;
+  }
+
+  const identityPattern = new RegExp(
+    "(^|\\D)" + userId + "(?!\\d)"
+  );
+
+  const msgRegistro =
+    mensagens.find(msg => {
+      const embed = msg.embeds?.[0];
+
+      if (!embed) {
+        return false;
+      }
+
+      const raw = [
+        embed.title || "",
+        embed.description || "",
+        ...(embed.fields || []).flatMap(
+          field => [
+            field.name || "",
+            field.value || "",
+          ]
+        ),
+      ].join("\n");
+
+      return identityPattern.test(raw);
+    });
+
+  const embed =
+    msgRegistro?.embeds?.[0];
+
+  if (!embed) {
+    return null;
+  }
+
+  const nome = String(
+    embed.title || ""
+  )
+    .replace(/^👤\s*/i, "")
     .trim();
 
-  const idCidade = embed.fields?.find(field =>
-    String(field.name || '').includes('ID/Passaporte')
-  )?.value;
+  const idCidade =
+    embed.fields?.find(field =>
+      String(field.name || "")
+        .includes("ID/Passaporte")
+    )?.value;
 
-  if (nome && idCidade) return `${nome} | ${idCidade}`;
-  if (nome) return nome;
+  if (nome && idCidade) {
+    return `${nome} | ${idCidade}`;
+  }
+
+  if (nome) {
+    return nome;
+  }
 
   return null;
 }
@@ -356,8 +511,19 @@ async function resolverNomeDashboardAusencias(client, guild, userId) {
     return limparNomeRanking(nomeForms);
   }
 
-  const membro = await guild.members.fetch(userId).catch(() => null);
-  return limparNomeRanking(membro?.displayName || `Usuário ${userId}`);
+  const membro =
+    guild.members.cache.get(userId) ||
+    await lerAusenciasComPrazo(
+      "dashboard.member:" + userId,
+      () => guild.members.fetch(
+        userId
+      )
+    ).catch(() => null);
+
+  return limparNomeRanking(
+    membro?.displayName ||
+    `Usuário ${userId}`
+  );
 }
 
 function montarLinhasSemanaSvg(semanas, x, y) {
@@ -378,7 +544,28 @@ function montarLinhasSemanaSvg(semanas, x, y) {
   `;
 }
 
-async function buscarMensagensMesAtual(canal, inicioMes, fimMes) {
+async function buscarMensagensMesAtual(
+  canal,
+  inicioMes,
+  fimMes
+) {
+  if (
+    !canal?.messages ||
+    !(inicioMes instanceof Date) ||
+    !(fimMes instanceof Date) ||
+    !Number.isFinite(
+      inicioMes.getTime()
+    ) ||
+    !Number.isFinite(
+      fimMes.getTime()
+    ) ||
+    fimMes < inicioMes
+  ) {
+    throw new Error(
+      "Fonte ou período inválido para coletar ausências."
+    );
+  }
+
   const mensagens = [];
   const idsColetados = new Set();
 
@@ -409,11 +596,61 @@ async function buscarMensagensMesAtual(canal, inicioMes, fimMes) {
 
   let before;
 
-  for (let pagina = 0; pagina < 80; pagina++) {
-    const lote = await canal.messages.fetch({
-      limit: 100,
-      ...(before ? { before } : {}),
-    });
+  const deadlineAt =
+    Date.now() + 60000;
+
+  for (
+    let pagina = 0;
+    pagina < 80;
+    pagina++
+  ) {
+    if (
+      Date.now() >= deadlineAt
+    ) {
+      throw new Error(
+        'A coleta mensal de ausências atingiu o prazo. O snapshot anterior foi preservado.'
+      );
+    }
+
+    let fetchTimer;
+
+    const lote =
+      await Promise.race([
+        canal.messages.fetch({
+          limit:
+            100,
+
+          ...(before
+            ? { before }
+            : {})
+        }),
+
+        new Promise((resolve, reject) => {
+          fetchTimer =
+            setTimeout(
+              () => reject(
+                new Error(
+                  'Uma página de ausências não respondeu em 30 segundos.'
+                )
+              ),
+
+              Math.min(
+                30000,
+                deadlineAt - Date.now()
+              )
+            );
+        })
+      ]).finally(() => {
+        clearTimeout(
+          fetchTimer
+        );
+      });
+
+    if (Date.now() >= deadlineAt) {
+      throw new Error(
+        "A coleta mensal de ausências atingiu o prazo após a leitura da página. O snapshot anterior foi preservado."
+      );
+    }
 
     if (lote.size === 0) {
       return mensagens;
@@ -422,6 +659,20 @@ async function buscarMensagensMesAtual(canal, inicioMes, fimMes) {
     let encontrouMensagemAntesDoMes = false;
 
     for (const msg of lote.values()) {
+      if (
+        !/^\d{17,20}$/.test(
+          String(msg?.id || "")
+        ) ||
+        !(msg.createdAt instanceof Date) ||
+        !Number.isFinite(
+          msg.createdAt.getTime()
+        )
+      ) {
+        throw new Error(
+          "Uma mensagem da fonte de ausências possui identificação ou data inválida. O snapshot anterior foi preservado."
+        );
+      }
+
       if (idsColetados.has(msg.id)) {
         continue;
       }
@@ -558,13 +809,45 @@ function adicionarDiaNoRanking(ranking, userId, data) {
   registro.semanas[semana] += 1;
 }
 
-function intervaloAusenciaDentroDoMes(dtInicio, dtFim, inicioMes, fimMes) {
-  const fimReal = dtFim && dtFim >= dtInicio ? dtFim : dtInicio;
+function intervaloAusenciaDentroDoMes(
+  dtInicio,
+  dtFim,
+  inicioMes,
+  fimMes
+) {
+  if (
+    ![
+      dtInicio,
+      inicioMes,
+      fimMes,
+    ].every(date =>
+      date instanceof Date &&
+      Number.isFinite(
+        date.getTime()
+      )
+    ) ||
+    fimMes < inicioMes ||
+    (
+      dtFim != null &&
+      (
+        !(dtFim instanceof Date) ||
+        !Number.isFinite(
+          dtFim.getTime()
+        ) ||
+        dtFim < dtInicio
+      )
+    )
+  ) {
+    return false;
+  }
 
-  if (fimReal < inicioMes) return false;
-  if (dtInicio > fimMes) return false;
+  const fimReal =
+    dtFim ?? dtInicio;
 
-  return true;
+  return (
+    fimReal >= inicioMes &&
+    dtInicio <= fimMes
+  );
 }
 
 function montarSvgDashboardAusencias({ mesNome, ano, rankingOrdenado, totalAusencias }) {
@@ -652,6 +935,126 @@ function montarSvgDashboardAusencias({ mesNome, ano, rankingOrdenado, totalAusen
 </svg>`;
 }
 
+function lerAusenciasComPrazo(
+  label,
+  read,
+  timeoutMs = 30000
+) {
+  let timer = null;
+
+  const startedAt = Date.now();
+
+  return Promise.race([
+    Promise.resolve().then(read),
+
+    new Promise((_resolve, reject) => {
+      timer = setTimeout(() => {
+        const error = new Error(
+          label + " excedeu " + timeoutMs + " ms."
+        );
+
+        error.code = "SC_ABSENCES_READ_TIMEOUT";
+        error.status = 503;
+
+        console.warn(
+          "[AUSÊNCIAS LEITURA]",
+          {
+            action: label,
+            name: error.name,
+            code: error.code,
+            timeoutMs,
+            durationMs:
+              Date.now() - startedAt,
+          }
+        );
+
+        reject(error);
+      }, timeoutMs);
+    }),
+  ]).finally(() => {
+    if (timer !== null) {
+      clearTimeout(timer);
+    }
+  });
+}
+
+function gravarJsonAusenciasAtomico(
+  file,
+  value
+) {
+  const bytes = JSON.stringify(
+    value,
+    null,
+    2
+  );
+
+  const temporary =
+    file + "." + randomUUID() + ".tmp";
+
+  fs.mkdirSync(
+    path.dirname(file),
+    {
+      recursive: true,
+    }
+  );
+
+  if (
+    path.basename(file) ===
+      "ausencias_dashboard.json" &&
+    fs.existsSync(file)
+  ) {
+    const backup = path.join(
+      path.dirname(file),
+      "ausencias_dashboard.before-integrity.json"
+    );
+
+    try {
+      fs.copyFileSync(
+        file,
+        backup,
+        fs.constants.COPYFILE_EXCL
+      );
+    } catch (error) {
+      if (error.code !== "EEXIST") {
+        throw error;
+      }
+    }
+  }
+
+  try {
+    fs.writeFileSync(
+      temporary,
+      bytes,
+      {
+        encoding: "utf8",
+        flag: "wx",
+        mode: 0o600,
+      }
+    );
+
+    fs.renameSync(
+      temporary,
+      file
+    );
+  } finally {
+    try {
+      fs.unlinkSync(temporary);
+    } catch (error) {
+      if (error.code !== "ENOENT") {
+        console.warn(
+          "[AUSÊNCIAS JSON] Falha ao limpar temporário:",
+          {
+            code:
+              error.code || null,
+            name:
+              error.name,
+          }
+        );
+      }
+    }
+  }
+}
+
 function salvarSnapshotAusenciasMensal({
   mesNome,
   ano,
@@ -659,6 +1062,138 @@ function salvarSnapshotAusenciasMensal({
   rankingOrdenado,
   totalAusencias,
 }) {
+  if (
+    !Number.isInteger(ano) ||
+    ano < 1000 ||
+    ano > 9999 ||
+    !Number.isInteger(mes) ||
+    mes < 0 ||
+    mes > 11 ||
+    typeof mesNome !== "string" ||
+    !mesNome.trim() ||
+    !Array.isArray(rankingOrdenado) ||
+    !Number.isSafeInteger(totalAusencias) ||
+    totalAusencias < 0
+  ) {
+    throw new Error(
+      "Período ou totais inválidos no snapshot de ausências."
+    );
+  }
+
+  const expectedMonth =
+    String(ano) + "-" + pad(mes + 1);
+
+  const people = new Set();
+
+  let computedTotal = 0;
+
+  for (const record of rankingOrdenado) {
+    if (
+      !record ||
+      typeof record !== "object" ||
+      Array.isArray(record) ||
+      typeof record.userId !== "string" ||
+      !/^(?:\d{17,20}|nome:[a-z0-9]+(?: [a-z0-9]+)*)$/.test(
+        record.userId
+      ) ||
+      typeof record.nome !== "string" ||
+      !record.nome.trim() ||
+      !Array.isArray(record.dias) ||
+      !Number.isSafeInteger(record.total) ||
+      record.total < 0
+    ) {
+      throw new Error(
+        "Um registro do snapshot de ausências possui estrutura inválida."
+      );
+    }
+
+    if (people.has(record.userId)) {
+      throw new Error(
+        "Uma pessoa aparece repetida no snapshot de ausências."
+      );
+    }
+
+    people.add(record.userId);
+
+    const days = new Set();
+
+    const weeks = {
+      "Primeira semana do mês": 0,
+      "Segunda semana do mês": 0,
+      "Terceira semana do mês": 0,
+      "Quarta semana do mês": 0,
+      "Quinta semana do mês": 0,
+    };
+
+    for (const day of record.dias) {
+      if (
+        typeof day !== "string" ||
+        !/^\d{4}-\d{2}-\d{2}$/.test(day)
+      ) {
+        throw new Error(
+          "Um dia do snapshot de ausências possui formato inválido."
+        );
+      }
+
+      const [
+        year,
+        month,
+        date,
+      ] = day.split("-").map(Number);
+
+      const parsed = new Date(
+        year,
+        month - 1,
+        date
+      );
+
+      if (
+        day.slice(0, 7) !== expectedMonth ||
+        parsed.getFullYear() !== year ||
+        parsed.getMonth() !== month - 1 ||
+        parsed.getDate() !== date ||
+        days.has(day)
+      ) {
+        throw new Error(
+          "O snapshot de ausências contém dia inválido, repetido ou fora do mês."
+        );
+      }
+
+      days.add(day);
+
+      weeks[
+        nomeSemanaMes(date)
+      ]++;
+    }
+
+    if (record.total !== days.size) {
+      throw new Error(
+        "O total de uma pessoa não corresponde aos dias de ausência."
+      );
+    }
+
+    if (
+      !record.semanas ||
+      typeof record.semanas !== "object" ||
+      Array.isArray(record.semanas) ||
+      Object.keys(weeks).some(week =>
+        record.semanas[week] !== weeks[week]
+      )
+    ) {
+      throw new Error(
+        "Os totais semanais não correspondem aos dias de ausência."
+      );
+    }
+
+    computedTotal += record.total;
+  }
+
+  if (computedTotal !== totalAusencias) {
+    throw new Error(
+      "O total geral não corresponde ao ranking de ausências."
+    );
+  }
+
   const directory =
     path.resolve(
       process.cwd(),
@@ -698,7 +1233,10 @@ function salvarSnapshotAusenciasMensal({
       stored?.version !== 1 ||
       !stored.months ||
       typeof stored.months !== 'object' ||
-      Array.isArray(stored.months)
+      Array.isArray(stored.months) ||
+      Object.keys(stored.months).some(key =>
+        !/^\d{4}-(?:0[1-9]|1[0-2])$/.test(key)
+      )
     ) {
       throw new Error(
         'O JSON do dashboard de ausências está inválido. O arquivo existente foi preservado.'
@@ -728,44 +1266,54 @@ function salvarSnapshotAusenciasMensal({
       rankingOrdenado,
   };
 
-  const temporary =
-    file + '.tmp';
-
-  fs.writeFileSync(
-    temporary,
-    JSON.stringify(
-      stored,
-      null,
-      2
-    ),
-    'utf8'
-  );
-
-  fs.renameSync(
-    temporary,
-    file
+  gravarJsonAusenciasAtomico(
+    file,
+    stored
   );
 }
 
 const ausenciasSiteRecoveryRequestedAt =
   new WeakMap();
 
-export function requestAbsencesSiteSnapshot(client) {
+export function requestAbsencesSiteSnapshot(
+  client,
+  options = {}
+) {
   if (
     !client ||
-    typeof client.isReady !== "function" ||
+    typeof client.isReady !== 'function' ||
     !client.isReady()
   ) {
+    if (
+      options.requireFresh === true
+    ) {
+      return Promise.reject(
+        Object.assign(
+          new Error(
+            'O bot não está pronto para atualizar as ausências.'
+          ),
+          {
+            status: 503
+          }
+        )
+      );
+    }
+
     return;
   }
 
-  const now = Date.now();
+  const now =
+    Date.now();
 
   const previous =
-    ausenciasSiteRecoveryRequestedAt.get(client);
+    ausenciasSiteRecoveryRequestedAt.get(
+      client
+    );
 
   if (
+    options.requireFresh !== true &&
     previous !== undefined &&
+    now >= previous &&
     now - previous < 60000
   ) {
     return;
@@ -776,13 +1324,21 @@ export function requestAbsencesSiteSnapshot(client) {
     now
   );
 
-  void atualizarDashboardAusenciasMensal(client)
-    .catch(error => {
-      console.error(
-        "[AUSÊNCIAS SITE] Falha ao gerar o snapshot:",
-        error
-      );
-    });
+  return atualizarDashboardAusenciasMensal(
+    client,
+    options
+  ).catch(error => {
+    console.error(
+      '[AUSÊNCIAS SITE] Falha ao gerar o snapshot:',
+      error
+    );
+
+    if (
+      options.requireFresh === true
+    ) {
+      throw error;
+    }
+  });
 }
 
 const ausenciasDashboardJobs =
@@ -836,15 +1392,26 @@ function atualizarDashboardAusenciasMensal(
   job.promise =
     Promise.resolve()
       .then(async () => {
+        let passes = 0;
+
         do {
           job.rerun = false;
 
           await executarAtualizacaoDashboardAusenciasMensal(
             client
           );
+
+          passes++;
         } while (
-          job.rerun
+          job.rerun &&
+          passes < 2
         );
+
+        if (job.rerun) {
+          agendarDashboardAusencias(
+            client
+          );
+        }
       })
       .finally(() => {
         if (
@@ -867,9 +1434,11 @@ function agendarDashboardAusencias(client) {
     return;
   }
 
-  clearTimeout(
-    ausenciasDashboardTimers.get(key)
-  );
+  if (
+    ausenciasDashboardTimers.has(key)
+  ) {
+    return;
+  }
 
   ausenciasDashboardTimers.set(
     key,
@@ -919,7 +1488,13 @@ function lerEstadoPainelAusencias() {
     stored?.version !== 1 ||
     !stored.panels ||
     typeof stored.panels !== 'object' ||
-    Array.isArray(stored.panels)
+    Array.isArray(stored.panels) ||
+    Object.entries(stored.panels).some(
+      ([key, id]) =>
+        !/^\d{17,20}:\d{17,20}$/.test(key) ||
+        typeof id !== "string" ||
+        !/^\d{17,20}$/.test(id)
+    )
   ) {
     throw new Error(
       'O JSON de identificação do painel de ausências está inválido. O arquivo foi preservado.'
@@ -967,22 +1542,9 @@ function salvarIdPainelAusencias(
     }
   );
 
-  const temporary =
-    file + '.tmp';
-
-  fs.writeFileSync(
-    temporary,
-    JSON.stringify(
-      stored,
-      null,
-      2
-    ),
-    'utf8'
-  );
-
-  fs.renameSync(
-    temporary,
-    file
+  gravarJsonAusenciasAtomico(
+    file,
+    stored
   );
 }
 
@@ -1023,8 +1585,12 @@ async function buscarPainelAusencias(
 
     try {
       message =
-        await channel.messages.fetch(
-          String(savedId)
+        await lerAusenciasComPrazo(
+          "dashboard.saved_panel:" +
+            savedId,
+          () => channel.messages.fetch(
+            String(savedId)
+          )
         );
     } catch (error) {
       if (
@@ -1049,15 +1615,16 @@ async function buscarPainelAusencias(
     page++
   ) {
     const messages =
-      await channel.messages.fetch({
-        limit:
-          100,
-        ...(before
-          ? {
-              before,
-            }
-          : {}),
-      });
+      await lerAusenciasComPrazo(
+        "dashboard.panel_page:" +
+          channel.id,
+        () => channel.messages.fetch({
+          limit: 100,
+          ...(before
+            ? { before }
+            : {}),
+        })
+      );
 
     const existing =
       messages.find(
@@ -1110,8 +1677,12 @@ async function buscarPainelAusencias(
 
 async function executarAtualizacaoDashboardAusenciasMensal(client) {
   const canalFonte =
-    await client.channels.fetch(
-      AUSENCIAS_GERAIS_CHANNEL_ID
+    await lerAusenciasComPrazo(
+      "dashboard.source_channel:" +
+        AUSENCIAS_GERAIS_CHANNEL_ID,
+      () => client.channels.fetch(
+        AUSENCIAS_GERAIS_CHANNEL_ID
+      )
     );
 
   if (
@@ -1196,13 +1767,19 @@ async function executarAtualizacaoDashboardAusenciasMensal(client) {
 
   for (const canalFonteId of AUSENCIAS_DASHBOARD_FONTES_CHANNEL_IDS) {
     const canalColeta =
-      await client.channels.fetch(
-        canalFonteId
+      await lerAusenciasComPrazo(
+        "dashboard.source_channel:" +
+          canalFonteId,
+        () => client.channels.fetch(
+          canalFonteId
+        )
       );
 
     if (
       !canalColeta?.isTextBased?.() ||
-      !canalColeta.messages
+      !canalColeta.messages ||
+      canalColeta.guildId !==
+        canalFonte.guild.id
     ) {
       throw new Error(
         `A fonte de ausências ${canalFonteId} está indisponível. ` +
@@ -1239,6 +1816,7 @@ async function executarAtualizacaoDashboardAusenciasMensal(client) {
     if (
       !embed ||
       !msg.author?.bot ||
+      msg.author?.id !== client.user.id ||
       normalizarChaveAusencia(
         embed.title
       ) !== 'registro de ausencia'
@@ -1250,21 +1828,43 @@ async function executarAtualizacaoDashboardAusenciasMensal(client) {
       extrairNomeAusencia(embed);
 
     const userId =
-      extrairPrimeiraMencaoId(
-        msg.content
-      ) ||
-      resolverUserIdPorNomeAusencia(
-        nomeAusencia,
-        msg.content
+      resolverIdentidadeRegistroAusencia(
+        msg,
+        embed,
+        nomeAusencia
       );
 
-    if (
-      !userId &&
-      !normalizarChaveAusencia(
-        nomeAusencia
-      )
-    ) {
-      continue;
+    if (!userId) {
+      const explicitId =
+        extrairCampoEmbed(
+          embed,
+          "ID Discord"
+        );
+
+      const mentionedIds = new Set(
+        [
+          ...String(
+            msg.content || ""
+          ).matchAll(
+            /<@!?(\d{17,20})>/g
+          ),
+        ].map(match => match[1])
+      );
+
+      if (
+        explicitId !== null ||
+        mentionedIds.size > 1
+      ) {
+        continue;
+      }
+
+      if (
+        !normalizarChaveAusencia(
+          nomeAusencia
+        )
+      ) {
+        continue;
+      }
     }
 
     const dataTxt = extrairCampoEmbed(embed, 'Data');
@@ -1281,17 +1881,30 @@ async function executarAtualizacaoDashboardAusenciasMensal(client) {
       motivoTxt,
     });
 
-    if (registrosUnicos.has(chaveRegistro)) continue;
-    registrosUnicos.add(chaveRegistro);
+const dtInicio =
+  parseDataBr(
+    dataTxt,
+    msg.createdTimestamp
+  );
 
-const dtInicio = parseDataBr(dataTxt);
-const dtFim = ateTxt ? parseDataBr(ateTxt) : null;
+const dtFim =
+  ateTxt
+    ? parseDataBr(
+        ateTxt,
+        msg.createdTimestamp
+      )
+    : null;
 
 if (!dtInicio) continue;
+if (ateTxt && !dtFim) continue;
+if (dtFim && dtFim < dtInicio) continue;
 
 if (!intervaloAusenciaDentroDoMes(dtInicio, dtFim, inicioMes, fimMes)) {
   continue;
 }
+
+if (registrosUnicos.has(chaveRegistro)) continue;
+registrosUnicos.add(chaveRegistro);
 
 const inicio = dtInicio < inicioMes ? inicioMes : dtInicio;
 const fim = dtFim && dtFim >= dtInicio ? dtFim : dtInicio;
@@ -1363,9 +1976,23 @@ while (atual.getTime() <= fimLimitado.getTime()) {
     totalAusencias,
   });
 
+  client.emit(
+    'scAbsencesSnapshotUpdated',
+    {
+      monthKey:
+        String(agora.getFullYear()) +
+        '-' +
+        pad(agora.getMonth() + 1)
+    }
+  );
+
   const canalDestino =
-    await client.channels.fetch(
-      AUSENCIAS_DASHBOARD_CHANNEL_ID
+    await lerAusenciasComPrazo(
+      "dashboard.destination_channel:" +
+        AUSENCIAS_DASHBOARD_CHANNEL_ID,
+      () => client.channels.fetch(
+        AUSENCIAS_DASHBOARD_CHANNEL_ID
+      )
     );
 
   if (
@@ -1479,6 +2106,7 @@ function criarEmbedRegistro({ user, nome, data, hora, motivo, gifUrl, addOrigem,
     .setThumbnail(avatar)
     .addFields(
       { name: '👤 Nome', value: nome || '—', inline: true },
+      { name: '🆔 ID Discord', value: String(user.id), inline: true },
       { name: '📅 Data', value: data || '—', inline: true },
       { name: '🕒 Hora', value: hora || '—', inline: true },
     )
@@ -1640,19 +2268,86 @@ export async function ausenciasHandleInteraction(interaction, client) {
           });
         }
 
-        const canalId = interaction.customId.replace('modal_ausencia_', '');
-        const canalOrigem = await client.channels.fetch(canalId).catch(() => null);
+        const canalId = interaction.customId.replace(
+          'modal_ausencia_',
+          ''
+        );
+
+        if (
+          !Object.values(
+            CANAIS_REGISTRO
+          ).includes(canalId)
+        ) {
+          await interaction.editReply({
+            content:
+              "❌ Este canal não está autorizado para registrar ausência.",
+          });
+
+          return true;
+        }
+
+        const membroAtual =
+          await lerAusenciasComPrazo(
+            "modal.member:" +
+              interaction.user.id,
+            () => interaction.guild.members.fetch({
+              user:
+                interaction.user.id,
+              force:
+                true,
+            })
+          );
+
+        const autorizadoAgora =
+          CARGOS_AUTORIZADOS_AUSENCIA.includes(
+            interaction.user.id
+          ) ||
+          membroAtual.roles.cache.some(role =>
+            CARGOS_AUTORIZADOS_AUSENCIA.includes(
+              role.id
+            )
+          );
+
+        if (!autorizadoAgora) {
+          await interaction.editReply({
+            content:
+              "❌ Você não tem permissão para registrar ausência.",
+          });
+
+          return true;
+        }
+
+        const canalOrigem =
+          await lerAusenciasComPrazo(
+            "modal.origin_channel:" +
+              canalId,
+            () => client.channels.fetch(
+              canalId
+            )
+          ).catch(() => null);
 
         if (!canalOrigem) {
           console.warn(`[AUSÊNCIAS] Canal de origem ${canalId} não encontrado.`);
         }
 
-        const nome   = (interaction.fields.getTextInputValue('nome')     ?? '').slice(0, 128);
-        const data   = (interaction.fields.getTextInputValue('data')     ?? '').slice(0, 64);
-        const ate    = (interaction.fields.getTextInputValue('ate_data') ?? '').slice(0, 64);
-        const hora   = (interaction.fields.getTextInputValue('hora')     ?? '').slice(0, 64);
-        const motivo = (interaction.fields.getTextInputValue('motivo')   ?? '').slice(0, 1024);
+        const nome   = (interaction.fields.getTextInputValue('nome')     ?? '').trim().slice(0, 128);
+        const data   = (interaction.fields.getTextInputValue('data')     ?? '').trim().slice(0, 64);
+        const ate    = (interaction.fields.getTextInputValue('ate_data') ?? '').trim().slice(0, 64);
+        const hora   = (interaction.fields.getTextInputValue('hora')     ?? '').trim().replace(/^(\d):/, '0$1:').slice(0, 64);
+        const motivo = (interaction.fields.getTextInputValue('motivo')   ?? '').trim().slice(0, 1024);
 
+        if (
+          !nome ||
+          !motivo ||
+          !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(hora)
+        ) {
+          await interaction.editReply({
+            content:
+              "❌ Informe nome, motivo e um horário válido no formato HH:MM, de 00:00 a 23:59.",
+          });
+
+          return true;
+        }
         // Valida as datas antes de registrar ou enviar.
         const dtInicio =
           parseDataBr(data);

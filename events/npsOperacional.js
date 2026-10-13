@@ -328,36 +328,70 @@ function ensureDataDir() {
 
 function readJson(file, fallback) {
   try {
-    if (!fs.existsSync(file)) {
-      return fallback;
-    }
-
     const raw = fs.readFileSync(file, "utf8");
 
     if (!raw.trim()) {
+      throw new Error(
+        "O arquivo JSON está vazio."
+      );
+    }
+
+    const value = JSON.parse(raw);
+
+    if (
+      !value ||
+      typeof value !== "object"
+    ) {
+      throw new Error(
+        "O arquivo JSON não contém uma estrutura válida."
+      );
+    }
+
+    return value;
+  } catch (error) {
+    if (error.code === "ENOENT") {
       return fallback;
     }
 
-    return JSON.parse(raw);
-  } catch (error) {
     console.error(
       `[NPS Operacional] Erro ao ler ${file}:`,
       error
     );
 
-    return fallback;
+    throw new Error(
+      "Não foi possível ler " +
+        file +
+        ". O arquivo existente não será substituído por dados vazios.",
+      {
+        cause: error
+      }
+    );
   }
 }
 
 function writeJson(file, value) {
-  try {
-    ensureDataDir();
+  const temporaryFile = `${file}.tmp`;
 
-    const temporaryFile = `${file}.tmp`;
+  try {
+    fs.mkdirSync(
+      path.dirname(file),
+      {
+        recursive: true
+      }
+    );
+
+    const serialized =
+      JSON.stringify(value, null, 2);
+
+    if (typeof serialized !== "string") {
+      throw new Error(
+        "O valor não pode ser serializado como JSON."
+      );
+    }
 
     fs.writeFileSync(
       temporaryFile,
-      JSON.stringify(value, null, 2),
+      serialized,
       "utf8"
     );
 
@@ -370,6 +404,24 @@ function writeJson(file, value) {
       `[NPS Operacional] Erro ao salvar ${file}:`,
       error
     );
+
+    throw new Error(
+      "Não foi possível salvar " + file + ".",
+      {
+        cause: error
+      }
+    );
+  } finally {
+    try {
+      fs.unlinkSync(temporaryFile);
+    } catch (error) {
+      if (error.code !== "ENOENT") {
+        console.warn(
+          "[NPS Operacional] Limpeza temporária:",
+          error.message
+        );
+      }
+    }
   }
 }
 
@@ -2355,9 +2407,7 @@ function scheduleDashboardUpdate(
   }
 
   if (dashboardUpdateTimer) {
-    clearTimeout(
-      dashboardUpdateTimer
-    );
+    return;
   }
 
   dashboardUpdateTimer = setTimeout(
@@ -11012,13 +11062,52 @@ async function updateDashboard(
   dashboardUpdating = true;
 
   try {
-    const results =
+       const results =
       await generateResults(
         client
       );
 
+    results.current.week.snapshots.push({
+      at:
+        Date.now(),
+      score:
+        results.displayed.score,
+      rawScore:
+        results.current.rawScore,
+      reason,
+    });
+
+    if (
+      results.current.week.snapshots.length >
+      500
+    ) {
+      results.current.week.snapshots =
+        results.current.week.snapshots.slice(
+          -500
+        );
+    }
+
+    saveState(
+      results.state
+    );
+
     try {
       saveNpsSiteSnapshot(results);
+
+      try {
+        client.emit(
+          'scNpsSnapshotUpdated',
+          {
+            guildId: '1262262852782129183',
+            weekKey: results.current.weekInfo.key
+          }
+        );
+      } catch (error) {
+        console.error(
+          '[NPS Cultura] Snapshot salvo; falha ao invalidar consultas:',
+          error
+        );
+      }
     } catch (error) {
       console.error(
         '[NPS Cultura] Falha ao atualizar o snapshot do site:',
@@ -11374,26 +11463,6 @@ results.state.metadata.lastExecutiveDashboardUpdateAt =
 
     results.state.metadata.lastDashboardReason =
       reason;
-
-    results.current.week.snapshots.push({
-      at:
-        Date.now(),
-      score:
-        results.displayed.score,
-      rawScore:
-        results.current.rawScore,
-      reason,
-    });
-
-    if (
-      results.current.week.snapshots.length >
-      500
-    ) {
-      results.current.week.snapshots =
-        results.current.week.snapshots.slice(
-          -500
-        );
-    }
 
     saveState(
       results.state
@@ -14184,10 +14253,10 @@ async function sendAutomaticWeeklyReport(
 
 function saveNpsSiteSnapshot(results) {
   if (
-    !results ||
-    !results.current ||
-    !results.previous ||
-    !results.displayed ||
+    !results || Array.isArray(results) ||
+    !results.current || typeof results.current !== 'object' || Array.isArray(results.current) ||
+    !results.previous || typeof results.previous !== 'object' || Array.isArray(results.previous) ||
+    !results.displayed || typeof results.displayed !== 'object' || Array.isArray(results.displayed) ||
     !results.current.weekInfo ||
     !results.previous.weekInfo ||
     !results.current.week ||
@@ -14203,7 +14272,9 @@ function saveNpsSiteSnapshot(results) {
     typeof results.current.weekInfo.key !== "string" ||
     typeof results.previous.weekInfo.key !== "string" ||
     !results.current.weekInfo.key ||
-    !results.previous.weekInfo.key
+    !results.previous.weekInfo.key ||
+    results.current.weekInfo.key ===
+      results.previous.weekInfo.key
   ) {
     throw new Error(
       "As semanas do resultado do NPS estão inválidas. O snapshot anterior foi preservado."
@@ -14218,7 +14289,8 @@ function saveNpsSiteSnapshot(results) {
       !category ||
       typeof category !== "object" ||
       Array.isArray(category) ||
-      !category.categoryId
+      typeof category.categoryId !== 'string' ||
+      !category.categoryId.trim()
     ) {
       throw new Error(
         "Uma categoria calculada do NPS está inválida. O snapshot anterior foi preservado."
@@ -14242,6 +14314,25 @@ function saveNpsSiteSnapshot(results) {
     value <= 100
       ? value
       : null;
+
+  for (
+    const list of [
+      results.current.categories,
+      results.previous.categories
+    ]
+  ) {
+    if (
+      new Set(
+        list.map(category =>
+          category.categoryId
+        )
+      ).size !== list.length
+    ) {
+      throw new Error(
+        'O NPS possui categorias repetidas. O snapshot anterior foi preservado.'
+      );
+    }
+  }
 
   const previousCategories = new Map(
     (results.previous.categories || []).map(category => [
@@ -14270,7 +14361,22 @@ function saveNpsSiteSnapshot(results) {
         score !== null && previousScore !== null
           ? score - previousScore
           : null,
-      activities: Number(category.raw?.events || 0)
+      activities:
+        (
+          typeof category.raw?.events === 'number' ||
+          (
+            typeof category.raw?.events === 'string' &&
+            /^\d+$/.test(
+              category.raw.events.trim()
+            )
+          )
+        ) &&
+        Number.isSafeInteger(
+          Number(category.raw.events)
+        ) &&
+        Number(category.raw.events) >= 0
+          ? Number(category.raw.events)
+          : null
     };
   });
 
@@ -14309,54 +14415,45 @@ function saveNpsSiteSnapshot(results) {
         ? currentScore - previousScore
         : null,
     categories,
-    history: (results.current.week.snapshots || [])
-      .concat({
-        at: Date.now(),
-        score: currentHasData
-          ? finiteScore(results.displayed.score)
-          : null,
-        rawScore: currentScore
-      })
-      .map(item => ({
-        at: Number(item.at),
-        score: finiteScore(item.score),
-        rawScore: finiteScore(item.rawScore)
-      }))
-      .filter(item =>
-        Number.isFinite(item.at) &&
-        item.score !== null
+    history: [
+      ...new Map(
+        (results.current.week.snapshots || [])
+          .filter(item =>
+            item &&
+            typeof item === 'object'
+          )
+          .map(item => ({
+            at: Number(item.at),
+            score: finiteScore(item.score),
+            rawScore: finiteScore(item.rawScore)
+          }))
+          .filter(item =>
+            Number.isSafeInteger(item.at) &&
+            item.at > 0 &&
+            item.at <= Date.now() + 60000 &&
+            item.score !== null
+          )
+          .map(item => [
+            item.at,
+            item
+          ])
+      ).values()
+    ]
+      .sort((a, b) =>
+        a.at - b.at
       )
       .slice(-120)
   };
-
-  fs.mkdirSync(DATA_DIR, { recursive: true });
 
   const file = path.join(
     DATA_DIR,
     'sc_nps_site_snapshot.json'
   );
 
-  const temporary = file + '.tmp';
-
-  try {
-    fs.writeFileSync(
-      temporary,
-      JSON.stringify(snapshot),
-      'utf8'
-    );
-
-    fs.renameSync(
-      temporary,
-      file
-    );
-  } catch (error) {
-    throw new Error(
-      "Não foi possível gravar o snapshot do NPS em " +
-      file +
-      ".",
-      { cause: error }
-    );
-  }
+  writeJson(
+    file,
+    snapshot
+  );
 }
 
 let npsSiteRecoveryRequestedAt = 0;
@@ -14365,6 +14462,19 @@ export function getNpsSiteSnapshot({
   guild,
   client = activeClient
 }) {
+  if (
+    !/^\d{17,20}$/.test(
+      String(guild?.id || '')
+    )
+  ) {
+    throw Object.assign(
+      new Error(
+        'Servidor inválido para consultar o NPS.'
+      ),
+      { status: 403 }
+    );
+  }
+
   const file = path.join(
     DATA_DIR,
     'sc_nps_site_snapshot.json'
@@ -14425,12 +14535,76 @@ export function getNpsSiteSnapshot({
   if (
     !snapshot ||
     snapshot.version !== 1 ||
+    typeof snapshot.weekKey !== 'string' ||
+    !snapshot.weekKey.trim() ||
+    typeof snapshot.previousWeekKey !== 'string' ||
+    !snapshot.previousWeekKey.trim() ||
+    snapshot.weekKey === snapshot.previousWeekKey ||
     snapshot.guildId !== guild.id ||
+    !Number.isSafeInteger(snapshot.generatedAt) ||
+    snapshot.generatedAt <= 0 ||
+    !Array.isArray(snapshot.history) ||
     !Array.isArray(snapshot.categories)
   ) {
     throw Object.assign(
       new Error(
         'O snapshot do NPS é inválido para este servidor.'
+      ),
+      { status: 503 }
+    );
+  }
+
+  const validScore = value =>
+    value === null ||
+    (
+      typeof value === 'number' &&
+      Number.isFinite(value) &&
+      value >= 0 &&
+      value <= 100
+    );
+
+  if (
+    ![
+      snapshot.displayedScore,
+      snapshot.currentScore,
+      snapshot.previousScore
+    ].every(validScore) ||
+    snapshot.categories.some(category =>
+      !category ||
+      typeof category !== 'object' ||
+      Array.isArray(category) ||
+      typeof category.id !== 'string' ||
+      !category.id ||
+      !validScore(category.score) ||
+      !validScore(category.previousScore)
+    )
+  ) {
+    throw Object.assign(
+      new Error(
+        'O snapshot do NPS contém notas ou categorias inválidas.'
+      ),
+      { status: 503 }
+    );
+  }
+
+  if (
+    new Set(
+      snapshot.categories.map(category =>
+        category.id
+      )
+    ).size !== snapshot.categories.length ||
+    snapshot.history.some(item =>
+      !item ||
+      !Number.isSafeInteger(item.at) ||
+      item.at <= 0 ||
+      typeof item.score !== 'number' ||
+      !validScore(item.score) ||
+      !validScore(item.rawScore)
+    )
+  ) {
+    throw Object.assign(
+      new Error(
+        'O snapshot do NPS contém histórico inválido ou categorias repetidas.'
       ),
       { status: 503 }
     );
@@ -14607,6 +14781,15 @@ export async function npsOperacionalHandleInteraction(
     BUTTON_REFRESH_ID
   ) {
     try {
+      if (dashboardUpdating) {
+        await interaction.editReply({
+          content:
+            "⏳ O NPS já está sendo atualizado. Aguarde a conclusão da atualização em andamento.",
+        });
+
+        return true;
+      }
+
       await updateDashboard(
         client,
         `button:${interaction.user.id}`

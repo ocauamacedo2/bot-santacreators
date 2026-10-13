@@ -158,31 +158,73 @@ const FIVEM_SNAPSHOT_CACHE = {
 
 let FIVEM_SITE_REFRESH_INTERVAL_ID = null;
 let FIVEM_SITE_REFRESH_RUNNING = false;
+let FIVEM_SITE_LAST_EMITTED_SNAPSHOT = null;
 
 async function refreshFivemSiteData(client) {
-  if (FIVEM_SITE_REFRESH_RUNNING || !client.isReady()) return;
+  if (
+    FIVEM_SITE_REFRESH_RUNNING ||
+    !client.isReady()
+  ) {
+    return;
+  }
 
   FIVEM_SITE_REFRESH_RUNNING = true;
+
+  const startedAt = Date.now();
+
   try {
-    const cacheAge = Date.now() - FIVEM_SNAPSHOT_CACHE.createdAt;
-    const safe = FIVEM_SNAPSHOT_CACHE.value?.snapshot && cacheAge >= 0 && cacheAge < 15000
-      ? FIVEM_SNAPSHOT_CACHE.value
-      : await createSafeCurrentSnapshot({ forceFresh: true });
+    const cacheAge =
+      Date.now() - FIVEM_SNAPSHOT_CACHE.createdAt;
+
+    const safe =
+      FIVEM_SNAPSHOT_CACHE.value?.snapshot &&
+      cacheAge >= 0 &&
+      cacheAge < 15000
+        ? FIVEM_SNAPSHOT_CACHE.value
+        : await createSafeCurrentSnapshot({
+            forceFresh: true,
+          });
 
     if (!safe?.snapshot) {
-      throw new Error('A coleta das cidades não retornou um snapshot válido.');
+      throw new Error(
+        "A coleta das cidades não retornou um snapshot válido."
+      );
     }
 
     if (safe.shouldPersist) {
-      persistFivemLocal(safe.snapshotForPersistence || safe.snapshot);
+      persistFivemLocal(
+        safe.snapshotForPersistence ||
+        safe.snapshot
+      );
     }
 
-    client.emit('scRetentionSnapshotUpdated');
+    if (
+      FIVEM_SITE_LAST_EMITTED_SNAPSHOT !==
+      safe.snapshot
+    ) {
+      client.emit(
+        "scRetentionSnapshotUpdated"
+      );
+
+      FIVEM_SITE_LAST_EMITTED_SNAPSHOT =
+        safe.snapshot;
+    }
   } catch (error) {
-    console.warn('[FIVEM SITE SYNC]', {
-      name: error.name,
-      message: error.message,
-    });
+    console.warn(
+      "[FIVEM SITE SYNC]",
+      {
+        action:
+          "retention.background.collect",
+        name:
+          error?.name || "Error",
+        code:
+          error?.code || null,
+        message:
+          error?.message || String(error),
+        durationMs:
+          Date.now() - startedAt,
+      }
+    );
   } finally {
     FIVEM_SITE_REFRESH_RUNNING = false;
   }
@@ -1210,8 +1252,35 @@ let fivemLocalPeaks = {};
 try { fivemLocalPeaks = JSON.parse(fs.readFileSync(path.join(FIVEM_LOCAL_DIR, 'peaks.json'), 'utf8')); }
 catch (error) { if (error.code !== 'ENOENT') console.warn('[FIVEM JSON]', error.code || error.name); }
 async function readFivemLocal(file, fallback = null) {
-  try { return JSON.parse(await fs.promises.readFile(path.join(FIVEM_LOCAL_DIR, file), 'utf8')); }
-  catch { return fallback; }
+  const fullPath =
+    path.join(
+      FIVEM_LOCAL_DIR,
+      file
+    );
+
+  try {
+    return JSON.parse(
+      await fs.promises.readFile(
+        fullPath,
+        'utf8'
+      )
+    );
+  } catch (error) {
+    if (
+      error.code === 'ENOENT'
+    ) {
+      return fallback;
+    }
+
+    throw new Error(
+      'Não foi possível ler o histórico local de Retenção em ' +
+      fullPath +
+      '. O arquivo existente foi preservado.',
+      {
+        cause: error
+      }
+    );
+  }
 }
 async function writeFivemLocal(file, value) {
   await fs.promises.mkdir(FIVEM_LOCAL_DIR, { recursive: true });
@@ -1335,61 +1404,158 @@ async function addSnapshot(newSnapshot) {
   }
 }
 
-async function getSnapshotDaysAgo(days, currentSnapshot = null) {
- const baseTimestamp = currentSnapshot?.timestamp || Date.now();
- const targetDate = new Date(baseTimestamp - days * 24 * 60 * 60 * 1000);
- const targetParts = getSaoPauloParts(targetDate);
+async function getSnapshotDaysAgo(
+  days,
+  currentSnapshot = null
+) {
+  const baseTimestamp = Number(
+    currentSnapshot?.timestamp ?? Date.now()
+  );
 
- const targetDateKey = `${targetParts.year}-${String(targetParts.month).padStart(2, "0")}-${String(targetParts.day).padStart(2, "0")}`;
- const targetMinutes = Number(currentSnapshot?.hour ?? getSaoPauloParts(new Date()).hour) * 60 + Number(currentSnapshot?.minute ?? getSaoPauloParts(new Date()).minute);
+  if (
+    !Number.isSafeInteger(days) ||
+    days < 0 ||
+    !Number.isFinite(baseTimestamp) ||
+    baseTimestamp <= 0 ||
+    !Number.isFinite(
+      new Date(baseTimestamp).getTime()
+    )
+  ) {
+    throw new Error(
+      "Período inválido para a comparação histórica de Retenção."
+    );
+  }
 
- const localDay = await readFivemLocal(targetDateKey + '.json', { snapshots: {} });
- const localCandidates = Object.values(localDay.snapshots || {}).filter(isValidSnapshot);
- const localBest = localCandidates.sort((a,b) =>
-   Math.abs(Number(a.hour) * 60 + Number(a.minute) - targetMinutes) -
-   Math.abs(Number(b.hour) * 60 + Number(b.minute) - targetMinutes))[0] || null;
- if (localBest && Math.abs(Number(localBest.hour) * 60 + Number(localBest.minute) - targetMinutes) <= Math.ceil(FIVEM_COMPARISON_TOLERANCE_MS / 60000)) return localBest;
- try {
-   if (HistoryModel.db.readyState !== 1) return localBest;
-   const candidates = await HistoryModel.find({ spDate: targetDateKey })
-     .maxTimeMS(3000).lean();
+  const targetDate = new Date(
+    baseTimestamp - days * 86400000
+  );
 
-   if (!candidates?.length) {
-     FIVEM_DEBUG && console.log(
-       `[FIVEM_RETENTION] Sem base histórica para ${days} dia(s) atrás:`,
-       targetDateKey
-     );
-     return localBest;
-   }
+  const targetParts = getSaoPauloParts(
+    targetDate
+  );
 
-   let best = null;
-   let bestDistance = Infinity;
+  const referenceParts = getSaoPauloParts(
+    new Date(baseTimestamp)
+  );
 
-   for (const snap of candidates) {
-     const snapMinutes = Number(snap.hour || 0) * 60 + Number(snap.minute || 0);
-     const distance = Math.abs(snapMinutes - targetMinutes);
+  const targetDateKey =
+    `${targetParts.year}-` +
+    `${String(targetParts.month).padStart(2, "0")}-` +
+    `${String(targetParts.day).padStart(2, "0")}`;
 
-     if (distance < bestDistance) {
-       best = snap;
-       bestDistance = distance;
-     }
-   }
+  const targetHour = Number(
+    currentSnapshot?.hour ??
+    referenceParts.hour
+  );
 
-   const toleranceMinutes = Math.ceil(FIVEM_COMPARISON_TOLERANCE_MS / 60000);
+  const targetMinute = Number(
+    currentSnapshot?.minute ??
+    referenceParts.minute
+  );
 
-   if (bestDistance > toleranceMinutes) {
-     FIVEM_DEBUG && console.log(
-       `[FIVEM_RETENTION] Snapshot encontrado fora da tolerância para ${days} dia(s) atrás:`,
-       targetDateKey,
-       `distância ${bestDistance}min`
-     );
-   }
+  if (
+    !Number.isInteger(targetHour) ||
+    targetHour < 0 ||
+    targetHour > 23 ||
+    !Number.isInteger(targetMinute) ||
+    targetMinute < 0 ||
+    targetMinute > 59
+  ) {
+    throw new Error(
+      "Horário inválido para a comparação histórica de Retenção."
+    );
+  }
 
-   return best;
- } catch (e) {
-   console.error(`[FIVEM_RETENTION] Erro ao buscar snapshot histórico (${days} dias atrás):`, e.message);
-   return localBest;
- }
+  const targetMinutes =
+    targetHour * 60 + targetMinute;
+
+  const toleranceMinutes = Math.ceil(
+    FIVEM_COMPARISON_TOLERANCE_MS / 60000
+  );
+
+  const distance = snapshot =>
+    Math.abs(
+      Number(snapshot.hour) * 60 +
+      Number(snapshot.minute) -
+      targetMinutes
+    );
+
+  const comparable = snapshot =>
+    isValidSnapshot(snapshot) &&
+    snapshot.spDate === targetDateKey &&
+    typeof snapshot.timestamp === "number" &&
+    Number.isFinite(snapshot.timestamp) &&
+    snapshot.timestamp > 0 &&
+    (
+      typeof snapshot.hour === "number" ||
+      typeof snapshot.hour === "string"
+    ) &&
+    String(snapshot.hour).trim() !== "" &&
+    (
+      typeof snapshot.minute === "number" ||
+      typeof snapshot.minute === "string"
+    ) &&
+    String(snapshot.minute).trim() !== "" &&
+    Number.isInteger(Number(snapshot.hour)) &&
+    Number(snapshot.hour) >= 0 &&
+    Number(snapshot.hour) <= 23 &&
+    Number.isInteger(Number(snapshot.minute)) &&
+    Number(snapshot.minute) >= 0 &&
+    Number(snapshot.minute) <= 59 &&
+    distance(snapshot) <= toleranceMinutes;
+
+  const closest = snapshots =>
+    snapshots
+      .filter(comparable)
+      .sort(
+        (first, second) =>
+          distance(first) -
+          distance(second) ||
+          Number(second.timestamp) -
+          Number(first.timestamp)
+      )[0] || null;
+
+  const localDay = await readFivemLocal(
+    targetDateKey + ".json",
+    { snapshots: {} }
+  );
+
+  const localBest = closest(
+    Object.values(
+      localDay.snapshots || {}
+    )
+  );
+
+  if (localBest) {
+    return localBest;
+  }
+
+  try {
+    if (HistoryModel.db.readyState !== 1) {
+      return null;
+    }
+
+    const candidates =
+      await HistoryModel
+        .find({
+          spDate: targetDateKey,
+        })
+        .maxTimeMS(3000)
+        .lean();
+
+    return closest(
+      Array.isArray(candidates)
+        ? candidates
+        : []
+    );
+  } catch (error) {
+    console.error(
+      `[FIVEM_RETENTION] Erro ao buscar snapshot histórico (${days} dias atrás):`,
+      error?.message || error
+    );
+
+    return null;
+  }
 }
 
 async function getExact21hHistory(dateKey) {
@@ -1432,35 +1598,258 @@ async function getExact21hHistory(dateKey) {
 
 const FIVEM_PEAKS_READ_CACHE = { at: 0, value: null, pending: null };
 
+function mergeFivemPeakMaps(base = {}, local = {}) {
+  const object = value =>
+    value &&
+    typeof value === "object" &&
+    !Array.isArray(value)
+      ? value
+      : {};
+
+  const leaf = (stored, incoming) => {
+    stored = object(stored);
+    incoming = object(incoming);
+
+    const result = {
+      ...incoming,
+      ...stored,
+    };
+
+    for (const prefix of ["peak", "primePeak"]) {
+      const numeric = value =>
+        (
+          typeof value === "number" ||
+          typeof value === "string"
+        ) &&
+        String(value).trim() &&
+        Number.isFinite(Number(value)) &&
+        Number(value) >= 0
+          ? Number(value)
+          : null;
+
+      const oldValue = numeric(
+        stored[prefix]
+      );
+
+      const newValue = numeric(
+        incoming[prefix]
+      );
+
+      if (
+        newValue !== null &&
+        (
+          oldValue === null ||
+          newValue > oldValue
+        )
+      ) {
+        result[prefix] = newValue;
+
+        result[prefix + "Time"] =
+          incoming[prefix + "Time"] ?? null;
+
+        result[prefix + "At"] =
+          incoming[prefix + "At"] ?? 0;
+      }
+    }
+
+    if (
+      Array.isArray(stored.originalEventKeys) ||
+      Array.isArray(incoming.originalEventKeys)
+    ) {
+      result.originalEventKeys = [
+        ...new Set([
+          ...(
+            Array.isArray(stored.originalEventKeys)
+              ? stored.originalEventKeys
+              : []
+          ),
+          ...(
+            Array.isArray(incoming.originalEventKeys)
+              ? incoming.originalEventKeys
+              : []
+          ),
+        ]),
+      ];
+    }
+
+    return result;
+  };
+
+  const mergeLeaves = (stored, incoming) =>
+    Object.fromEntries(
+      [
+        ...new Set([
+          ...Object.keys(object(stored)),
+          ...Object.keys(object(incoming)),
+        ]),
+      ].map(key => [
+        key,
+        leaf(
+          stored?.[key],
+          incoming?.[key]
+        ),
+      ])
+    );
+
+  return Object.fromEntries(
+    [
+      ...new Set([
+        ...Object.keys(object(base)),
+        ...Object.keys(object(local)),
+      ]),
+    ]
+      .filter(date =>
+        /^\d{4}-\d{2}-\d{2}$/.test(date)
+      )
+      .map(date => {
+        const stored = object(base[date]);
+        const incoming = object(local[date]);
+
+        const eventWindows = mergeLeaves(
+          stored.eventWindows,
+          incoming.eventWindows
+        );
+
+        for (const key of Object.keys(eventWindows)) {
+          eventWindows[key].cityPeaks = mergeLeaves(
+            stored.eventWindows?.[key]?.cityPeaks,
+            incoming.eventWindows?.[key]?.cityPeaks
+          );
+        }
+
+        const oldExact = object(
+          stored.exact21h
+        );
+
+        const newExact = object(
+          incoming.exact21h
+        );
+
+        const oldCapturedAt = Number(
+          oldExact.capturedAt
+        );
+
+        const newCapturedAt = Number(
+          newExact.capturedAt
+        );
+
+        const hasOldExact =
+          Number.isFinite(oldCapturedAt) &&
+          oldCapturedAt > 0;
+
+        const hasNewExact =
+          Number.isFinite(newCapturedAt) &&
+          newCapturedAt > 0;
+
+        const exact21h =
+          hasNewExact &&
+          (
+            !hasOldExact ||
+            newCapturedAt < oldCapturedAt
+          )
+            ? newExact
+            : hasOldExact
+              ? oldExact
+              : stored.exact21h ?? incoming.exact21h;
+
+        return [
+          date,
+          {
+            ...incoming,
+            ...stored,
+            date,
+            total: leaf(
+              stored.total,
+              incoming.total
+            ),
+            cities: mergeLeaves(
+              stored.cities,
+              incoming.cities
+            ),
+            eventWindows,
+            exact21h,
+          },
+        ];
+      })
+  );
+}
+
 async function loadPeaksMap() {
-  if (FIVEM_PEAKS_READ_CACHE.value &&
-      Date.now() - FIVEM_PEAKS_READ_CACHE.at < 60000) {
-    return FIVEM_PEAKS_READ_CACHE.value;
+  const cacheAge =
+    Date.now() - FIVEM_PEAKS_READ_CACHE.at;
+
+  if (
+    FIVEM_PEAKS_READ_CACHE.value &&
+    cacheAge >= 0 &&
+    cacheAge < 60000
+  ) {
+    return mergeFivemPeakMaps(
+      FIVEM_PEAKS_READ_CACHE.value,
+      fivemLocalPeaks
+    );
   }
-  if (FIVEM_PEAKS_READ_CACHE.pending) return FIVEM_PEAKS_READ_CACHE.pending;
+
+  if (FIVEM_PEAKS_READ_CACHE.pending) {
+    const map =
+      await FIVEM_PEAKS_READ_CACHE.pending;
+
+    return mergeFivemPeakMaps(
+      map,
+      fivemLocalPeaks
+    );
+  }
+
   if (PeakModel.db.readyState !== 1) {
-    return { ...(FIVEM_PEAKS_READ_CACHE.value || {}), ...fivemLocalPeaks };
+    return mergeFivemPeakMaps(
+      FIVEM_PEAKS_READ_CACHE.value || {},
+      fivemLocalPeaks
+    );
   }
 
   const task = (async () => {
     try {
-      const docs = await PeakModel.find().maxTimeMS(3000).lean();
-      const map = {};
-      Object.assign(map, fivemLocalPeaks);
-      for (const document of docs) map[document.date] = document;
+      const docs =
+        await PeakModel
+          .find()
+          .maxTimeMS(3000)
+          .lean();
+
+      const map = Object.fromEntries(
+        docs.map(document => [
+          document.date,
+          document,
+        ])
+      );
+
       FIVEM_PEAKS_READ_CACHE.value = map;
       FIVEM_PEAKS_READ_CACHE.at = Date.now();
-      return map;
-    } catch (e) {
-      console.error("[FIVEM_RETENTION] Erro ao carregar picos do MongoDB:", e);
-      return { ...(FIVEM_PEAKS_READ_CACHE.value || {}), ...fivemLocalPeaks };
+
+      return mergeFivemPeakMaps(
+        map,
+        fivemLocalPeaks
+      );
+    } catch (error) {
+      console.error(
+        "[FIVEM_RETENTION] Erro ao carregar picos do MongoDB:",
+        error
+      );
+
+      return mergeFivemPeakMaps(
+        FIVEM_PEAKS_READ_CACHE.value || {},
+        fivemLocalPeaks
+      );
     }
   })();
+
   FIVEM_PEAKS_READ_CACHE.pending = task;
+
   try {
     return await task;
   } finally {
-    if (FIVEM_PEAKS_READ_CACHE.pending === task) {
+    if (
+      FIVEM_PEAKS_READ_CACHE.pending ===
+      task
+    ) {
       FIVEM_PEAKS_READ_CACHE.pending = null;
     }
   }
@@ -1518,6 +1907,7 @@ async function getHistoricalCityPeakForWindow(dateKey, event, cityKey) {
 
   if (
     cached &&
+    Date.now() >= cached.createdAt &&
     Date.now() - cached.createdAt < FIVEM_HISTORICAL_WINDOW_CACHE_MS
   ) {
     return cached.value;
@@ -1578,10 +1968,20 @@ async function getHistoricalCityPeakForWindow(dateKey, event, cityKey) {
       }
     }
 
+    FIVEM_HISTORICAL_WINDOW_CACHE.delete(cacheKey);
+
     FIVEM_HISTORICAL_WINDOW_CACHE.set(cacheKey, {
       createdAt: Date.now(),
       value: bestPeak,
     });
+
+    while (
+      FIVEM_HISTORICAL_WINDOW_CACHE.size > 512
+    ) {
+      FIVEM_HISTORICAL_WINDOW_CACHE.delete(
+        FIVEM_HISTORICAL_WINDOW_CACHE.keys().next().value
+      );
+    }
 
     return bestPeak;
   } catch (e) {
@@ -2373,13 +2773,52 @@ async function fetchCityStatus(city) {
 
    if (res.ok) {
      const data = await res.json().catch(() => null);
-     if (data?.Data) {
-const apiClients = safeNumber(data.Data.clients, 0);
-const selfReportedClients = safeNumber(data.Data.selfReportedClients, 0);
-const playersLength = Array.isArray(data.Data.players) ? data.Data.players.length : 0;
+     if (
+       data?.Data &&
+       typeof data.Data === "object" &&
+       !Array.isArray(data.Data)
+     ) {
+const numericCount = value =>
+  (
+    typeof value === "number" ||
+    typeof value === "string"
+  ) &&
+  String(value).trim() !== "" &&
+  Number.isSafeInteger(Number(value))
+    ? Number(value)
+    : null;
+
+const apiClients = numericCount(
+  data.Data.clients
+);
+
+const maxClients = numericCount(
+  data.Data.sv_maxclients ??
+  data.Data.svMaxclients
+);
+
+if (
+  apiClients === null ||
+  apiClients < 0 ||
+  maxClients === null ||
+  maxClients <= 0
+) {
+  throw new Error(
+    "A fonte CFX retornou contagem ou capacidade inválida."
+  );
+}
+
+const selfReportedClients = safeNumber(
+  data.Data.selfReportedClients,
+  0
+);
+
+const playersLength =
+  Array.isArray(data.Data.players)
+    ? data.Data.players.length
+    : 0;
 
 const clients = apiClients;
-const maxClients = safeNumber(data.Data.sv_maxclients ?? data.Data.svMaxclients, 0);
 
 return {
   key: city.key,
@@ -2584,7 +3023,15 @@ async function createSafeCurrentSnapshot(
 }
 
 async function createSafeCurrentSnapshotUnshared(options = {}) {
- if (!options.forceFresh && FIVEM_SNAPSHOT_CACHE.value && Date.now() - FIVEM_SNAPSHOT_CACHE.createdAt < FIVEM_SNAPSHOT_CACHE_MS) {
+ const cacheAge =
+   Date.now() - FIVEM_SNAPSHOT_CACHE.createdAt;
+
+ if (
+   !options.forceFresh &&
+   FIVEM_SNAPSHOT_CACHE.value &&
+   cacheAge >= 0 &&
+   cacheAge < FIVEM_SNAPSHOT_CACHE_MS
+ ) {
    return FIVEM_SNAPSHOT_CACHE.value;
  }
 
@@ -4322,9 +4769,13 @@ export function fivemRetentionStatusOnChannelDelete(channel) {
 // SITE HUB • RETENÇÃO
 // =====================================================
 
-function buildFivemSiteWeeklyEventPeaks(current, peaks) {
-  const scheduleState = loadCronogramaStateForFivem();
-  return getAllFivemEventSchedule().map(event => {
+function buildFivemSiteWeeklyEventPeaks(
+  current,
+  peaks,
+  scheduleState = loadCronogramaStateForFivem(),
+  events = getAllFivemEventSchedule()
+) {
+  return events.map(event => {
     const date = getDateKeyFromWeekdayInCurrentWeek(current, event.weekday);
     const previousDate = getDateKeyOffsetFromDateKey(date, -7);
     const currentPeak = resolveComparableCityWindowFromPeaks(
@@ -4360,6 +4811,34 @@ export async function getFivemRetentionSiteSnapshot({
   refresh = false,
   snapshotOnly = false,
 } = {}) {
+  if (
+    cityKey != null &&
+    cityKey !== ''
+  ) {
+    if (typeof cityKey !== 'string') {
+      throw Object.assign(
+        new Error('Cidade inválida.'),
+        { status: 400 }
+      );
+    }
+
+    cityKey =
+      cityKey.trim().toLowerCase();
+
+    if (
+      !FIVEM_CITIES.some(city =>
+        city.key === cityKey
+      )
+    ) {
+      throw Object.assign(
+        new Error('Cidade inválida.'),
+        { status: 400 }
+      );
+    }
+  } else {
+    cityKey = null;
+  }
+
   const cached = FIVEM_SNAPSHOT_CACHE.value;
   const cacheAge = Date.now() - FIVEM_SNAPSHOT_CACHE.createdAt;
 
@@ -4390,8 +4869,11 @@ export async function getFivemRetentionSiteSnapshot({
     safe?.snapshot;
 
   if (!current) {
-    throw new Error(
-      "Nenhum snapshot válido das cidades está disponível."
+    throw Object.assign(
+      new Error(
+        "Nenhum snapshot válido das cidades está disponível."
+      ),
+      { status: 503 }
     );
   }
 
@@ -4681,6 +5163,12 @@ export async function getFivemRetentionSiteSnapshot({
       0
     );
 
+  const siteScheduleState =
+    loadCronogramaStateForFivem();
+
+  const siteEvents =
+    getAllFivemEventSchedule();
+
   return {
     generatedAt:
       Date.now(),
@@ -4742,17 +5230,21 @@ export async function getFivemRetentionSiteSnapshot({
     },
 
     eventPeaks: [[todayKey, todayPeaks], [yesterdayKey, yesterdayPeaks], [lastWeekKey, lastWeekPeaks]]
-      .flatMap(([date, document]) => getAllFivemEventSchedule()
+      .flatMap(([date, document]) => siteEvents
         .filter(event => event.weekday === new Date(date + 'T12:00:00Z').getUTCDay())
         .map(event => {
           const peak = resolveComparableCityWindowFromPeaks(document, event, event.cityKey);
           return { key: event.eventKey, city: event.cityKey,
-            name: getFivemEventDisplayName(event, loadCronogramaStateForFivem()),
+            name: getFivemEventDisplayName(event, siteScheduleState),
             weekday: event.weekday, window: formatEventWindowLabel(event), date,
             peak: peak?.peak ?? null, peakTime: peak?.peakTime ?? null, measured: Boolean(peak?.peakAt) };
         })),
-    weeklyEventPeaks: buildFivemSiteWeeklyEventPeaks(current, peaks),
-    weeklyEventPeaks: buildFivemSiteWeeklyEventPeaks(current, peaks),
+    weeklyEventPeaks: buildFivemSiteWeeklyEventPeaks(
+      current,
+      peaks,
+      siteScheduleState,
+      siteEvents
+    ),
     cities: cities.sort((a, b) => Number(b.current) - Number(a.current)),
 
     selectedCity,
@@ -4760,7 +5252,7 @@ export async function getFivemRetentionSiteSnapshot({
     eventReport,
 
     schedule:
-      getAllFivemEventSchedule()
+      siteEvents
         .map(
           event => ({
             key:
@@ -4774,7 +5266,7 @@ export async function getFivemRetentionSiteSnapshot({
             name:
               getFivemEventDisplayName(
                 event,
-                loadCronogramaStateForFivem()
+                siteScheduleState
               ),
 
             weekday:

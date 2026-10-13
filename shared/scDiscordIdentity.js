@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { randomUUID } from "node:crypto";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -120,57 +121,93 @@ function readState() {
 
   ensureDataDir();
 
-  if (!fs.existsSync(STATE_FILE)) {
-    MEMORY_STATE = normalizeState();
-    return MEMORY_STATE;
-  }
-
   try {
     const raw = fs.readFileSync(STATE_FILE, "utf8");
+    const parsed = JSON.parse(raw);
 
-    MEMORY_STATE = normalizeState(
-      raw?.trim()
-        ? JSON.parse(raw)
-        : {}
-    );
+    if (
+      !parsed ||
+      typeof parsed !== "object" ||
+      Array.isArray(parsed) ||
+      !parsed.aliases ||
+      typeof parsed.aliases !== "object" ||
+      Array.isArray(parsed.aliases) ||
+      !Array.isArray(parsed.history)
+    ) {
+      throw new Error("Estrutura inválida no mapa de identidade Discord.");
+    }
+
+    for (const [oldId, newId] of Object.entries(parsed.aliases)) {
+      if (
+        !normalizeDiscordId(oldId) ||
+        typeof newId !== "string" ||
+        !normalizeDiscordId(newId) ||
+        newId !== newId.trim()
+      ) {
+        throw new Error("Vínculo inválido no mapa de identidade Discord.");
+      }
+
+      const visited = new Set();
+      let current = oldId;
+
+      while (Object.hasOwn(parsed.aliases, current)) {
+        if (visited.has(current)) {
+          throw new Error("Ciclo encontrado no mapa de identidade Discord.");
+        }
+        visited.add(current);
+        current = parsed.aliases[current];
+      }
+    }
+
+    MEMORY_STATE = normalizeState(parsed);
+    return MEMORY_STATE;
   } catch (error) {
+    if (error?.code === "ENOENT") {
+      MEMORY_STATE = normalizeState();
+      return MEMORY_STATE;
+    }
+
     console.error(
       "[SC_IDENTITY] Falha ao carregar mapa de identidade:",
       error?.message || error
     );
-
-    MEMORY_STATE = normalizeState();
+    throw error;
   }
-
-  return MEMORY_STATE;
 }
 
 function writeState(state) {
   ensureDataDir();
 
-  const normalized =
-    normalizeState(state);
+  const normalized = normalizeState(state);
+  const serialized = JSON.stringify(normalized, null, 2);
+  const committed = JSON.parse(serialized);
+  const tmp = `${STATE_FILE}.${randomUUID()}.tmp`;
+  let created = false;
 
-  const tmp =
-    `${STATE_FILE}.tmp`;
-
-  fs.writeFileSync(
-    tmp,
-    JSON.stringify(
-      normalized,
-      null,
-      2
-    ),
-    "utf8"
-  );
-
-  fs.renameSync(
-    tmp,
-    STATE_FILE
-  );
-
-  MEMORY_STATE =
-    normalized;
+  try {
+    const descriptor = fs.openSync(tmp, "wx", 0o600);
+    created = true;
+    try {
+      fs.writeFileSync(descriptor, serialized, "utf8");
+    } finally {
+      fs.closeSync(descriptor);
+    }
+    fs.renameSync(tmp, STATE_FILE);
+    MEMORY_STATE = committed;
+  } finally {
+    if (created) {
+      try {
+        fs.unlinkSync(tmp);
+      } catch (error) {
+        if (error?.code !== "ENOENT") {
+          console.error(
+            "[SC_IDENTITY] Falha ao limpar arquivo temporário:",
+            error?.message || error
+          );
+        }
+      }
+    }
+  }
 }
 
 function normalizeDiscordId(value) {
@@ -483,7 +520,7 @@ export function registerDiscordIdentityMigration({
   }
 
   const state =
-    readState();
+    getDiscordIdentityStateSnapshot();
 
   state.aliases[
     validation.oldUserId
@@ -540,7 +577,7 @@ export function rollbackDiscordIdentityMigration({
   }
 
   const state =
-    readState();
+    getDiscordIdentityStateSnapshot();
 
   if (
     String(
@@ -589,49 +626,47 @@ export function rollbackDiscordIdentityMigration({
 export function normalizeDiscordIdentityAdjustmentMap(
   userMap = {}
 ) {
+  if (
+    !userMap ||
+    typeof userMap !== "object" ||
+    Array.isArray(userMap)
+  ) {
+    throw new Error("Mapa de ajustes de pontos inválido.");
+  }
+
+  const state = readState();
   const normalized = {};
 
-  for (
-    const [
-      rawUserId,
-      rawValue
-    ]
-    of Object.entries(
-      userMap || {}
-    )
-  ) {
-    const userId =
-      resolveDiscordIdentity(
-        rawUserId
-      );
-
-    if (!userId) {
-      continue;
+  for (const [rawUserId, rawValue] of Object.entries(userMap)) {
+    if (!normalizeDiscordId(rawUserId)) {
+      throw new Error("ID Discord inválido no mapa de ajustes de pontos.");
     }
 
     const value =
-      Number(
-        rawValue || 0
-      );
+      typeof rawValue === "number" ||
+      (typeof rawValue === "string" && rawValue.trim() !== "")
+        ? Number(rawValue)
+        : NaN;
 
-    const current =
-      Number(
-        normalized[userId] ||
-        0
-      );
+    if (!Number.isSafeInteger(value)) {
+      throw new Error("Quantidade inválida no mapa de ajustes de pontos.");
+    }
 
-    if (
-      value <= -99999 ||
-      current <= -99999
-    ) {
-      normalized[userId] =
-        -99999;
+    const userId = resolveFromAliases(rawUserId, state.aliases);
+    const current = normalized[userId] ?? 0;
 
+    if (value <= -99999 || current <= -99999) {
+      normalized[userId] = -99999;
       continue;
     }
 
-    normalized[userId] =
-      current + value;
+    const total = current + value;
+
+    if (!Number.isSafeInteger(total)) {
+      throw new Error("A soma dos ajustes de pontos excede o limite seguro.");
+    }
+
+    normalized[userId] = total;
   }
 
   return normalized;

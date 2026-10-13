@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { randomUUID } from "node:crypto";
 import {
   EmbedBuilder,
   PermissionsBitField,
@@ -61,12 +62,12 @@ const ADJUSTMENTS_FILE = path.join(DATA_DIR, "sc_points_adjustments.json");
 
 // ✅ usuários com bypass total
 const ALLOWED_REMOVE_USERS = new Set([
-  "660311795327828008", // você
-  "1262262852949905408", // owner
+  "660311795327828008", // Macedo
 ]);
 
 // ✅ cargos permitidos para remover pontos
 const ALLOWED_REMOVE_ROLES = new Set([
+  "1262262852949905408", // Owner
   "1352408327983861844", // resp creators
   "1262262852949905409", // resp influ
   "1352407252216184833", // resp lider
@@ -85,6 +86,7 @@ const ALLOWED_REMOVE_ROLES = new Set([
 // Resp Líder
 //
 const REMOVE_ROLE_HIERARCHY = new Map([
+  ["1262262852949905408", Infinity], // Owner
   ["1352407252216184833", 1], // resp lider
   ["1262262852949905409", 2], // resp influ
   ["1352408327983861844", 3], // resp creators
@@ -237,78 +239,133 @@ function getTargetHighestRemovalHierarchyLevel(member) {
  * - alvo sem cargo permitido:
  *    - permite (não está protegido pela hierarquia dos cargos autorizados)
  */
-async function canRemovePointsFromTarget({ guild, executorId, targetUserId }) {
-  const isBypass = ALLOWED_REMOVE_USERS.has(String(executorId || ""));
+async function canRemovePointsFromTarget({
+  guild,
+  executorId,
+  targetUserId
+}) {
+  const deny = reason => ({
+    ok: false,
+    bypass: false,
+    reason,
+    executorMember: null,
+    targetMember: null,
+    executorRoleId: null,
+    executorLevel: null,
+    targetLevel: null,
+  });
+
+  if (
+    !guild?.members ||
+    !/^\d{17,20}$/.test(
+      String(executorId || "")
+    ) ||
+    !/^\d{17,20}$/.test(
+      String(targetUserId || "")
+    )
+  ) {
+    return deny(
+      "Servidor ou identificação inválida para ajustar pontos."
+    );
+  }
+
+  const canonicalTargetId =
+    resolveDiscordIdentity(
+      String(targetUserId)
+    );
+
+  if (
+    !/^\d{17,20}$/.test(
+      String(canonicalTargetId || "")
+    )
+  ) {
+    return deny(
+      "Não foi possível validar a identidade do alvo."
+    );
+  }
+
+  const executorMember =
+    await guild.members.fetch({
+      user: String(executorId),
+      force: true,
+    }).catch(() => null);
+
+  if (
+    !executorMember ||
+    executorMember.user?.bot
+  ) {
+    return deny(
+      "Não foi possível confirmar o executor no servidor."
+    );
+  }
+
+  const targetMember =
+    await guild.members.fetch({
+      user: canonicalTargetId,
+      force: true,
+    }).catch(() => null);
+
+  if (
+    !targetMember ||
+    targetMember.user?.bot
+  ) {
+    return deny(
+      "O alvo precisa ser uma pessoa presente no servidor."
+    );
+  }
+
+  const isBypass =
+    ALLOWED_REMOVE_USERS.has(
+      String(executorId)
+    ) ||
+    executorMember.roles.cache.has(
+      "1262262852949905408"
+    );
+
   if (isBypass) {
     return {
       ok: true,
       bypass: true,
-      executorMember: await fetchGuildMemberSafe(guild, executorId),
-      targetMember: await fetchGuildMemberSafe(guild, targetUserId),
+      reason: null,
+      executorMember,
+      targetMember,
       executorRoleId: null,
       executorLevel: Infinity,
       targetLevel: null,
-      reason: null,
     };
   }
 
-  const executorMember = await fetchGuildMemberSafe(guild, executorId);
-  if (!executorMember) {
-    return {
-      ok: false,
-      bypass: false,
-      reason: "Executor não encontrado no servidor.",
-      executorMember: null,
-      targetMember: null,
-      executorRoleId: null,
-      executorLevel: null,
-      targetLevel: null,
-    };
+  const executorLevel =
+    getHighestRemovalHierarchyLevel(
+      executorMember
+    );
+
+  const executorRoleId =
+    getHighestRemovalRoleId(
+      executorMember
+    );
+
+  const targetLevel =
+    getTargetHighestRemovalHierarchyLevel(
+      targetMember
+    );
+
+  if (
+    executorLevel == null ||
+    !executorRoleId
+  ) {
+    return deny(
+      "Você não possui cargo permitido para remover pontos."
+    );
   }
 
-  const executorLevel = getHighestRemovalHierarchyLevel(executorMember);
-  const executorRoleId = getHighestRemovalRoleId(executorMember);
-
-  if (executorLevel == null || !executorRoleId) {
-    return {
-      ok: false,
-      bypass: false,
-      reason: "Você não possui cargo permitido para remover pontos.",
-      executorMember,
-      targetMember: null,
-      executorRoleId: null,
-      executorLevel: null,
-      targetLevel: null,
-    };
-  }
-
-  const targetMember = await fetchGuildMemberSafe(guild, targetUserId);
-  const targetLevel = getTargetHighestRemovalHierarchyLevel(targetMember);
-
-  if (targetLevel == null) {
-    return {
-      ok: true,
-      bypass: false,
-      reason: null,
-      executorMember,
-      targetMember,
-      executorRoleId,
-      executorLevel,
-      targetLevel: null,
-    };
-  }
-
-  if (executorLevel <= targetLevel) {
-    return {
-      ok: false,
-      bypass: false,
-      reason: "Você só pode remover pontos de cargos ABAIXO do seu na hierarquia permitida.",
-      executorMember,
-      targetMember,
-      executorRoleId,
-      executorLevel,
-      targetLevel,
-    };
+  if (
+    targetLevel != null &&
+    executorLevel <= targetLevel
+  ) {
+    return deny(
+      "Você só pode remover pontos de cargos ABAIXO do seu na hierarquia permitida."
+    );
   }
 
   return {
@@ -323,91 +380,187 @@ async function canRemovePointsFromTarget({ guild, executorId, targetUserId }) {
   };
 }
 
-function loadAdjustments() {
-  let data = {
-    byWeek: {},
-  };
+function pointAdjustmentInteger(
+  value,
+  label
+) {
+  if (value === undefined) {
+    return 0;
+  }
 
   if (
-    fs.existsSync(
-      ADJUSTMENTS_FILE
+    (
+      typeof value !== "number" &&
+      typeof value !== "string"
+    ) ||
+    (
+      typeof value === "string" &&
+      !value.trim()
+    ) ||
+    !Number.isSafeInteger(
+      Number(value)
     )
   ) {
-    data =
-      JSON.parse(
-        fs.readFileSync(
-          ADJUSTMENTS_FILE,
-          "utf8"
-        )
-      );
+    throw new Error(
+      label + " possui valor inteiro inválido."
+    );
+  }
+
+  return Number(value);
+}
+
+function validatePointAdjustmentWeek(
+  weekKey
+) {
+  if (
+    typeof weekKey !== "string" ||
+    !/^\d{4}-\d{2}-\d{2}$/.test(weekKey)
+  ) {
+    throw new Error(
+      "Semana inválida para o ajuste de pontos."
+    );
+  }
+
+  const [
+    year,
+    month,
+    day,
+  ] = weekKey.split("-").map(Number);
+
+  const date = new Date(
+    Date.UTC(
+      year,
+      month - 1,
+      day
+    )
+  );
+
+  if (
+    year < 1000 ||
+    year > 9999 ||
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() !== month - 1 ||
+    date.getUTCDate() !== day
+  ) {
+    throw new Error(
+      "Semana inválida para o ajuste de pontos."
+    );
+  }
+}
+
+function loadAdjustments() {
+  let data;
+
+  try {
+    data = JSON.parse(fs.readFileSync(ADJUSTMENTS_FILE, "utf8"));
+  } catch (error) {
+    if (error?.code !== "ENOENT") {
+      throw error;
+    }
+    data = { byWeek: {} };
   }
 
   if (
     !data ||
     typeof data !== "object" ||
-    Array.isArray(data) ||
-    (
-      data.byWeek !== undefined &&
-      (
-        !data.byWeek ||
-        typeof data.byWeek !== "object" ||
-        Array.isArray(data.byWeek)
-      )
-    )
+    Array.isArray(data)
   ) {
     throw new Error(
       "O JSON de ajustes de pontos está inválido. O arquivo existente foi preservado."
     );
   }
 
-  data.byWeek =
-    data.byWeek || {};
+  for (const key of ["weekly", "global"]) {
+    if (!Object.hasOwn(data, key)) continue;
 
-  for (
-    const [
-      weekKey,
-      users
-    ]
-    of Object.entries(
-      data.byWeek
-    )
-  ) {
-    data.byWeek[weekKey] =
-      normalizeDiscordIdentityAdjustmentMap(
-        users
+    const legacy = data[key];
+
+    if (
+      !legacy ||
+      typeof legacy !== "object" ||
+      Array.isArray(legacy) ||
+      Object.keys(legacy).length > 0
+    ) {
+      throw new Error(
+        "O JSON contém ajustes antigos em " + key +
+        ". É necessário conferir esses dados antes de aplicar novos ajustes."
       );
+    }
+  }
+
+  if (data.byWeek === undefined) {
+    data.byWeek = {};
+  }
+
+  if (
+    !data.byWeek ||
+    typeof data.byWeek !== "object" ||
+    Array.isArray(data.byWeek)
+  ) {
+    throw new Error("O mapa semanal de ajustes de pontos está inválido.");
+  }
+
+  for (const [weekKey, users] of Object.entries(data.byWeek)) {
+    validatePointAdjustmentWeek(weekKey);
+    data.byWeek[weekKey] = normalizeDiscordIdentityAdjustmentMap(users);
   }
 
   return data;
 }
 
 function saveAdjustments(data) {
+  const bytes =
+    JSON.stringify(
+      data,
+      null,
+      2
+    );
+
+  const temporary =
+    ADJUSTMENTS_FILE +
+    "." +
+    randomUUID() +
+    ".tmp";
+
   fs.mkdirSync(
-    path.dirname(
-      ADJUSTMENTS_FILE
-    ),
+    path.dirname(ADJUSTMENTS_FILE),
     {
       recursive: true,
     }
   );
 
-  const temporary =
-    ADJUSTMENTS_FILE + ".tmp";
+  try {
+    fs.writeFileSync(
+      temporary,
+      bytes,
+      {
+        encoding: "utf8",
+        flag: "wx",
+        mode: 0o600,
+      }
+    );
 
-  fs.writeFileSync(
-    temporary,
-    JSON.stringify(
-      data,
-      null,
-      2
-    ),
-    "utf8"
-  );
-
-  fs.renameSync(
-    temporary,
-    ADJUSTMENTS_FILE
-  );
+    fs.renameSync(
+      temporary,
+      ADJUSTMENTS_FILE
+    );
+  } finally {
+    try {
+      fs.unlinkSync(temporary);
+    } catch (error) {
+      if (error.code !== "ENOENT") {
+        console.warn(
+          "[SC POINTS] Falha ao limpar temporário:",
+          {
+            code:
+              error.code || null,
+            name:
+              error.name,
+          }
+        );
+      }
+    }
+  }
 }
 
 // =====================================================
@@ -766,6 +919,25 @@ function applyManualAdjustment({
   source = null,
   sourceBasePoints = null
 }) {
+  validatePointAdjustmentWeek(
+    weekKey
+  );
+
+  if (
+    typeof userId !== "string" ||
+    !/^\d{17,20}$/.test(userId)
+  ) {
+    throw new Error(
+      "ID do Discord inválido para o ajuste de pontos."
+    );
+  }
+
+  const numericDelta =
+    pointAdjustmentInteger(
+      delta,
+      "Quantidade do ajuste"
+    );
+
   const data =
     loadAdjustments();
 
@@ -773,9 +945,6 @@ function applyManualAdjustment({
     resolveDiscordIdentity(
       userId
     );
-
-  const numericDelta =
-    Number(delta);
 
   if (
     source !== null &&
@@ -854,8 +1023,21 @@ function applyManualAdjustment({
         ? data.operations[operationKey]
         : null;
 
-    if (saved) {
+    if (
+      Object.hasOwn(
+        data.operations,
+        operationKey
+      )
+    ) {
       if (
+        !saved ||
+        typeof saved !== "object" ||
+        Array.isArray(saved) ||
+        typeof saved.operationId !== "string" ||
+        saved.operationId.toLowerCase() !==
+          operationId.toLowerCase() ||
+        !Number.isSafeInteger(saved.appliedAt) ||
+        saved.appliedAt <= 0 ||
         saved.weekKey !== weekKey ||
         saved.userId !== canonicalUserId ||
         saved.delta !== numericDelta ||
@@ -934,8 +1116,9 @@ function applyManualAdjustment({
       );
 
     const previousAreaAdjustment =
-      Number(
-        userAreas[source] || 0
+      pointAdjustmentInteger(
+        userAreas[source],
+        "Ajuste anterior da área"
       );
 
     if (
@@ -977,6 +1160,14 @@ function applyManualAdjustment({
         previousAreaAdjustment;
 
       if (
+        !Number.isSafeInteger(available)
+      ) {
+        throw new Error(
+          "A pontuação disponível da área ultrapassa o limite numérico permitido."
+        );
+      }
+
+      if (
         available +
         numericDelta < 0
       ) {
@@ -998,13 +1189,26 @@ function applyManualAdjustment({
   data.byWeek =
     data.byWeek || {};
 
-  data.byWeek[weekKey] =
-    data.byWeek[weekKey] || {};
+  if (
+    data.byWeek[weekKey] === undefined
+  ) {
+    data.byWeek[weekKey] = {};
+  }
+
+  if (
+    !data.byWeek[weekKey] ||
+    typeof data.byWeek[weekKey] !== "object" ||
+    Array.isArray(data.byWeek[weekKey])
+  ) {
+    throw new Error(
+      "O mapa de ajustes da semana está inválido. Nenhum ajuste foi gravado."
+    );
+  }
 
   const before =
-    Number(
-      data.byWeek[weekKey][canonicalUserId] ||
-      0
+    pointAdjustmentInteger(
+      data.byWeek[weekKey][canonicalUserId],
+      "Ajuste anterior da pessoa"
     );
 
   if (!Number.isSafeInteger(before)) {
@@ -2386,7 +2590,12 @@ async function collectAllPointsUnshared(client, mode = "light") {
   const seenManagerStableKeys = new Set();
   const lastDoacaoAtByUser = new Map();
 
-  if (mode === "light" && CACHE.payload && now - CACHE.at < SCAN_TTL_MS) {
+  if (
+    mode === "light" &&
+    CACHE.payload &&
+    now >= CACHE.at &&
+    now - CACHE.at < SCAN_TTL_MS
+  ) {
     // reconstrói debug weekkeys
     DEBUG.weekKeysFound = {};
     for (const it of CACHE.payload.items || []) {
@@ -6654,25 +6863,18 @@ function canAddWeeklyPoints(member) {
     return false;
   }
 
-  if (
+  return (
     String(member.id) ===
-    "660311795327828008"
-  ) {
-    return true;
-  }
-
-  const allowedRoles =
-    new Set([
-      "1262262852949905408",
-      "1352408327983861844",
-      "1262262852949905409",
-    ]);
-
-  return member.roles.cache.some(
-    role =>
-      allowedRoles.has(
-        role.id
-      )
+      "660311795327828008" ||
+    member.roles.cache.has(
+      "1262262852949905408"
+    ) ||
+    member.roles.cache.has(
+      "1262262852949905409"
+    ) ||
+    member.roles.cache.has(
+      "1352408327983861844"
+    )
   );
 }
 
@@ -6770,8 +6972,70 @@ export async function adjustWeeklyPointsFromSite({
   operationId = null,
   source = null,
 }) {
+  if (
+    typeof actorId !== "string" ||
+    !/^\d{17,20}$/.test(actorId) ||
+    typeof targetId !== "string"
+  ) {
+    throw Object.assign(
+      new Error(
+        "Identificação inválida para ajustar pontos."
+      ),
+      { status: 400 }
+    );
+  }
+
+  if (
+    guild?.id !==
+      "1262262852782129183"
+  ) {
+    throw Object.assign(
+      new Error(
+        "Servidor inválido para ajustar pontos."
+      ),
+      { status: 400 }
+    );
+  }
+
+  if (
+    typeof source !== "string" ||
+    !Object.hasOwn(
+      SOURCE_LABEL,
+      source
+    )
+  ) {
+    throw Object.assign(
+      new Error(
+        "Selecione uma área válida antes de ajustar pontos."
+      ),
+      { status: 400 }
+    );
+  }
+
+  if (
+    typeof operationId !== "string" ||
+    !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(
+      operationId
+    )
+  ) {
+    throw Object.assign(
+      new Error(
+        "A operação de pontos precisa de uma identificação válida."
+      ),
+      { status: 400 }
+    );
+  }
+
   const qty =
-    Number(amount);
+    (
+      typeof amount === "number" ||
+      (
+        typeof amount === "string" &&
+        amount.trim()
+      )
+    )
+      ? Number(amount)
+      : NaN;
 
   targetId =
     String(
@@ -6795,8 +7059,11 @@ export async function adjustWeeklyPointsFromSite({
     qty <= 0 ||
     qty > 1000
   ) {
-    throw new Error(
-      "Quantidade de pontos inválida. Informe um número inteiro entre 1 e 1000."
+    throw Object.assign(
+      new Error(
+        "Quantidade de pontos inválida. Informe um número inteiro entre 1 e 1000."
+      ),
+      { status: 400 }
     );
   }
 
@@ -6808,8 +7075,11 @@ export async function adjustWeeklyPointsFromSite({
       mode
     )
   ) {
-    throw new Error(
-      "Tipo de ajuste inválido."
+    throw Object.assign(
+      new Error(
+        "Tipo de ajuste inválido."
+      ),
+      { status: 400 }
     );
   }
 
@@ -6829,8 +7099,11 @@ export async function adjustWeeklyPointsFromSite({
         actor
       )
     ) {
-      throw new Error(
-        "Adicionar pontos é exclusivo de Resp. Influ, Resp. Creators, Owner e Macedo."
+      throw Object.assign(
+        new Error(
+          "Adicionar pontos está liberado para Resp. Influ (Flow), Resp. Creators (Kratos), Owner e Macedo."
+        ),
+        { status: 403 }
       );
     }
 

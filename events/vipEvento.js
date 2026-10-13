@@ -2283,7 +2283,7 @@ extra: [
 
         const pagoIdx = fieldsPagoCorrigidos.findIndex((f) => (f.name || "").startsWith("💸 Pagamento"));
 
-        if (pagoIdx >= 0 && (fields[pagoIdx]?.value || "—") !== "—") {
+        if (pagoIdx >= 0 && (fieldsPagoCorrigidos[pagoIdx]?.value || "—") !== "—") {
           await safeReply(i, { content: "⚠️ Esse registro já está marcado como pago.", ephemeral: true });
           return true;
         }
@@ -2329,7 +2329,7 @@ extra: [
   messageUrl: msg.url,
   during: "Usuário clicou no botão 'Já foi pago', o sistema atualizou o campo de pagamento e desabilitou os botões.",
   before: `Antes:\n${VIP_extractEmbedFields(msg.embeds?.[0])}`,
-  after: `Depois:\n${VIP_extractEmbedFields(embed)}`,
+  after: `Depois:\n${VIP_extractEmbedFields(embedPagoCorrigido)}`,
   extra: [
     `Registrante original: ${registranteId ? `<@${registranteId}> (\`${registranteId}\`)` : "—"}`,
     `Linha adicionada: ${linha}`,

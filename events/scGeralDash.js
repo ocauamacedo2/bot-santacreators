@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { randomUUID } from "node:crypto";
 import {
   EmbedBuilder,
   PermissionsBitField,
@@ -142,11 +143,11 @@ const WEEKLY_SNAPSHOT_PATH = path.join(
 
 // ================== AJUSTES MANUAIS (REMOVER / ADICIONAR PONTOS) ==================
 const MANUAL_ADJUST_ALLOWED_USERS = new Set([
-  "660311795327828008", // você
-  "1262262852949905408", // owner
+  "660311795327828008", // Macedo
 ]);
 
 const MANUAL_ADJUST_ALLOWED_ROLES = new Set([
+  "1262262852949905408", // Owner
   "1352408327983861844", // resp creators
   "1262262852949905409", // resp influ
   "1352407252216184833", // resp lider
@@ -165,97 +166,194 @@ const MANUAL_ADJUST_ALLOWED_ROLES = new Set([
 // Resp Líder
 //
 const MANUAL_ADJUST_ROLE_HIERARCHY = new Map([
+  ["1262262852949905408", Infinity], // Owner
   ["1352407252216184833", 1], // resp lider
   ["1262262852949905409", 2], // resp influ
   ["1352408327983861844", 3], // resp creators
 ]);
 
 const MANUAL_ADJUST_PATH = path.join(DATA_DIR, "sc_points_adjustments.json");
-function loadManualAdjustments() {
-  let manual = {
-    byWeek: {},
-  };
+function pointAdjustmentInteger(
+  value,
+  label
+) {
+  if (value === undefined) {
+    return 0;
+  }
 
   if (
-    fs.existsSync(
-      MANUAL_ADJUST_PATH
+    (
+      typeof value !== "number" &&
+      typeof value !== "string"
+    ) ||
+    (
+      typeof value === "string" &&
+      !value.trim()
+    ) ||
+    !Number.isSafeInteger(
+      Number(value)
     )
   ) {
-    manual =
-      JSON.parse(
-        fs.readFileSync(
-          MANUAL_ADJUST_PATH,
-          "utf8"
-        )
-      );
+    throw new Error(
+      label + " possui valor inteiro inválido."
+    );
+  }
+
+  return Number(value);
+}
+
+function validatePointAdjustmentWeek(
+  weekKey
+) {
+  if (
+    typeof weekKey !== "string" ||
+    !/^\d{4}-\d{2}-\d{2}$/.test(weekKey)
+  ) {
+    throw new Error(
+      "Semana inválida para o ajuste de pontos."
+    );
+  }
+
+  const [
+    year,
+    month,
+    day,
+  ] = weekKey.split("-").map(Number);
+
+  const date = new Date(
+    Date.UTC(
+      year,
+      month - 1,
+      day
+    )
+  );
+
+  if (
+    year < 1000 ||
+    year > 9999 ||
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() !== month - 1 ||
+    date.getUTCDate() !== day
+  ) {
+    throw new Error(
+      "Semana inválida para o ajuste de pontos."
+    );
+  }
+}
+
+function loadManualAdjustments() {
+  let manual;
+
+  try {
+    manual = JSON.parse(fs.readFileSync(MANUAL_ADJUST_PATH, "utf8"));
+  } catch (error) {
+    if (error?.code !== "ENOENT") {
+      throw error;
+    }
+    manual = { byWeek: {} };
   }
 
   if (
     !manual ||
     typeof manual !== "object" ||
-    Array.isArray(manual) ||
-    (
-      manual.byWeek !== undefined &&
-      (
-        !manual.byWeek ||
-        typeof manual.byWeek !== "object" ||
-        Array.isArray(manual.byWeek)
-      )
-    )
+    Array.isArray(manual)
   ) {
     throw new Error(
       "O JSON de ajustes de pontos está inválido. O arquivo existente foi preservado."
     );
   }
 
-  manual.byWeek =
-    manual.byWeek || {};
+  for (const key of ["weekly", "global"]) {
+    if (!Object.hasOwn(manual, key)) continue;
 
-  for (
-    const [
-      weekKey,
-      users
-    ]
-    of Object.entries(
-      manual.byWeek
-    )
-  ) {
-    manual.byWeek[weekKey] =
-      normalizeDiscordIdentityAdjustmentMap(
-        users
+    const legacy = manual[key];
+
+    if (
+      !legacy ||
+      typeof legacy !== "object" ||
+      Array.isArray(legacy) ||
+      Object.keys(legacy).length > 0
+    ) {
+      throw new Error(
+        "O JSON contém ajustes antigos em " + key +
+        ". É necessário conferir esses dados antes de aplicar novos ajustes."
       );
+    }
+  }
+
+  if (manual.byWeek === undefined) {
+    manual.byWeek = {};
+  }
+
+  if (
+    !manual.byWeek ||
+    typeof manual.byWeek !== "object" ||
+    Array.isArray(manual.byWeek)
+  ) {
+    throw new Error("O mapa semanal de ajustes de pontos está inválido.");
+  }
+
+  for (const [weekKey, users] of Object.entries(manual.byWeek)) {
+    validatePointAdjustmentWeek(weekKey);
+    manual.byWeek[weekKey] = normalizeDiscordIdentityAdjustmentMap(users);
   }
 
   return manual;
 }
 
 function saveManualAdjustments(data) {
+  const bytes =
+    JSON.stringify(
+      data,
+      null,
+      2
+    );
+
+  const temporary =
+    MANUAL_ADJUST_PATH +
+    "." +
+    randomUUID() +
+    ".tmp";
+
   fs.mkdirSync(
-    path.dirname(
-      MANUAL_ADJUST_PATH
-    ),
+    path.dirname(MANUAL_ADJUST_PATH),
     {
       recursive: true,
     }
   );
 
-  const temporary =
-    MANUAL_ADJUST_PATH + ".tmp";
+  try {
+    fs.writeFileSync(
+      temporary,
+      bytes,
+      {
+        encoding: "utf8",
+        flag: "wx",
+        mode: 0o600,
+      }
+    );
 
-  fs.writeFileSync(
-    temporary,
-    JSON.stringify(
-      data,
-      null,
-      2
-    ),
-    "utf8"
-  );
-
-  fs.renameSync(
-    temporary,
-    MANUAL_ADJUST_PATH
-  );
+    fs.renameSync(
+      temporary,
+      MANUAL_ADJUST_PATH
+    );
+  } finally {
+    try {
+      fs.unlinkSync(temporary);
+    } catch (error) {
+      if (error.code !== "ENOENT") {
+        console.warn(
+          "[SC POINTS] Falha ao limpar temporário:",
+          {
+            code:
+              error.code || null,
+            name:
+              error.name,
+          }
+        );
+      }
+    }
+  }
 }
 
 // =====================================================
@@ -728,80 +826,133 @@ async function fetchGuildMemberSafe(guild, userId) {
   }
 }
 
-async function canManualRemovePoints({ guild, executorId, targetUserId }) {
-  const isBypass = MANUAL_ADJUST_ALLOWED_USERS.has(String(executorId || ""));
+async function canManualRemovePoints({
+  guild,
+  executorId,
+  targetUserId
+}) {
+  const deny = reason => ({
+    ok: false,
+    bypass: false,
+    reason,
+    executorMember: null,
+    targetMember: null,
+    executorRoleId: null,
+    executorLevel: null,
+    targetLevel: null,
+  });
+
+  if (
+    !guild?.members ||
+    !/^\d{17,20}$/.test(
+      String(executorId || "")
+    ) ||
+    !/^\d{17,20}$/.test(
+      String(targetUserId || "")
+    )
+  ) {
+    return deny(
+      "Servidor ou identificação inválida para ajustar pontos."
+    );
+  }
+
+  const canonicalTargetId =
+    resolveDiscordIdentity(
+      String(targetUserId)
+    );
+
+  if (
+    !/^\d{17,20}$/.test(
+      String(canonicalTargetId || "")
+    )
+  ) {
+    return deny(
+      "Não foi possível validar a identidade do alvo."
+    );
+  }
+
+  const executorMember =
+    await guild.members.fetch({
+      user: String(executorId),
+      force: true,
+    }).catch(() => null);
+
+  if (
+    !executorMember ||
+    executorMember.user?.bot
+  ) {
+    return deny(
+      "Não foi possível confirmar o executor no servidor."
+    );
+  }
+
+  const targetMember =
+    await guild.members.fetch({
+      user: canonicalTargetId,
+      force: true,
+    }).catch(() => null);
+
+  if (
+    !targetMember ||
+    targetMember.user?.bot
+  ) {
+    return deny(
+      "O alvo precisa ser uma pessoa presente no servidor."
+    );
+  }
+
+  const isBypass =
+    MANUAL_ADJUST_ALLOWED_USERS.has(
+      String(executorId)
+    ) ||
+    executorMember.roles.cache.has(
+      "1262262852949905408"
+    );
+
   if (isBypass) {
     return {
       ok: true,
       bypass: true,
-      executorMember: await fetchGuildMemberSafe(guild, executorId),
-      targetMember: await fetchGuildMemberSafe(guild, targetUserId),
+      reason: null,
+      executorMember,
+      targetMember,
       executorRoleId: null,
       executorLevel: Infinity,
       targetLevel: null,
-      reason: null,
     };
   }
 
-  const executorMember = await fetchGuildMemberSafe(guild, executorId);
-  if (!executorMember) {
-    return {
-      ok: false,
-      bypass: false,
-      reason: "Executor não encontrado no servidor.",
-      executorMember: null,
-      targetMember: null,
-      executorRoleId: null,
-      executorLevel: null,
-      targetLevel: null,
-    };
+  const executorLevel =
+    getManualAdjustHighestLevel(
+      executorMember
+    );
+
+  const executorRoleId =
+    getManualAdjustHighestRoleId(
+      executorMember
+    );
+
+  const targetLevel =
+    getManualAdjustHighestLevel(
+      targetMember
+    );
+
+  if (
+    executorLevel == null ||
+    !executorRoleId
+  ) {
+    return deny(
+      "Você não possui cargo permitido para remover pontos."
+    );
   }
 
-  const executorLevel = getManualAdjustHighestLevel(executorMember);
-  const executorRoleId = getManualAdjustHighestRoleId(executorMember);
-
-  if (executorLevel == null || !executorRoleId) {
-    return {
-      ok: false,
-      bypass: false,
-      reason: "Você não possui cargo permitido para remover pontos.",
-      executorMember,
-      targetMember: null,
-      executorRoleId: null,
-      executorLevel: null,
-      targetLevel: null,
-    };
-  }
-
-  const targetMember = await fetchGuildMemberSafe(guild, targetUserId);
-  const targetLevel = getManualAdjustHighestLevel(targetMember);
-
-  // alvo sem cargo permitido da hierarquia => pode remover
-  if (targetLevel == null) {
-    return {
-      ok: true,
-      bypass: false,
-      reason: null,
-      executorMember,
-      targetMember,
-      executorRoleId,
-      executorLevel,
-      targetLevel: null,
-    };
-  }
-
-  // só remove se o executor estiver ACIMA na hierarquia permitida
-  if (executorLevel <= targetLevel) {
-    return {
-      ok: false,
-      bypass: false,
-      reason: "Você só pode remover pontos de cargos ABAIXO do seu na hierarquia permitida.",
-      executorMember,
-      targetMember,
-      executorRoleId,
-      executorLevel,
-      targetLevel,
-    };
+  if (
+    targetLevel != null &&
+    executorLevel <= targetLevel
+  ) {
+    return deny(
+      "Você só pode remover pontos de cargos ABAIXO do seu na hierarquia permitida."
+    );
   }
 
   return {
@@ -816,38 +967,88 @@ async function canManualRemovePoints({ guild, executorId, targetUserId }) {
   };
 }
 
-function applyManualAdjustment({ weekKey, userId, delta }) {
-  const manual =
-    loadManualAdjustments();
+function applyManualAdjustment({
+  weekKey,
+  userId,
+  delta
+}) {
+  validatePointAdjustmentWeek(
+    weekKey
+  );
 
-  manual.byWeek =
-    manual.byWeek || {};
+  if (
+    typeof userId !== "string" ||
+    !/^\d{17,20}$/.test(userId)
+  ) {
+    throw new Error(
+      "ID do Discord inválido para o ajuste de pontos."
+    );
+  }
 
-  manual.byWeek[weekKey] =
-    manual.byWeek[weekKey] || {};
+  const numericDelta =
+    pointAdjustmentInteger(
+      delta,
+      "Quantidade do ajuste"
+    );
+
+  if (numericDelta === 0) {
+    throw new Error(
+      "A quantidade do ajuste deve ser diferente de zero."
+    );
+  }
 
   const canonicalUserId =
     resolveDiscordIdentity(
       userId
     );
 
+  if (
+    !/^\d{17,20}$/.test(
+      String(canonicalUserId || "")
+    )
+  ) {
+    throw new Error(
+      "Não foi possível validar a identidade do alvo."
+    );
+  }
+
+  const manual =
+    loadManualAdjustments();
+
+  if (
+    manual.byWeek[weekKey] === undefined
+  ) {
+    manual.byWeek[weekKey] = {};
+  }
+
+  if (
+    !manual.byWeek[weekKey] ||
+    typeof manual.byWeek[weekKey] !== "object" ||
+    Array.isArray(manual.byWeek[weekKey])
+  ) {
+    throw new Error(
+      "O mapa de ajustes da semana está inválido. Nenhum ajuste foi gravado."
+    );
+  }
+
   const before =
-    Number(
-      manual.byWeek[
-        weekKey
-      ][canonicalUserId] ||
-      0
+    pointAdjustmentInteger(
+      manual.byWeek[weekKey][canonicalUserId],
+      "Ajuste anterior da pessoa"
     );
 
   const after =
-    before +
-    Number(
-      delta || 0
-    );
+    before + numericDelta;
 
-  manual.byWeek[
-    weekKey
-  ][canonicalUserId] =
+  if (
+    !Number.isSafeInteger(after)
+  ) {
+    throw new Error(
+      "O resultado do ajuste ultrapassa o limite numérico permitido."
+    );
+  }
+
+  manual.byWeek[weekKey][canonicalUserId] =
     after;
 
   saveManualAdjustments(
@@ -862,7 +1063,7 @@ function applyManualAdjustment({ weekKey, userId, delta }) {
         userId:
           canonicalUserId,
         delta:
-          Number(delta || 0),
+          numericDelta,
         before,
         after,
         source:
@@ -2515,7 +2716,12 @@ async function collectAllGeneral(client, mode = "light") {
   }
 
   // ✅ cache leve
-  if (mode === "light" && CACHE.payload && now - CACHE.at < SCAN_TTL_MS) {
+  if (
+    mode === "light" &&
+    CACHE.payload &&
+    now >= CACHE.at &&
+    now - CACHE.at < SCAN_TTL_MS
+  ) {
     DEBUG.weekKeysFound = {};
     for (const it of CACHE.payload.items || []) {
       const wk = weekKeyFromDateSP(it.ts);
@@ -6030,8 +6236,6 @@ if (interaction.isModalSubmit()) {
   DEBUG.weekKeysFound = {};
   DIRTY = true;
   NEXT_ALLOWED_AT = 0;
-  SCAN_LOCK = false;
-  SCAN_LOCK_TS = 0;
 
   await emitManualRemovePointLog(client, {
     executorUserId: interaction.user.id,
@@ -6124,8 +6328,6 @@ if (low.startsWith("!removept")) {
   DEBUG.weekKeysFound = {};
   DIRTY = true;
   NEXT_ALLOWED_AT = 0;
-  SCAN_LOCK = false;
-  SCAN_LOCK_TS = 0;
 
   await emitManualRemovePointLog(client, {
     executorUserId: message.author.id,

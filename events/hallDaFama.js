@@ -1017,13 +1017,22 @@ const ensureDir = () => {
 const saveState = (data) => {
   ensureDir();
 
+  const temporary =
+    STATE_FILE + ".tmp";
+
   fs.writeFileSync(
-    STATE_FILE,
+    temporary,
     JSON.stringify(
       data,
       null,
       2
-    )
+    ),
+    "utf8"
+  );
+
+  fs.renameSync(
+    temporary,
+    STATE_FILE
   );
 };
 
@@ -2673,10 +2682,57 @@ function hallRecoverySnapshotKey(snapshot) {
   });
 }
 
+async function hallReadWithDeadline(
+  label,
+  read,
+  timeoutMs = 30000
+) {
+  let timer = null;
+
+  const startedAt = Date.now();
+
+  try {
+    return await Promise.race([
+      Promise.resolve().then(read),
+
+      new Promise((_resolve, reject) => {
+        timer = setTimeout(() => {
+          const error = new Error(
+            `${label} excedeu ${timeoutMs} ms.`
+          );
+
+          error.code = "SC_HALL_READ_TIMEOUT";
+          error.durationMs = Date.now() - startedAt;
+          error.timeoutMs = timeoutMs;
+
+          console.error(
+            "[HallDaFama] Leitura interrompida:",
+            {
+              action: label,
+              code: error.code,
+              durationMs: error.durationMs,
+              timeoutMs,
+            }
+          );
+
+          reject(error);
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer !== null) {
+      clearTimeout(timer);
+    }
+  }
+}
+
 async function readHallRecoveryAuditRecords(client) {
   const auditChannel =
-    await client.channels.fetch(
-      HALL_ACTION_AUDIT_LOG_CH_ID
+    await hallReadWithDeadline(
+      "recovery.audit_channel.fetch",
+      () => client.channels.fetch(
+        HALL_ACTION_AUDIT_LOG_CH_ID
+      )
     );
 
   if (
@@ -2772,6 +2828,8 @@ async function readHallRecoveryAuditRecords(client) {
         },
         async () => {
           while (nextMessage < pageMessages.length) {
+            assertDeadline();
+
             const message = pageMessages[nextMessage++];
       if (
         seenMessageIds.has(message.id)
@@ -2821,9 +2879,19 @@ async function readHallRecoveryAuditRecords(client) {
         let text;
 
         if (fs.existsSync(cacheFile)) {
-          text = fs.readFileSync(
-            cacheFile,
-            "utf8"
+          text = await hallReadWithDeadline(
+            "recovery.audit_cache.read:" + message.id,
+            async () => {
+              const info = await fs.promises.stat(cacheFile);
+
+              if (!info.isFile() || info.size > 2 * 1024 * 1024) {
+                throw new Error(
+                  `Cache de auditoria inválido ou acima do limite: ${attachment.name}.`
+                );
+              }
+
+              return fs.promises.readFile(cacheFile, "utf8");
+            }
           );
         } else {
           const response = await fetch(
@@ -2852,6 +2920,12 @@ async function readHallRecoveryAuditRecords(client) {
         }
 
         const record = JSON.parse(text);
+
+        if (!record || typeof record !== "object" || Array.isArray(record)) {
+          throw new Error(
+            `Auditoria com estrutura inválida: ${attachment.name}.`
+          );
+        }
 
         if (!fs.existsSync(cacheFile)) {
           const temporary = cacheFile + ".tmp";
@@ -2938,6 +3012,8 @@ async function readHallRecoveryAuditRecords(client) {
     if (failedRead) {
       throw failedRead.reason;
     }
+
+    assertDeadline();
 
     if (
       page === 0 ||
@@ -3262,11 +3338,12 @@ async function restoreHallManualEditsFromAudit(client, hallChannel) {
 
       try {
         const current =
-          await hallChannel.messages.fetch(
-            {
+          await hallReadWithDeadline(
+            "recovery.hall_message.fetch:" + hallId,
+            () => hallChannel.messages.fetch({
               message: hallId,
               force: true
-            }
+            })
           );
 
         if (
@@ -3835,9 +3912,36 @@ async function autoCorrectDuplications(channel, client, options = {}) {
 
     while (!reachedEnd) {
       assertDeadline();
-      const batch = await channel.messages.fetch(
-        beforeId ? { limit: 100, before: beforeId } : { limit: 100 }
-      );
+      let hallPageFetchTimer;
+
+      const batch =
+        await Promise.race([
+          channel.messages.fetch(
+            beforeId
+              ? {
+                  limit: 100,
+                  before: beforeId
+                }
+              : {
+                  limit: 100
+                }
+          ),
+
+          new Promise((resolve, reject) => {
+            hallPageFetchTimer =
+              setTimeout(() => {
+                reject(
+                  new Error(
+                    "Uma página da varredura do Hall não respondeu em 30 segundos. O ranking anterior foi preservado."
+                  )
+                );
+              }, 30000);
+          })
+        ]).finally(() => {
+          clearTimeout(
+            hallPageFetchTimer
+          );
+        });
       const fetched = [...batch.values()];
       const oldest = fetched.reduce((current, message) =>
         !current || BigInt(message.id) < BigInt(current.id) ? message : current,
@@ -7904,7 +8008,21 @@ function getPlayerCityEvidenceFromHallContent(
 
     const messages = new Map();
 
+    const evidenceDeadlineAt =
+      Math.min(
+        Number(options.deadlineAt) || Infinity,
+        Date.now() + 120000
+      );
+
     while (true) {
+      if (
+        Date.now() >= evidenceDeadlineAt
+      ) {
+        throw new Error(
+          "A busca auxiliar de evidências do Hall atingiu o prazo."
+        );
+      }
+
       const cacheKey = `${channelId}:${limit}:${beforeId}`;
       let request = cache?.get(cacheKey);
 
@@ -7923,7 +8041,23 @@ function getPlayerCityEvidenceFromHallContent(
         });
       }
 
-      const batch = await request;
+      let batch;
+
+      try {
+        batch = await awaitHallRead(
+          request,
+          evidenceDeadlineAt,
+          "Busca auxiliar de evidências do Hall"
+        );
+      } catch (error) {
+        if (
+          cache?.get(cacheKey) === request
+        ) {
+          cache.delete(cacheKey);
+        }
+
+        throw error;
+      }
 
       if (!batch.size) {
         break;
@@ -8829,6 +8963,100 @@ function getHallImageExtension(contentType = "", imageUrl = "") {
   return "png";
 }
 
+async function awaitHallRead(
+  task,
+  deadlineAt,
+  label
+) {
+  const remaining =
+    Number(deadlineAt) - Date.now();
+
+  if (
+    !Number.isFinite(remaining) ||
+    remaining <= 0
+  ) {
+    throw new Error(
+      label + ": o prazo da leitura terminou."
+    );
+  }
+
+  let timer;
+
+  try {
+    return await Promise.race([
+      Promise.resolve(task),
+
+      new Promise((resolve, reject) => {
+        timer = setTimeout(() => {
+          reject(
+            new Error(
+              label +
+                ": a leitura não respondeu dentro do prazo."
+            )
+          );
+        }, Math.min(30000, remaining));
+      })
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function readHallImageBuffer(
+  response,
+  maximumBytes
+) {
+  if (!response.body) {
+    throw new Error(
+      "A imagem não possui corpo para leitura."
+    );
+  }
+
+  const reader =
+    response.body.getReader();
+
+  const chunks = [];
+  let size = 0;
+
+  try {
+    while (true) {
+      const {
+        done,
+        value
+      } = await reader.read();
+
+      if (done) {
+        break;
+      }
+
+      size += value.byteLength;
+
+      if (size > maximumBytes) {
+        throw new Error(
+          "A imagem excedeu o limite durante o download."
+        );
+      }
+
+      chunks.push(
+        Buffer.from(value)
+      );
+    }
+
+    return Buffer.concat(
+      chunks,
+      size
+    );
+  } catch (error) {
+    await reader.cancel().catch(
+      () => {}
+    );
+
+    throw error;
+  } finally {
+    reader.releaseLock();
+  }
+}
+
 async function downloadHallImageAttachments(imageUrls = [], options = {}) {
   const urls = uniqueImageUrls(imageUrls).slice(0, 4);
   const files = [];
@@ -8856,23 +9084,18 @@ async function downloadHallImageAttachments(imageUrls = [], options = {}) {
         continue;
       }
 
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 15000);
-
-      let response;
-
-      try {
-        response = await fetch(imageUrl, {
+      const response = await fetch(
+        imageUrl,
+        {
           method: "GET",
           redirect: "follow",
-          signal: controller.signal,
+          signal: AbortSignal.timeout(15000),
           headers: {
-            "User-Agent": "SantaCreators-HallDaFama/1.0"
+            "User-Agent":
+              "SantaCreators-HallDaFama/1.0"
           }
-        });
-      } finally {
-        clearTimeout(timeout);
-      }
+        }
+      );
 
       if (!response.ok) {
         console.warn(
@@ -8909,8 +9132,18 @@ async function downloadHallImageAttachments(imageUrls = [], options = {}) {
         continue;
       }
 
-      const arrayBuffer = await response.arrayBuffer();
-      const buffer = Buffer.from(arrayBuffer);
+      const buffer =
+        await readHallImageBuffer(
+          response,
+          Math.min(
+            maximumSingleImageSize,
+            Math.max(
+              0,
+              maximumTotalImageSize -
+                totalDownloadedSize
+            )
+          )
+        );
 
       if (!buffer.length) {
         console.warn(
@@ -12862,10 +13095,17 @@ async function addPaymentEventsToPlayerRankings(
         );
       }
 
-      const batch = await channel.messages.fetch({
-        limit: 100,
-        ...(beforeId ? { before: beforeId } : {})
-      });
+      const batch =
+        await awaitHallRead(
+          channel.messages.fetch({
+            limit: 100,
+            ...(beforeId
+              ? { before: beforeId }
+              : {})
+          }),
+          deadlineAt,
+          "Paginação dos pagamentos do Hall"
+        );
 
       if (!batch.size) break;
 
@@ -15373,20 +15613,111 @@ async function publishHallRankingsDuringScan(client, rankings) {
     }
   }
 
+async function findHallScanProgressMessage(
+  channel,
+  client,
+  marker
+) {
+  const ids =
+    state.hallScanProgressMessages;
+
+  if (
+    ids != null &&
+    (
+      typeof ids !== "object" ||
+      Array.isArray(ids)
+    )
+  ) {
+    throw new Error(
+      "Os IDs dos painéis da varredura estão inválidos."
+    );
+  }
+
+  const savedId =
+    ids?.[channel.id];
+
+  if (savedId) {
+    let message;
+
+    try {
+      message =
+        await hallReadWithDeadline(
+          "scan.progress_message.fetch:" + channel.id,
+          () => channel.messages.fetch(
+            String(savedId)
+          )
+        );
+    } catch (error) {
+      if (
+        Number(error.code) !== 10008
+      ) {
+        throw error;
+      }
+    }
+
+    if (
+      message?.author?.id === client.user.id &&
+      String(message.content || "").includes(marker)
+    ) {
+      return message;
+    }
+  }
+
+  const messages =
+    await hallReadWithDeadline(
+      "scan.progress_history.fetch:" + channel.id,
+      () => channel.messages.fetch({
+        limit: 100
+      })
+    );
+
+  const message =
+    [...messages.values()]
+      .filter(item =>
+        item.author?.id === client.user.id &&
+        String(item.content || "").includes(marker)
+      )
+      .sort(
+        (a, b) =>
+          b.createdTimestamp -
+          a.createdTimestamp
+      )[0] || null;
+
+  if (message) {
+    state.hallScanProgressMessages ??=
+      {};
+
+    state.hallScanProgressMessages[channel.id] =
+      message.id;
+
+    saveState(state);
+  }
+
+  return message;
+}
+
   async function updateHallScanProgress(client, data = {}) {
-    const ch = await client.channels.fetch(HALL_SCAN_PROGRESS_CHANNEL_ID).catch(() => null);
+    const ch = await hallReadWithDeadline(
+      "scan.progress_channel.fetch",
+      () => client.channels.fetch(HALL_SCAN_PROGRESS_CHANNEL_ID)
+    );
     if (!ch || !ch.isTextBased()) return null;
 
-    const marker = "HF_SCAN_PROGRESS_PANEL";
-    const messages = await ch.messages.fetch({ limit: 20 }).catch(() => null);
+    const marker =
+      "HF_SCAN_PROGRESS_PANEL";
 
-    let oldMsg = messages
-      ?.filter(m => m.author.bot && m.author.id === client.user.id && m.content.includes(marker))
-      ?.sort((a, b) => b.createdTimestamp - a.createdTimestamp)
-      ?.first();
+    let oldMsg =
+      await findHallScanProgressMessage(
+        ch,
+        client,
+        marker
+      );
 
-    if (data.forceNewApprovalPanel && oldMsg) {
-      await oldMsg.delete().catch(() => {});
+    if (
+      data.forceNewApprovalPanel &&
+      oldMsg
+    ) {
+      await oldMsg.delete();
       oldMsg = null;
     }
 
@@ -15452,6 +15783,16 @@ const progressBar = `${"🟩".repeat(filled)}${"⬛".repeat(20 - filled)} ${prog
       result = await ch.send(payload).catch(() => null);
     }
 
+    if (result) {
+      state.hallScanProgressMessages ??=
+        {};
+
+      state.hallScanProgressMessages[ch.id] =
+        result.id;
+
+      saveState(state);
+    }
+
     await updateHallApprovalScanProgress(client, data).catch(() => {});
 
     return result;
@@ -15461,16 +15802,21 @@ const progressBar = `${"🟩".repeat(filled)}${"⬛".repeat(20 - filled)} ${prog
     const ch = await client.channels.fetch(APPROVAL_CHANNEL_ID).catch(() => null);
     if (!ch || !ch.isTextBased()) return null;
 
-    const marker = "HF_SCAN_APPROVAL_PROGRESS_PANEL";
-    const messages = await ch.messages.fetch({ limit: 20 }).catch(() => null);
+    const marker =
+      "HF_SCAN_APPROVAL_PROGRESS_PANEL";
 
-    let oldMsg = messages
-      ?.filter(m => m.author.bot && m.author.id === client.user.id && m.content.includes(marker))
-      ?.sort((a, b) => b.createdTimestamp - a.createdTimestamp)
-      ?.first();
+    let oldMsg =
+      await findHallScanProgressMessage(
+        ch,
+        client,
+        marker
+      );
 
-    if (data.forceNewApprovalPanel && oldMsg) {
-      await oldMsg.delete().catch(() => {});
+    if (
+      data.forceNewApprovalPanel &&
+      oldMsg
+    ) {
+      await oldMsg.delete();
       oldMsg = null;
     }
 
@@ -15546,6 +15892,16 @@ const progressBar = `${"🟩".repeat(filled)}${"⬛".repeat(20 - filled)} ${prog
     const progressMsg = oldMsg
       ? await oldMsg.edit(payload).catch(() => null)
       : await ch.send(payload).catch(() => null);
+
+    if (progressMsg) {
+      state.hallScanProgressMessages ??=
+        {};
+
+      state.hallScanProgressMessages[ch.id] =
+        progressMsg.id;
+
+      saveState(state);
+    }
 
     if (isFinished && progressMsg) {
       setTimeout(() => {
@@ -16936,7 +17292,17 @@ async function findApprovalImagesForHall(
   let beforeId = null;
   let reachedHallPeriod = false;
 
+  const approvalDeadlineAt =
+    Date.now() + 2 * 60 * 1000;
+
   while (true) {
+    if (
+      Date.now() >= approvalDeadlineAt
+    ) {
+      throw new Error(
+        "A busca auxiliar de aprovações do Hall atingiu o prazo. A leitura não foi concluída."
+      );
+    }
     const fetchOptions =
       beforeId
         ? {
@@ -16959,17 +17325,36 @@ async function findApprovalImagesForHall(
       pageCache?.get(pageKey);
 
     if (!fetchedMessages) {
-      fetchedMessages =
-        await approvalChannel.messages
-          .fetch(fetchOptions)
-          .catch(() => null);
+      let approvalFetchTimer;
 
-      if (fetchedMessages) {
-        pageCache?.set(
-          pageKey,
-          fetchedMessages
+      try {
+        fetchedMessages =
+          await Promise.race([
+            approvalChannel.messages.fetch(
+              fetchOptions
+            ),
+
+            new Promise((resolve, reject) => {
+              approvalFetchTimer =
+                setTimeout(() => {
+                  reject(
+                    new Error(
+                      "A busca de aprovações do Hall não respondeu em 30 segundos."
+                    )
+                  );
+                }, 30000);
+            })
+          ]);
+      } finally {
+        clearTimeout(
+          approvalFetchTimer
         );
       }
+
+      pageCache?.set(
+        pageKey,
+        fetchedMessages
+      );
     }
 
     if (
@@ -16984,11 +17369,33 @@ async function findApprovalImagesForHall(
     );
 
     const oldestMessage =
-      fetchedMessages.last();
+      [...fetchedMessages.values()]
+        .reduce(
+          (oldest, message) =>
+            !oldest ||
+            BigInt(message.id) < BigInt(oldest.id)
+              ? message
+              : oldest,
+          null
+        );
+
+    const nextBeforeId =
+      oldestMessage?.id;
+
+    if (
+      !nextBeforeId ||
+      (
+        beforeId &&
+        BigInt(nextBeforeId) >= BigInt(beforeId)
+      )
+    ) {
+      throw new Error(
+        "A paginação auxiliar das aprovações do Hall não avançou."
+      );
+    }
 
     beforeId =
-      oldestMessage?.id ||
-      null;
+      nextBeforeId;
 
     if (
       oldestMessage?.createdTimestamp &&
@@ -17883,11 +18290,16 @@ async function autoCorrectDuplications(channel, client, options = {}) {
 
       // Erro de fetch precisa interromper.
       // Não pode ser interpretado como fim do histórico.
-      const batch = await channel.messages.fetch(
-        beforeId
-          ? { limit: 100, before: beforeId }
-          : { limit: 100 }
+      const batch = await hallReadWithDeadline(
+        "scan.messages.fetch:" + channel.id,
+        () => channel.messages.fetch(
+          beforeId
+            ? { limit: 100, before: beforeId }
+            : { limit: 100 }
+        )
       );
+
+      assertScanDeadline();
 
       if (batch.size === 0) {
         reachedEnd = true;
@@ -24204,10 +24616,37 @@ export async function getHallSiteSnapshot({
   guild,
   actorId,
   publicAccess = false,
+  member: siteMember = null,
 }) {
+  const authorizedMember =
+    siteMember?.guild?.id === guild.id &&
+    String(siteMember.id) === String(actorId)
+      ? siteMember
+      : null;
+
   const viewer = publicAccess
     ? guild.roles.everyone
-    : await guild.members.fetch({ user: String(actorId), force: true }).catch(() => null);
+    : authorizedMember ||
+      await guild.members.fetch({
+        user: String(actorId),
+        force: true
+      }).catch(error => {
+        if (
+          Number(error.code) === 10007
+        ) {
+          return null;
+        }
+
+        throw Object.assign(
+          new Error(
+            "Não foi possível verificar o membro para consultar o ranking."
+          ),
+          {
+            status: 503,
+            cause: error
+          }
+        );
+      });
   const orgsVisible = viewer && guild.channels.cache.get(HALL_ORGS_RANKING_CHANNEL_ID)?.permissionsFor(viewer)?.has('ViewChannel');
   const playersVisible = viewer && guild.channels.cache.get(HALL_PLAYERS_RANKING_CHANNEL_ID)?.permissionsFor(viewer)?.has('ViewChannel');
   if (!orgsVisible && !playersVisible) {

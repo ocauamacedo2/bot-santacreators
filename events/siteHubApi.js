@@ -722,8 +722,21 @@ const experience = createSiteHubExperience({
   });
   const memberReads = new Map();
 
+  client.on(
+    'scAbsencesSnapshotUpdated',
+    () => {
+      snapshots.invalidate(
+        'absences'
+      );
+    }
+  );
+
   client.on('scRetentionSnapshotUpdated', () => {
     snapshots.invalidate('retention');
+  });
+
+  client.on('scNpsSnapshotUpdated', () => {
+    snapshots.invalidate('nps');
   });
 
   async function resolveSiteMember(guild, actorId, force = false) {
@@ -885,6 +898,7 @@ const experience = createSiteHubExperience({
     delete cleanPayload.refresh;
     delete cleanPayload.requireFresh;
     delete cleanPayload.poll;
+    delete cleanPayload.snapshotOnly;
     const permissionChannels = new Set(
       action === 'bootstrap' ? Object.values(CHANNELS).flat() :
       action === 'teamRequests.list' ? CHANNELS.staff || [] :
@@ -915,6 +929,106 @@ const experience = createSiteHubExperience({
 
   app.post(
     "/site-hub",
+
+    (req, res, next) => {
+      const startedAt = Date.now();
+
+      const incomingId =
+        req.headers["x-request-id"];
+
+      const requestId =
+        typeof incomingId === "string" &&
+        /^[a-z0-9-]{1,80}$/i.test(incomingId)
+          ? incomingId
+          : null;
+
+      const rawTimeout =
+        req.headers["x-sc-hub-timeout-ms"];
+
+      const numericTimeout =
+        typeof rawTimeout === "string" &&
+        /^\d+$/.test(rawTimeout)
+          ? Number(rawTimeout)
+          : NaN;
+
+      const timeoutMs =
+        Number.isSafeInteger(numericTimeout) &&
+        numericTimeout > 0 &&
+        numericTimeout <= 120000
+          ? numericTimeout
+          : null;
+
+      let reported = false;
+
+      if (requestId) {
+        res.setHeader(
+          "X-Request-ID",
+          requestId
+        );
+      }
+
+      const report = completed => {
+        if (reported) {
+          return;
+        }
+
+        reported = true;
+
+        const durationMs =
+          Date.now() - startedAt;
+
+        if (
+          completed &&
+          res.statusCode < 400 &&
+          durationMs < 10000
+        ) {
+          return;
+        }
+
+        console.warn(
+          "[SITE HUB TRACE]",
+          {
+            requestId,
+            action:
+              typeof req.body?.action === "string"
+                ? req.body.action.slice(0, 100)
+                : null,
+            status:
+              completed
+                ? res.statusCode
+                : null,
+            contentType:
+              res.getHeader("content-type") ||
+              null,
+            name:
+              completed
+                ? res.statusCode >= 400
+                  ? "HttpResponseError"
+                  : "SlowResponse"
+                : "ResponseClosed",
+            timeoutMs,
+            durationMs,
+            completed,
+          }
+        );
+      };
+
+      res.once(
+        "finish",
+        () => report(true)
+      );
+
+      res.once(
+        "close",
+        () => {
+          if (!res.writableFinished) {
+            report(false);
+          }
+        }
+      );
+
+      next();
+    },
 
     express.json({
       limit:
@@ -1343,6 +1457,51 @@ const experience = createSiteHubExperience({
             );
           }
 
+          if (
+            payload.refresh === true &&
+            payload.poll !== true
+          ) {
+            const currentMonth =
+              new Intl.DateTimeFormat(
+                'en-US',
+                {
+                  timeZone:
+                    'America/Sao_Paulo',
+
+                  year:
+                    'numeric',
+
+                  month:
+                    '2-digit'
+                }
+              ).formatToParts(
+                new Date()
+              );
+
+            const currentMonthKey =
+              currentMonth.find(
+                part =>
+                  part.type === 'year'
+              ).value +
+              '-' +
+              currentMonth.find(
+                part =>
+                  part.type === 'month'
+              ).value;
+
+            if (
+              !payload.month ||
+              String(payload.month) === currentMonthKey
+            ) {
+              await requestAbsencesSiteSnapshot(
+                client,
+                {
+                  requireFresh: true
+                }
+              );
+            }
+          }
+
           let stored;
 
           try {
@@ -1415,7 +1574,24 @@ const experience = createSiteHubExperience({
           if (
             !month ||
             month.monthKey !== requestedMonth ||
-            !Array.isArray(month.ranking)
+            !Array.isArray(month.ranking) ||
+            month.ranking.some(item =>
+              !item ||
+              typeof item !== 'object' ||
+              Array.isArray(item) ||
+              !Number.isSafeInteger(item.total) ||
+              item.total < 0 ||
+              (
+                item.dias != null &&
+                (
+                  !Array.isArray(item.dias) ||
+                  item.dias.some(day =>
+                    typeof day !== 'string' ||
+                    !/^\d{4}-\d{2}-\d{2}$/.test(day)
+                  )
+                )
+              )
+            )
           ) {
             throw Object.assign(
               new Error('Os dados deste mês estão inválidos.'),
@@ -1490,7 +1666,9 @@ const experience = createSiteHubExperience({
               cacheScope: key,
               delivery: {
                 savedAt: record.at,
-                updating: !record.fresh,
+                updating: record.updating === true,
+                stale: record.fresh !== true,
+                invalidated: record.invalidated === true,
                 source: 'consulta-salva',
               },
             };
@@ -1505,7 +1683,10 @@ const experience = createSiteHubExperience({
           const completedPoll =
             payload.poll === true &&
             saved &&
-            saved.invalidated === false &&
+            (
+              saved.invalidated === false ||
+              moduleKey === 'retention'
+            ) &&
             saved.updating === false;
 
           if (
@@ -1516,14 +1697,7 @@ const experience = createSiteHubExperience({
             )
           ) {
             return res.json(
-              deliver(
-                completedPoll
-                  ? {
-                      ...saved,
-                      fresh: true
-                    }
-                  : saved
-              )
+              deliver(saved)
             );
           }
 
@@ -1534,7 +1708,8 @@ const experience = createSiteHubExperience({
               return res.json(
                 deliver({
                   ...saved,
-                  fresh: false
+                  fresh: false,
+                  updating: true
                 })
               );
             }
@@ -1552,7 +1727,8 @@ const experience = createSiteHubExperience({
               realResponse.json(
                 deliver({
                   ...saved,
-                  fresh: false
+                  fresh: false,
+                  updating: true
                 })
               );
             } else {
@@ -1567,12 +1743,71 @@ const experience = createSiteHubExperience({
             get statusCode() { return statusCode; },
             status(code) { statusCode=code;return this; },
             json(value) {
+              if (
+                statusCode < 400 &&
+                value?.pending !== true &&
+                !value?.error
+              ) {
+                const malformed =
+                  !value ||
+                  typeof value !== 'object' ||
+                  Array.isArray(value) ||
+                  (
+                    action === 'retention.snapshot' &&
+                    !Array.isArray(value.cities)
+                  ) ||
+                  (
+                    action === 'teamRequests.list' &&
+                    !Array.isArray(value.categories)
+                  ) ||
+                  (
+                    action === 'nps.snapshot' &&
+                    (
+                      !Array.isArray(value.categories) ||
+                      !Array.isArray(value.history)
+                    )
+                  ) ||
+                  (
+                    action === 'bootstrap' &&
+                    (
+                      !value.modules ||
+                      typeof value.modules !== 'object' ||
+                      Array.isArray(value.modules)
+                    )
+                  );
+
+                if (malformed) {
+                  statusCode = 502;
+
+                  value = {
+                    error:
+                      'A consulta retornou um formato incompleto. O snapshot anterior foi preservado.'
+                  };
+                }
+              }
+
               if (value?.pending === true && statusCode < 400 && !value?.error) {
                 snapshots.finish(key, null);
                 return value;
               }
               if (statusCode>=400 || value?.error) {
-                snapshots.finish(key,null,Object.assign(new Error(value?.error || 'Falha ao atualizar consulta'),{status:statusCode}));
+                if (statusCode < 400) {
+                  statusCode = 502;
+                }
+
+                snapshots.finish(
+                  key,
+                  null,
+                  Object.assign(
+                    new Error(
+                      value?.error ||
+                      'Falha ao atualizar consulta'
+                    ),
+                    {
+                      status: statusCode
+                    }
+                  )
+                );
               } else {
                 if(moduleKey==='gi' && Array.isArray(value.records)) {
                   value.records=[...new Map([...value.records].sort((a,b)=>Number(a.createdAtMs||0)-Number(b.createdAtMs||0)).map(item=>[String(item.targetId)+':'+String(item.area||''),item])).values()]
@@ -1580,7 +1815,23 @@ const experience = createSiteHubExperience({
                     .sort((a,b)=>b.rolePosition-a.rolePosition);
                 }
                 value.cacheScope = key;
-                snapshots.finish(key,value);
+
+                const finishError =
+                  snapshots.finish(
+                    key,
+                    value
+                  );
+
+                if (finishError) {
+                  statusCode =
+                    Number(finishError.status) || 503;
+
+                  value = {
+                    error:
+                      finishError.message ||
+                      'Não foi possível armazenar a consulta.'
+                  };
+                }
               }
               const stored = snapshots.get(key);
               if (statusCode < 400 && !value?.error && !stored) {
@@ -2161,6 +2412,7 @@ if (await experience.handle({ guild, member, action, payload, res })) return;
             await getHallSiteSnapshot({
               guild,
               actorId,
+              member,
             })
           );
         }
