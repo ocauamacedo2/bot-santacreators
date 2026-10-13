@@ -10217,7 +10217,16 @@ for (
   providerCollection.results
 ) {
   if (
+    !providerMetric ||
     providerMetric.available === false ||
+    (
+      typeof providerMetric.score !== "number" &&
+      typeof providerMetric.score !== "string"
+    ) ||
+    (
+      typeof providerMetric.score === "string" &&
+      providerMetric.score.trim() === ""
+    ) ||
     !Number.isFinite(
       Number(
         providerMetric.score
@@ -14174,8 +14183,63 @@ async function sendAutomaticWeeklyReport(
 // ============================================================================
 
 function saveNpsSiteSnapshot(results) {
+  if (
+    !results ||
+    !results.current ||
+    !results.previous ||
+    !results.displayed ||
+    !results.current.weekInfo ||
+    !results.previous.weekInfo ||
+    !results.current.week ||
+    !Array.isArray(results.current.categories) ||
+    !Array.isArray(results.previous.categories)
+  ) {
+    throw new Error(
+      "O resultado calculado do NPS está incompleto. O snapshot anterior foi preservado."
+    );
+  }
+
+  if (
+    typeof results.current.weekInfo.key !== "string" ||
+    typeof results.previous.weekInfo.key !== "string" ||
+    !results.current.weekInfo.key ||
+    !results.previous.weekInfo.key
+  ) {
+    throw new Error(
+      "As semanas do resultado do NPS estão inválidas. O snapshot anterior foi preservado."
+    );
+  }
+
+  for (const category of [
+    ...results.current.categories,
+    ...results.previous.categories
+  ]) {
+    if (
+      !category ||
+      typeof category !== "object" ||
+      Array.isArray(category) ||
+      !category.categoryId
+    ) {
+      throw new Error(
+        "Uma categoria calculada do NPS está inválida. O snapshot anterior foi preservado."
+      );
+    }
+  }
+
+  if (
+    results.current.week.snapshots != null &&
+    !Array.isArray(results.current.week.snapshots)
+  ) {
+    throw new Error(
+      "O histórico calculado do NPS está inválido. O snapshot anterior foi preservado."
+    );
+  }
+
   const finiteScore = value =>
-    typeof value === 'number' && Number.isFinite(value)
+    typeof value === 'number' &&
+    Number.isFinite(value) &&
+    value >= 0 &&
+    value <= 100
       ? value
       : null;
 
@@ -14274,13 +14338,25 @@ function saveNpsSiteSnapshot(results) {
 
   const temporary = file + '.tmp';
 
-  fs.writeFileSync(
-    temporary,
-    JSON.stringify(snapshot),
-    'utf8'
-  );
+  try {
+    fs.writeFileSync(
+      temporary,
+      JSON.stringify(snapshot),
+      'utf8'
+    );
 
-  fs.renameSync(temporary, file);
+    fs.renameSync(
+      temporary,
+      file
+    );
+  } catch (error) {
+    throw new Error(
+      "Não foi possível gravar o snapshot do NPS em " +
+      file +
+      ".",
+      { cause: error }
+    );
+  }
 }
 
 let npsSiteRecoveryRequestedAt = 0;

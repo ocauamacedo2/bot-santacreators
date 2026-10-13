@@ -483,6 +483,9 @@ export function installSiteHubApi({
     return false;
   }
 
+  const missingSnapshotLogs =
+    new Map();
+
   const teamRequests = createSiteTeamRequests({
     client,
 
@@ -2348,6 +2351,9 @@ if (await experience.handle({ guild, member, action, payload, res })) return;
 
               operationId:
                 payload.operationId ?? null,
+
+              source:
+                payload.source ?? null,
             })
           );
         }
@@ -2598,22 +2604,103 @@ if (await experience.handle({ guild, member, action, payload, res })) return;
           });
 
       } catch (error) {
-        console.error(
-          "[SITE HUB]",
-          error
-        );
+        const reportedStatus =
+          Number(
+            error?.status
+          );
+
+        const status =
+          Number.isInteger(
+            reportedStatus
+          ) &&
+          reportedStatus >= 400 &&
+          reportedStatus <= 599
+            ? reportedStatus
+            : 500;
+
+        const message =
+          String(
+            error?.message ||
+            "Falha no Creators Hub."
+          );
+
+        const missingAbsencesSnapshot =
+          status === 503 &&
+          error?.cause?.code === "ENOENT" &&
+          String(
+            error?.cause?.path || ""
+          ).endsWith(
+            "/ausencias_dashboard.json"
+          );
+
+        const missingNpsSnapshot =
+          status === 503 &&
+          (
+            message ===
+              "O NPS ainda não gerou uma atualização válida para o site." ||
+            message.startsWith(
+              "O NPS ainda não possui snapshot disponível."
+            )
+          );
+
+        const missingSnapshotKey =
+          missingAbsencesSnapshot
+            ? "absences"
+            : (
+                missingNpsSnapshot
+                  ? "nps"
+                  : null
+              );
+
+        if (missingSnapshotKey) {
+          const now =
+            Date.now();
+
+          const previous =
+            missingSnapshotLogs.get(
+              missingSnapshotKey
+            );
+
+          if (
+            !previous ||
+            now - previous.loggedAt >= 60000
+          ) {
+            console.warn(
+              "[SITE HUB] Snapshot ainda indisponível:",
+              {
+                module:
+                  missingSnapshotKey,
+                status,
+                message,
+                repeatedSinceLastLog:
+                  previous?.repeated || 0
+              }
+            );
+
+            missingSnapshotLogs.set(
+              missingSnapshotKey,
+              {
+                loggedAt:
+                  now,
+                repeated:
+                  0
+              }
+            );
+          } else {
+            previous.repeated += 1;
+          }
+        } else {
+          console.error(
+            "[SITE HUB]",
+            error
+          );
+        }
 
         return res
-          .status(
-            Number(
-              error?.status
-            ) ||
-            500
-          )
+          .status(status)
           .json({
             error:
-              error?.message ||
-              "Falha no Creators Hub.",
+              message,
           });
       }
     }

@@ -762,7 +762,9 @@ function applyManualAdjustment({
   userId,
   delta,
   operationId = null,
-  actorId = null
+  actorId = null,
+  source = null,
+  sourceBasePoints = null
 }) {
   const data =
     loadAdjustments();
@@ -774,6 +776,24 @@ function applyManualAdjustment({
 
   const numericDelta =
     Number(delta);
+
+  if (
+    source !== null &&
+    (
+      typeof source !== "string" ||
+      !Object.hasOwn(
+        SOURCE_LABEL,
+        source
+      )
+    )
+  ) {
+    throw Object.assign(
+      new Error(
+        "Área de pontuação inválida."
+      ),
+      { status: 400 }
+    );
+  }
 
   if (
     !/^\d{17,20}$/.test(
@@ -839,6 +859,7 @@ function applyManualAdjustment({
         saved.weekKey !== weekKey ||
         saved.userId !== canonicalUserId ||
         saved.delta !== numericDelta ||
+        (saved.source ?? null) !== source ||
         saved.actorId !== String(actorId) ||
         !Number.isSafeInteger(saved.before) ||
         !Number.isSafeInteger(saved.after) ||
@@ -865,6 +886,113 @@ function applyManualAdjustment({
         operationId
       };
     }
+  }
+
+  if (source !== null) {
+    const ensureMap = (
+      parent,
+      key,
+      label
+    ) => {
+      if (parent[key] == null) {
+        parent[key] = {};
+      }
+
+      if (
+        typeof parent[key] !== "object" ||
+        Array.isArray(parent[key])
+      ) {
+        throw new Error(
+          "O mapa de ajustes " +
+          label +
+          " está inválido. Nenhum ajuste foi gravado."
+        );
+      }
+
+      return parent[key];
+    };
+
+    const byArea =
+      ensureMap(
+        data,
+        "byArea",
+        "por área"
+      );
+
+    const weekAreas =
+      ensureMap(
+        byArea,
+        weekKey,
+        "da semana"
+      );
+
+    const userAreas =
+      ensureMap(
+        weekAreas,
+        canonicalUserId,
+        "da pessoa"
+      );
+
+    const previousAreaAdjustment =
+      Number(
+        userAreas[source] || 0
+      );
+
+    if (
+      !Number.isSafeInteger(
+        previousAreaAdjustment
+      )
+    ) {
+      throw new Error(
+        "O ajuste anterior desta área está inválido."
+      );
+    }
+
+    const nextAreaAdjustment =
+      previousAreaAdjustment +
+      numericDelta;
+
+    if (
+      !Number.isSafeInteger(
+        nextAreaAdjustment
+      )
+    ) {
+      throw new Error(
+        "O ajuste da área ultrapassa o limite numérico permitido."
+      );
+    }
+
+    if (numericDelta < 0) {
+      if (
+        !Number.isSafeInteger(sourceBasePoints) ||
+        sourceBasePoints < 0
+      ) {
+        throw new Error(
+          "Não foi possível validar a pontuação de origem desta área."
+        );
+      }
+
+      const available =
+        sourceBasePoints +
+        previousAreaAdjustment;
+
+      if (
+        available +
+        numericDelta < 0
+      ) {
+        throw Object.assign(
+          new Error(
+            "A retirada excede os pontos disponíveis nesta área. Disponível: " +
+            Math.max(0, available) +
+            "."
+          ),
+          { status: 409 }
+        );
+      }
+    }
+
+    userAreas[source] =
+      nextAreaAdjustment;
   }
 
   data.byWeek =
@@ -908,6 +1036,7 @@ function applyManualAdjustment({
         canonicalUserId,
       delta:
         numericDelta,
+      source,
       before,
       after,
       appliedAt:
@@ -3186,6 +3315,53 @@ function aggregateWeekDetailed(items, weekKey) {
       weekKey
     ] ||
     {};
+
+  const weekAreaAdjustments =
+    adjustmentsData.byArea?.[
+      weekKey
+    ] || {};
+
+  for (const [rawUserId, areas] of Object.entries(
+    weekAreaAdjustments
+  )) {
+    if (
+      !areas ||
+      typeof areas !== "object" ||
+      Array.isArray(areas)
+    ) {
+      throw new Error(
+        "Os ajustes por área da semana estão inválidos."
+      );
+    }
+
+    const userId =
+      resolveDiscordIdentity(
+        rawUserId
+      ) ||
+      String(rawUserId);
+
+    allBySourceByUser[userId] ||=
+      {};
+
+    for (const [source, adjustment] of Object.entries(
+      areas
+    )) {
+      if (
+        !Object.hasOwn(SOURCE_LABEL, source) ||
+        !Number.isSafeInteger(adjustment)
+      ) {
+        throw new Error(
+          "Foi encontrado um ajuste por área inválido."
+        );
+      }
+
+      allBySourceByUser[userId][source] =
+        Number(
+          allBySourceByUser[userId][source] || 0
+        ) +
+        adjustment;
+    }
+  }
 
   const allUserIds =
     new Set([
@@ -6551,6 +6727,15 @@ export async function getWeeklyRankingSiteSnapshot({
 
   return {
     ranking,
+
+    pointAreas:
+      Object.entries(
+        SOURCE_LABEL
+      ).map(([key, label]) => ({
+        key,
+        label
+      })),
+
     analytics: buildWeeklySiteAnalytics(CACHE.payload?.items || [], ranking, weekKeyFromDateSP(nowSP())),
 
     rights: {
@@ -6583,6 +6768,7 @@ export async function adjustWeeklyPointsFromSite({
   amount,
   mode,
   operationId = null,
+  source = null,
 }) {
   const qty =
     Number(amount);
@@ -6685,6 +6871,24 @@ export async function adjustWeeklyPointsFromSite({
     }
   }
 
+  if (
+    source !== null &&
+    (
+      typeof source !== "string" ||
+      !Object.hasOwn(
+        SOURCE_LABEL,
+        source
+      )
+    )
+  ) {
+    throw Object.assign(
+      new Error(
+        "Área de pontuação inválida."
+      ),
+      { status: 400 }
+    );
+  }
+
   const weekKey =
     weekKeyFromDateSP(
       nowSP()
@@ -6699,6 +6903,45 @@ export async function adjustWeeklyPointsFromSite({
       : -Math.abs(
           qty
         );
+
+  let sourceBasePoints =
+    null;
+
+  if (
+    source !== null &&
+    mode === "remove"
+  ) {
+    const { items } =
+      await collectAllPoints(
+        client,
+        "light"
+      );
+
+    const canonicalTargetId =
+      resolveDiscordIdentity(
+        targetId
+      ) ||
+      String(targetId);
+
+    const acceptedItems =
+      applyPowerPointsCooldown(
+        (items || []).filter(item =>
+          weekKeyFromDateSP(item.ts) ===
+          weekKey
+        )
+      );
+
+    sourceBasePoints =
+      acceptedItems.filter(item =>
+        item.source === source &&
+        (
+          resolveDiscordIdentity(
+            item.userId
+          ) ||
+          String(item.userId || "")
+        ) === canonicalTargetId
+      ).length;
+  }
 
   const {
     before,
@@ -6721,6 +6964,10 @@ export async function adjustWeeklyPointsFromSite({
         String(
           actorId
         ),
+
+      source,
+
+      sourceBasePoints,
     });
 
   clearWeeklyRankCache();

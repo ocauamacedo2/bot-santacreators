@@ -149,42 +149,99 @@ const SEP_REGEX = /[|\/\\]/g;
 // =====================================================
 
 function loadPaymentOperationTrace() {
-  try {
-    if (!fs.existsSync(PAYMENT_OPERATION_TRACE_FILE)) {
-      return { messages: {} };
-    }
+  let raw;
 
-    const raw = fs.readFileSync(
+  try {
+    raw = fs.readFileSync(
       PAYMENT_OPERATION_TRACE_FILE,
       "utf8"
     );
-
-    const parsed = raw ? JSON.parse(raw) : {};
-    parsed.messages ??= {};
-    return parsed;
   } catch (error) {
-    console.error(
-      "[PagamentoSocial] Falha ao ler rastro operacional:",
-      error
+    if (error.code === "ENOENT") {
+      return { messages: {} };
+    }
+
+    throw new Error(
+      "Não foi possível ler o rastro operacional de pagamentos. O arquivo existente foi preservado.",
+      { cause: error }
     );
-    return { messages: {} };
   }
+
+  let parsed;
+
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    throw new Error(
+      "O JSON do rastro operacional de pagamentos está inválido. Nenhum mapa vazio foi criado para substituí-lo.",
+      { cause: error }
+    );
+  }
+
+  if (
+    !parsed ||
+    typeof parsed !== "object" ||
+    Array.isArray(parsed)
+  ) {
+    throw new Error(
+      "A estrutura do rastro operacional de pagamentos está inválida."
+    );
+  }
+
+  if (parsed.messages == null) {
+    parsed.messages = {};
+  }
+
+  if (
+    typeof parsed.messages !== "object" ||
+    Array.isArray(parsed.messages)
+  ) {
+    throw new Error(
+      "O campo messages do rastro operacional de pagamentos está inválido."
+    );
+  }
+
+  return parsed;
 }
 
 function savePaymentOperationTrace(state) {
+  if (
+    !state ||
+    typeof state !== "object" ||
+    Array.isArray(state) ||
+    !state.messages ||
+    typeof state.messages !== "object" ||
+    Array.isArray(state.messages)
+  ) {
+    throw new Error(
+      "Não foi possível salvar o rastro operacional de pagamentos: estrutura inválida."
+    );
+  }
+
+  const serialized =
+    JSON.stringify(
+      state,
+      null,
+      2
+    );
+
+  const dir =
+    path.dirname(
+      PAYMENT_OPERATION_TRACE_FILE
+    );
+
+  const temporaryFile =
+    `${PAYMENT_OPERATION_TRACE_FILE}.tmp`;
+
   try {
-    const dir = path.dirname(PAYMENT_OPERATION_TRACE_FILE);
-
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
-
-    const temporaryFile =
-      `${PAYMENT_OPERATION_TRACE_FILE}.tmp`;
+    fs.mkdirSync(
+      dir,
+      { recursive: true }
+    );
 
     fs.writeFileSync(
       temporaryFile,
-      JSON.stringify(state, null, 2),
+      serialized,
       "utf8"
     );
 
@@ -193,9 +250,11 @@ function savePaymentOperationTrace(state) {
       PAYMENT_OPERATION_TRACE_FILE
     );
   } catch (error) {
-    console.error(
-      "[PagamentoSocial] Falha ao salvar rastro operacional:",
-      error
+    throw new Error(
+      "Não foi possível gravar o rastro operacional de pagamentos em " +
+      PAYMENT_OPERATION_TRACE_FILE +
+      ".",
+      { cause: error }
     );
   }
 }
@@ -207,15 +266,50 @@ function registerPaymentOperationMessage(
     createdAt,
   }
 ) {
-  if (!messageId || !operationId) return;
+  const normalizedMessageId =
+    String(messageId || "");
+
+  const normalizedOperationId =
+    String(operationId || "");
+
+  const originalCreatedAt =
+    Number(createdAt);
+
+  if (
+    !/^\d{17,20}$/.test(normalizedMessageId) ||
+    !/^\d{17,20}$/.test(normalizedOperationId) ||
+    !Number.isFinite(originalCreatedAt) ||
+    originalCreatedAt <= 0
+  ) {
+    throw new Error(
+      "Não foi possível registrar o vínculo do pagamento: mensagem, operação ou data inválida."
+    );
+  }
 
   const state =
     loadPaymentOperationTrace();
 
-  state.messages[String(messageId)] = {
-    operationId: String(operationId),
-    createdAt: Number(createdAt || Date.now()),
-    updatedAt: Date.now(),
+  const previous =
+    state.messages[normalizedMessageId];
+
+  if (
+    previous &&
+    String(previous.operationId || "") !==
+      normalizedOperationId
+  ) {
+    throw new Error(
+      "A mensagem de pagamento já pertence a outra operação. O vínculo existente foi preservado."
+    );
+  }
+
+  state.messages[normalizedMessageId] = {
+    ...previous,
+    operationId:
+      normalizedOperationId,
+    createdAt:
+      originalCreatedAt,
+    updatedAt:
+      Date.now(),
   };
 
   const entries =
@@ -233,6 +327,61 @@ function registerPaymentOperationMessage(
   savePaymentOperationTrace(state);
 }
 
+function getLatestPaymentOperationMessageId(
+  operationId,
+  fallbackMessageId
+) {
+  const normalizedOperationId =
+    String(operationId || "");
+
+  const fallback =
+    String(fallbackMessageId || "");
+
+  if (
+    !/^\d{17,20}$/.test(normalizedOperationId) ||
+    !/^\d{17,20}$/.test(fallback)
+  ) {
+    throw new Error(
+      "Não foi possível consultar a mensagem atual do pagamento: identificação inválida."
+    );
+  }
+
+  const state =
+    loadPaymentOperationTrace();
+
+  let latest =
+    fallback;
+
+  for (const [messageId, record] of Object.entries(
+    state.messages
+  )) {
+    if (
+      String(record?.operationId || "") !==
+      normalizedOperationId
+    ) {
+      continue;
+    }
+
+    if (
+      !/^\d{17,20}$/.test(messageId)
+    ) {
+      throw new Error(
+        "O rastro do pagamento contém uma mensagem inválida."
+      );
+    }
+
+    if (
+      BigInt(messageId) >
+      BigInt(latest)
+    ) {
+      latest =
+        messageId;
+    }
+  }
+
+  return latest;
+}
+
 function resolvePaymentOperationMessage(
   messageId,
   fallbackCreatedAt = Date.now()
@@ -245,15 +394,30 @@ function resolvePaymentOperationMessage(
     null;
 
   if (existing?.operationId) {
-    return {
-      operationId:
-        String(existing.operationId),
+    const operationId =
+      String(
+        existing.operationId
+      );
 
-      createdAt:
-        Number(
-          existing.createdAt ||
-          fallbackCreatedAt
-        ),
+    const createdAt =
+      Number(
+        existing.createdAt ||
+        fallbackCreatedAt
+      );
+
+    if (
+      !/^\d{17,20}$/.test(operationId) ||
+      !Number.isFinite(createdAt) ||
+      createdAt <= 0
+    ) {
+      throw new Error(
+        "O vínculo persistido deste pagamento está inválido."
+      );
+    }
+
+    return {
+      operationId,
+      createdAt,
     };
   }
 
@@ -1835,21 +1999,99 @@ let SOCIAL_DASH_LOCK = false;
 let SOCIAL_DASH_LOCK_TS = 0;
 
 function resetSocialDashLockIfStuck(force = false) {
-  if (!SOCIAL_DASH_LOCK) return false;
-
-  const travado = Date.now() - Number(SOCIAL_DASH_LOCK_TS || 0) > SOCIAL_DASH_LOCK_MAX_MS;
-
-  if (force || travado) {
-    SOCIAL_DASH_LOCK = false;
+  if (!SOCIAL_DASH_LOCK) {
     SOCIAL_DASH_LOCK_TS = 0;
-    console.warn("[PAGAMENTO_SOCIAL_DASH] lock resetado", { force, travado });
-    return true;
   }
 
   return false;
 }
 
-async function sincronizarDashboardSocial(client, motivo = "manual", options = {}) {
+let socialDashboardJob = null;
+
+async function sincronizarDashboardSocial(
+  client,
+  motivo = "manual",
+  options = {}
+) {
+  if (socialDashboardJob) {
+    socialDashboardJob.rerun = true;
+
+    socialDashboardJob.nextOptions.recreate =
+      socialDashboardJob.nextOptions.recreate ||
+      options.recreate === true;
+
+    socialDashboardJob.nextReason =
+      motivo;
+
+    return socialDashboardJob.promise;
+  }
+
+  const job = {
+    rerun: false,
+    nextOptions: {
+      recreate: false
+    },
+    nextReason: motivo,
+    promise: null
+  };
+
+  socialDashboardJob =
+    job;
+
+  job.promise =
+    Promise.resolve()
+      .then(async () => {
+        let currentOptions = {
+          ...options,
+          forceUnlock: false
+        };
+
+        let currentReason =
+          motivo;
+
+        let result;
+
+        do {
+          job.rerun = false;
+
+          result =
+            await sincronizarDashboardSocialUnshared(
+              client,
+              currentReason,
+              currentOptions
+            );
+
+          if (!result?.ok) {
+            return result;
+          }
+
+          currentOptions = {
+            recreate:
+              job.nextOptions.recreate,
+            forceUnlock:
+              false
+          };
+
+          currentReason =
+            job.nextReason;
+
+          job.nextOptions.recreate =
+            false;
+        } while (job.rerun);
+
+        return result;
+      })
+      .finally(() => {
+        if (socialDashboardJob === job) {
+          socialDashboardJob =
+            null;
+        }
+      });
+
+  return job.promise;
+}
+
+async function sincronizarDashboardSocialUnshared(client, motivo = "manual", options = {}) {
   const { forceUnlock = false, recreate = false } = options;
 
   resetSocialDashLockIfStuck(forceUnlock);
@@ -6617,16 +6859,96 @@ export function isPagamentoSocialInteraction(interaction) {
 // - Retorna true se a interação era nossa
 // ============================================================================
 export async function handlePagamentoSocial(interaction, client) {
-  const match = String(interaction.customId || '').match(/^(pago|solicitado|reprovado)_desc_(\d+)$/);
-  const locks = client.__SC_SOCIAL_DECISION_LOCKS__ ||= new Set();
-  const key = match ? String(interaction.guildId) + ':' + match[2] : null;
-  if (key && locks.has(key)) {
-    const payload = { content: 'Este pagamento está sendo atualizado. Aguarde e consulte novamente.', ephemeral: true };
-    if (interaction.deferred || interaction.replied) await interaction.editReply(payload).catch(() => {});
-    else await interaction.reply(payload).catch(() => {});
+  const match =
+    String(
+      interaction.customId || ""
+    ).match(
+      /^(pago|solicitado|reprovado)_desc_(\d+)$/
+    );
+
+  const locks =
+    client.__SC_SOCIAL_DECISION_LOCKS__ ||=
+      new Set();
+
+  let key =
+    null;
+
+  if (match) {
+    let operation;
+
+    try {
+      operation =
+        resolvePaymentOperationMessage(
+          match[2],
+          interaction.createdTimestamp ||
+          Date.now()
+        );
+    } catch (error) {
+      console.error(
+        "[PagamentoSocial] Não foi possível validar o vínculo antes da decisão:",
+        error
+      );
+
+      const payload = {
+        content:
+          "Não foi possível validar o vínculo deste pagamento. Nenhuma nova decisão foi executada.",
+        flags:
+          MessageFlags.Ephemeral
+      };
+
+      if (
+        interaction.deferred ||
+        interaction.replied
+      ) {
+        await interaction.editReply(
+          payload
+        ).catch(() => {});
+      } else {
+        await interaction.reply(
+          payload
+        ).catch(() => {});
+      }
+
+      return true;
+    }
+
+    key =
+      String(interaction.guildId) +
+      ":" +
+      operation.operationId;
+  }
+
+  if (
+    key &&
+    locks.has(key)
+  ) {
+    const payload = {
+      content:
+        "Este pagamento está sendo atualizado. Aguarde e consulte novamente.",
+      flags:
+        MessageFlags.Ephemeral
+    };
+
+    if (
+      interaction.deferred ||
+      interaction.replied
+    ) {
+      await interaction.editReply(
+        payload
+      ).catch(() => {});
+    } else {
+      await interaction.reply(
+        payload
+      ).catch(() => {});
+    }
+
     return true;
   }
-  if (key) locks.add(key);
+
+  if (key) {
+    locks.add(key);
+  }
+
   try {
     // ✅ SAÍDA IMEDIATA:
     // Não executa dedupe, logs, fetch ou qualquer outra tarefa
@@ -7684,6 +8006,32 @@ if (id.startsWith("pago_desc_") || id.startsWith("solicitado_desc_") || id.start
     return true;
   }
 
+  const currentOperation =
+    resolvePaymentOperationMessage(
+      msgOriginal.id,
+      msgOriginal.createdTimestamp ||
+      Date.now()
+    );
+
+  const latestMessageId =
+    getLatestPaymentOperationMessageId(
+      currentOperation.operationId,
+      msgOriginal.id
+    );
+
+  if (
+    latestMessageId !==
+    String(msgOriginal.id)
+  ) {
+    await interaction.editReply({
+      content:
+        "Este registro já foi substituído por uma publicação mais recente. " +
+        "Atualize a consulta antes de decidir novamente."
+    }).catch(() => {});
+
+    return true;
+  }
+
   if (!mensagemEhRegistroPagamento(msgOriginal) ||
       /PAGO|REPROVADO/i.test(getStatusValueFromEmbed(msgOriginal.embeds[0]).split('\n')[0]) ||
       !msgOriginal.components.some(row => row.components.some(button =>
@@ -7810,11 +8158,31 @@ if (action === "pago") {
   }
 }
 
+const paymentOperationTrace =
+  resolvePaymentOperationMessage(
+    msgOriginal.id,
+    msgOriginal.createdTimestamp ||
+    Date.now()
+  );
+
 const msgNova = await canal.send({ embeds: [embedAtualizado] }).catch(() => null);
   if (!msgNova) {
     await interaction.editReply({ content: "❌ Falhei ao enviar a atualização." }).catch(() => {});
     return true;
   }
+
+  interaction.__scSocialDecisionApplied = true;
+
+  interaction.__scSocialDecisionMessageId =
+    msgNova.id;
+
+  interaction.__scSocialDecisionMessageUrl =
+    msgNova.url;
+
+  registerPaymentOperationMessage(
+    msgNova.id,
+    paymentOperationTrace
+  );
 
   // Se solicitado, mantém botões (pra depois virar pago/reprovado). Se pago/reprovado, remove botões.
   if (action === "solicitado") {
@@ -7861,18 +8229,6 @@ const msgNova = await canal.send({ embeds: [embedAtualizado] }).catch(() => null
       }
     }
   }
-
-  const paymentOperationTrace =
-    resolvePaymentOperationMessage(
-      msgOriginal.id,
-      msgOriginal.createdTimestamp ||
-      Date.now()
-    );
-
-  registerPaymentOperationMessage(
-    msgNova.id,
-    paymentOperationTrace
-  );
 
   // apaga o original (ou deixa como movido)
   try {
@@ -8087,13 +8443,29 @@ void (async () => {
     if (
       ["pago", "reprovado", "solicitado"].includes(action)
     ) {
-      await sincronizarDashboardSocial(
-        client,
-        `status:${action}`,
-        {
-          forceUnlock: true,
-        }
-      ).catch(() => null);
+      const syncResult =
+        await sincronizarDashboardSocial(
+          client,
+          `status:${action}`,
+          {
+            forceUnlock: false,
+          }
+        );
+
+      if (!syncResult?.ok) {
+        console.error(
+          "[PagamentoSocial] A decisão foi aplicada, mas o dashboard não foi sincronizado:",
+          {
+            action,
+            message:
+              syncResult?.message || null,
+            error:
+              syncResult?.error || null,
+            locked:
+              syncResult?.locked === true
+          }
+        );
+      }
     }
   } catch (error) {
     console.error(
@@ -8676,12 +9048,29 @@ export async function pagamentoSocialSiteDecision({
 }) {
   const actor =
     await guild.members
-      .fetch(
-        String(actorId)
-      )
-      .catch(
-        () => null
-      );
+      .fetch({
+        user:
+          String(actorId),
+        force:
+          true
+      })
+      .catch(error => {
+        if (
+          Number(error?.code) === 10007
+        ) {
+          return null;
+        }
+
+        throw Object.assign(
+          new Error(
+            "Não foi possível validar seu acesso ao pagamento no Discord. A decisão não foi executada."
+          ),
+          {
+            status: 503,
+            cause: error
+          }
+        );
+      });
 
   if (
     !actor ||
@@ -8690,8 +9079,29 @@ export async function pagamentoSocialSiteDecision({
       actorId
     )
   ) {
-    throw new Error(
-      "Você não possui permissão para alterar o status desse pagamento."
+    throw Object.assign(
+      new Error(
+        "Você não possui permissão para alterar o status desse pagamento."
+      ),
+      { status: 403 }
+    );
+  }
+
+  messageId =
+    String(
+      messageId || ""
+    ).trim();
+
+  if (
+    !/^\d{17,20}$/.test(
+      messageId
+    )
+  ) {
+    throw Object.assign(
+      new Error(
+        "ID do registro de pagamento inválido. A decisão não foi executada."
+      ),
+      { status: 400 }
     );
   }
 
@@ -8710,8 +9120,11 @@ export async function pagamentoSocialSiteDecision({
       normalizedAction
     )
   ) {
-    throw new Error(
-      "Ação de pagamento inválida."
+    throw Object.assign(
+      new Error(
+        "Ação de pagamento inválida."
+      ),
+      { status: 400 }
     );
   }
 
@@ -8722,8 +9135,11 @@ export async function pagamentoSocialSiteDecision({
     ).trim();
 
   if (!normalizedDescription) {
-    throw new Error(
-      "Informe uma descrição para a ação."
+    throw Object.assign(
+      new Error(
+        "Informe uma descrição para a ação."
+      ),
+      { status: 400 }
     );
   }
 
@@ -8807,11 +9223,36 @@ export async function pagamentoSocialSiteDecision({
     },
   };
 
-  const handled =
-    await handlePagamentoSocial(
-      fakeInteraction,
-      client
+  let handled;
+
+  try {
+    handled =
+      await handlePagamentoSocial(
+        fakeInteraction,
+        client
+      );
+  } catch (error) {
+    if (
+      fakeInteraction.__scSocialDecisionApplied !== true
+    ) {
+      throw error;
+    }
+
+    handled = true;
+
+    console.error(
+      "[PagamentoSocial] Status publicado; uma etapa posterior falhou:",
+      {
+        originalMessageId:
+          String(messageId),
+        decisionMessageId:
+          fakeInteraction.__scSocialDecisionMessageId || null,
+        action:
+          normalizedAction,
+        error
+      }
     );
+  }
 
   if (!handled) {
     throw new Error(
@@ -8834,6 +9275,14 @@ export async function pagamentoSocialSiteDecision({
       String(
         messageId
       ),
+
+    decisionMessageId:
+      fakeInteraction.__scSocialDecisionMessageId ||
+      null,
+
+    decisionMessageUrl:
+      fakeInteraction.__scSocialDecisionMessageUrl ||
+      null,
 
     action:
       normalizedAction,

@@ -855,68 +855,196 @@ function getEmbedFieldValue(embed, fieldNameIncludes) {
 }
 
 function parseChecklistAuditEmbed(message, weekKey) {
-  const embed = message.embeds?.[0];
-  if (!embed) return null;
+  const normalize = value =>
+    String(value || "")
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/[*_`]/g, "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .toLowerCase();
 
-  const title = String(embed.title || "");
-  if (!title.includes("Checklist")) return null;
+  const fieldValue = (embed, wanted) => {
+    const normalizedWanted =
+      normalize(wanted);
 
-  const weekValue = getEmbedFieldValue(embed, "semana");
-  if (String(weekValue || "").trim() !== String(weekKey)) return null;
+    const field =
+      (embed.fields || []).find(item =>
+        normalize(item.name).includes(
+          normalizedWanted
+        )
+      );
 
-  const respValue = getEmbedFieldValue(embed, "responsável");
-  const memberValue = getEmbedFieldValue(embed, "membro");
-  const actionValue = getEmbedFieldValue(embed, "ação");
-  const actorValue = getEmbedFieldValue(embed, "alterado por");
+    return field?.value || "";
+  };
 
-  const respId = extractFirstMentionId(respValue);
-  const actorId = extractFirstMentionId(actorValue);
+  const discordId = value => {
+    const id =
+      extractFirstMentionId(value);
 
-  const normalizedAction = String(actionValue || "")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .toLowerCase();
+    return /^\d{17,20}$/.test(
+      String(id || "")
+    )
+      ? String(id)
+      : null;
+  };
 
-  let status;
+  const candidates = [];
 
-  if (
-    normalizedAction === "✅ marcou como conferido" ||
-    normalizedAction === "marcou como conferido"
-  ) {
-    status = true;
-  } else if (
-    normalizedAction === "❌ marcou como pendente" ||
-    normalizedAction === "marcou como pendente"
-  ) {
-    status = false;
-  } else {
+  for (const embed of message.embeds || []) {
+    if (
+      !normalize(embed.title).includes(
+        "checklist"
+      )
+    ) {
+      continue;
+    }
+
+    const recordedWeek =
+      String(
+        fieldValue(embed, "semana")
+      )
+        .replace(/[*_`]/g, "")
+        .trim();
+
+    if (
+      recordedWeek !==
+      String(weekKey)
+    ) {
+      continue;
+    }
+
+    const respId =
+      discordId(
+        fieldValue(
+          embed,
+          "responsavel"
+        )
+      );
+
+    const actorId =
+      discordId(
+        fieldValue(
+          embed,
+          "alterado por"
+        )
+      );
+
+    const memberValue =
+      fieldValue(
+        embed,
+        "membro"
+      );
+
+    const action =
+      normalize(
+        fieldValue(
+          embed,
+          "acao"
+        )
+      )
+        .replace(
+          /[^\p{L}\p{N}\s]/gu,
+          ""
+        )
+        .replace(/\s+/g, " ")
+        .trim();
+
+    let status;
+
+    if (
+      action ===
+      "marcou como conferido"
+    ) {
+      status = true;
+    } else if (
+      action ===
+      "marcou como pendente"
+    ) {
+      status = false;
+    } else {
+      continue;
+    }
+
+    if (!respId) {
+      continue;
+    }
+
+    const normalizedMember =
+      normalize(memberValue);
+
+    const isBulk =
+      normalizedMember === "todos" ||
+      normalizedMember === "todos os vinculados";
+
+    const memberId =
+      isBulk
+        ? "TODOS"
+        : discordId(memberValue);
+
+    if (
+      !isBulk &&
+      !memberId
+    ) {
+      continue;
+    }
+
+    const embedTimestamp =
+      Date.parse(
+        embed.timestamp || ""
+      );
+
+    const messageTimestamp =
+      Number(
+        message.createdTimestamp
+      );
+
+    const createdTimestamp =
+      Number.isFinite(embedTimestamp) &&
+      embedTimestamp > 0
+        ? embedTimestamp
+        : messageTimestamp;
+
+    if (
+      !Number.isFinite(
+        createdTimestamp
+      ) ||
+      createdTimestamp <= 0
+    ) {
+      continue;
+    }
+
+    candidates.push({
+      messageId:
+        message.id,
+      createdTimestamp,
+      respId,
+      memberId,
+      actorId,
+      status,
+      isBulk
+    });
+  }
+
+  if (candidates.length === 0) {
     return null;
   }
 
-  if (!respId) return null;
+  const first =
+    candidates[0];
 
-  const isBulk = String(memberValue || "").toLowerCase().includes("todos");
-  const memberId = isBulk ? "TODOS" : extractFirstMentionId(memberValue);
+  const conflicting =
+    candidates.some(candidate =>
+      candidate.respId !== first.respId ||
+      candidate.memberId !== first.memberId ||
+      candidate.actorId !== first.actorId ||
+      candidate.status !== first.status ||
+      candidate.isBulk !== first.isBulk
+    );
 
-  if (!isBulk && !memberId) return null;
-
-  return {
-    messageId: message.id,
-
-    createdTimestamp: Number(
-      Date.parse(embed.timestamp || "") ||
-      message.createdTimestamp ||
-      Date.now()
-    ),
-
-    respId,
-    memberId,
-    actorId,
-    status,
-    isBulk
-  };
+  return conflicting
+    ? null
+    : first;
 }
 
 async function recoverChecklistChecksFromAuditChannel(client, weekKey, responsaveis = {}) {
@@ -942,6 +1070,10 @@ async function recoverChecklistChecksFromAuditChannel(client, weekKey, responsav
   const recovered = cloneJSONSafe(responsaveis || {}, {});
   const auditActions = [];
   const visited = new Set();
+
+  let checklistCandidates = 0;
+
+  const rejectedChecklistSamples = [];
 
   let before = null;
   let complete = false;
@@ -1010,10 +1142,53 @@ async function recoverChecklistChecksFromAuditChannel(client, weekKey, responsav
       if (message.createdTimestamp < weekStart) continue;
       if (message.author?.id !== client.user?.id) continue;
 
-      const parsed = parseChecklistAuditEmbed(message, weekKey);
+      const checklistEmbeds =
+        (message.embeds || []).filter(embed =>
+          String(embed.title || "")
+            .normalize("NFD")
+            .replace(/[\u0300-\u036f]/g, "")
+            .toLowerCase()
+            .includes("checklist")
+        );
+
+      if (checklistEmbeds.length > 0) {
+        checklistCandidates += 1;
+      }
+
+      const parsed =
+        parseChecklistAuditEmbed(
+          message,
+          weekKey
+        );
 
       if (parsed) {
         auditActions.push(parsed);
+      } else if (
+        checklistEmbeds.length > 0 &&
+        rejectedChecklistSamples.length < 20
+      ) {
+        rejectedChecklistSamples.push({
+          messageId:
+            message.id,
+          createdTimestamp:
+            message.createdTimestamp,
+          url:
+            message.url || null,
+          embeds:
+            checklistEmbeds.map(embed => ({
+              title:
+                embed.title || "",
+              timestamp:
+                embed.timestamp || null,
+              fields:
+                (embed.fields || []).map(field => ({
+                  name:
+                    field.name,
+                  value:
+                    field.value
+                }))
+            }))
+        });
       }
     }
 
@@ -1063,9 +1238,81 @@ async function recoverChecklistChecksFromAuditChannel(client, weekKey, responsav
     memberData.checkedBy = action.status ? action.actorId : null;
   }
 
+  if (
+    rejectedChecklistSamples.length > 0
+  ) {
+    try {
+      const diagnosticFile =
+        path.join(
+          path.dirname(CHECKLIST_FILE),
+          `sc_logs_checklist_recovery_${weekKey}.json`
+        );
+
+      fs.mkdirSync(
+        path.dirname(diagnosticFile),
+        { recursive: true }
+      );
+
+      const temporary =
+        diagnosticFile + ".tmp";
+
+      fs.writeFileSync(
+        temporary,
+        JSON.stringify(
+          {
+            generatedAt:
+              Date.now(),
+            weekKey,
+            examinedMessages:
+              visited.size,
+            checklistCandidates,
+            recognizedActions:
+              auditActions.length,
+            sampleLimit:
+              20,
+            rejectedSamples:
+              rejectedChecklistSamples
+          },
+          null,
+          2
+        ),
+        "utf8"
+      );
+
+      fs.renameSync(
+        temporary,
+        diagnosticFile
+      );
+
+      console.warn(
+        "[ChecklistLogs] Existem auditorias não reconhecidas. Diagnóstico:",
+        diagnosticFile
+      );
+    } catch (error) {
+      console.error(
+        "[ChecklistLogs] Não foi possível salvar o diagnóstico da recuperação:",
+        error
+      );
+    }
+  }
+
   console.log(
-    `[ChecklistLogs] Recuperação concluída: ${auditActions.length} ações reconhecidas da semana ${weekKey}; ${visited.size} mensagens examinadas.`
+    `[ChecklistLogs] Leitura da recuperação concluída: ` +
+    `${auditActions.length} ações reconhecidas da semana ${weekKey}; ` +
+    `${checklistCandidates} mensagens candidatas a auditoria; ` +
+    `${visited.size} mensagens examinadas.`
   );
+
+  if (
+    auditActions.length === 0 &&
+    checklistCandidates > 0
+  ) {
+    console.warn(
+      "[ChecklistLogs] Nenhuma ação foi recuperada. " +
+      "Isso não comprova ausência de conferências. " +
+      "Confira a semana e os formatos no diagnóstico."
+    );
+  }
 
   return recovered;
 }

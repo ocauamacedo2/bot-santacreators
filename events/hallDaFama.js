@@ -3611,7 +3611,7 @@ async function autoCorrectDuplications(channel, client, options = {}) {
   locks.add(lockKey);
 
   const startedAt = Date.now();
-  const analysisVersion = 2;
+  const analysisVersion = 3;
   const showProgress = options.showProgress ?? true;
   const approvalPages = new Map();
   const evidencePages = new Map();
@@ -3979,6 +3979,38 @@ async function autoCorrectDuplications(channel, client, options = {}) {
     assertDeadline();
     if (rankingHash() !== checkpoint.baseHash) {
       throw new Error("O ranking foi alterado durante a varredura. A reconstrução não foi publicada.");
+    }
+
+    if (rankings.scanAudit) {
+      const auditFile =
+        path.join(
+          DATA_DIR,
+          `hall_scan_audit_${checkpoint.generation}.json`
+        );
+
+      const temporary =
+        auditFile + ".tmp";
+
+      fs.writeFileSync(
+        temporary,
+        JSON.stringify({
+          ...rankings.scanAudit,
+          finishedAt:
+            Date.now(),
+          generation:
+            checkpoint.generation,
+          collectedMessages:
+            totalMessages,
+          analyzedHalls:
+            processed
+        }),
+        "utf8"
+      );
+
+      fs.renameSync(
+        temporary,
+        auditFile
+      );
     }
 
     const previousRankings =
@@ -10750,6 +10782,12 @@ function createCleanHallRebuildData(previousData = null) {
     reviewedPaymentMessages: {},
     paymentEventKeys: {},
     pendingReview: {},
+
+    scanAudit: {
+      version: 1,
+      startedAt: Date.now(),
+      messages: {}
+    },
   };
 }
 
@@ -12941,6 +12979,59 @@ const hallMeta = {
     const parsed = parseHallWinners(content, cityKey);
     const deduped = dedupeHallWinners(parsed);
 
+    if (options.rebuild === true) {
+      rankings.scanAudit ||= {
+        version: 1,
+        startedAt: Date.now(),
+        messages: {}
+      };
+
+      rankings.scanAudit.messages ||= {};
+
+      rankings.scanAudit.messages[message.id] = {
+        messageId:
+          String(message.id),
+        channelId:
+          String(message.channelId || ""),
+        guildId:
+          String(message.guildId || ""),
+        jumpUrl:
+          hallMeta.jumpUrl,
+        publishedAt:
+          hallMeta.createdTimestamp,
+        historicalVictoryTimestamp:
+          hallMeta.historicalVictoryTimestamp,
+        declaredEvent:
+          directEventName,
+        selectedEvent:
+          eventName,
+        selectedCity:
+          cityKey,
+        evidenceSource:
+          evidence.source || null,
+        evidenceConfidence:
+          evidence.confidence ?? null,
+        parsedWinnerCount:
+          parsed.length,
+        orgCandidates:
+          deduped.orgs.map(item => ({
+            name:
+              item.orgName,
+            cityKey:
+              item.cityKey || cityKey
+          })),
+        playerCandidateCount:
+          deduped.players.length,
+        countedOrgs: [],
+        pendingReviewCount: 0,
+        status:
+          !deduped.orgs.length &&
+          !deduped.players.length
+            ? "no_valid_winners"
+            : "parsed"
+      };
+    }
+
     if (!deduped.orgs.length && !deduped.players.length) {
       return rankings;
     }
@@ -13179,6 +13270,50 @@ await sendRequiredPlayerCityReviewIfNeeded(
   ],
   "mais_de_3_vitorias_no_mesmo_id_hall"
 );
+    }
+
+    if (
+      options.rebuild === true &&
+      rankings.scanAudit?.messages?.[message.id]
+    ) {
+      const audit =
+        rankings.scanAudit.messages[message.id];
+
+      audit.countedOrgs =
+        Object.values(
+          rankings.orgs || {}
+        )
+          .filter(org =>
+            (org.halls || []).some(hall =>
+              String(hall.messageId || "") ===
+              String(message.id)
+            )
+          )
+          .map(org => ({
+            key:
+              org.key,
+            name:
+              org.name,
+            cityKey:
+              org.cityKey
+          }));
+
+      audit.pendingReviewCount =
+        Object.values(
+          rankings.pendingReview || {}
+        ).filter(item =>
+          String(item.messageId || "") ===
+          String(message.id)
+        ).length;
+
+      audit.status =
+        audit.countedOrgs.length > 0
+          ? "counted_org"
+          : (
+              audit.pendingReviewCount > 0
+                ? "pending_review"
+                : "no_org_counted"
+            );
     }
 
     rankings.reviewedMessages[message.id] = {
