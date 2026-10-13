@@ -1475,11 +1475,29 @@ const experience = createSiteHubExperience({
             }
             throw previousError;
           }
+          const completedPoll =
+            payload.poll === true &&
+            saved &&
+            saved.invalidated === false &&
+            saved.updating === false;
+
           if (
-            saved?.fresh &&
-            (!payload.refresh || payload.poll)
+            completedPoll ||
+            (
+              saved?.fresh &&
+              !payload.refresh
+            )
           ) {
-            return res.json(deliver(saved));
+            return res.json(
+              deliver(
+                completedPoll
+                  ? {
+                      ...saved,
+                      fresh: true
+                    }
+                  : saved
+              )
+            );
           }
 
           const task = snapshots.begin(key, moduleKey);

@@ -85,7 +85,13 @@ export function createSiteSnapshotStore({
       }
       return {
         ...record,
-        fresh: !dirty.has(key) && now() - record.at < freshMs,
+        fresh:
+          !dirty.has(key) &&
+          now() - record.at < freshMs,
+        invalidated:
+          dirty.has(key),
+        updating:
+          pending.has(key),
       };
     },
     error(key) {
