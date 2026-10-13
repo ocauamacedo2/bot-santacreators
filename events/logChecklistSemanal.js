@@ -3542,6 +3542,50 @@ export async function checklistOnReady(client) {
   installChecklistAudit(client);
 
   const weekKey = weekKeyFromDateSP();
+
+  const storedBeforeInitialization =
+    checklistReadStrict();
+
+  const storedCurrentWeek =
+    storedBeforeInitialization.weeks[weekKey];
+
+  const storedRecords =
+    Object.values(
+      storedCurrentWeek?.responsaveis || {}
+    ).flatMap(
+      group =>
+        Object.values(group?.members || {})
+    );
+
+  console.info(
+    "[ChecklistLogs] Persistência antes da inicialização:",
+    {
+      cwd: process.cwd(),
+      file: CHECKLIST_FILE,
+      exists: fs.existsSync(CHECKLIST_FILE),
+      storedWeeks:
+        Object.keys(
+          storedBeforeInitialization.weeks
+        ),
+      currentWeek: weekKey,
+      currentWeekExists:
+        storedCurrentWeek !== undefined,
+      snapshotLocked:
+        storedCurrentWeek?.snapshotLocked === true,
+      records: storedRecords.length,
+      checked:
+        storedRecords.filter(
+          record => record?.checked === true
+        ).length,
+      pendingAudits:
+        Array.isArray(
+          storedBeforeInitialization.siteAuditOutbox
+        )
+          ? storedBeforeInitialization.siteAuditOutbox.length
+          : 0
+    }
+  );
+
   const checklist = readChecklistWeek(weekKey);
   const currentWeekData = checklist.weeks[weekKey];
 
