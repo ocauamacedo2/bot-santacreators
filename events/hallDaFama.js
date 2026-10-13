@@ -4099,7 +4099,10 @@ async function autoCorrectDuplications(channel, client, options = {}) {
     for (let index = processed; index < hallMessages.length; index++) {
       assertDeadline();
       const message = hallMessages[index];
-      const evidence = await resolveHallEvidence(client, message, getHallMessageText(message));
+      const evidence = await hallReadWithDeadline(
+        "scan.resolve_evidence:" + message.id,
+        () => resolveHallEvidence(client, message, getHallMessageText(message))
+      );
       assertDeadline();
       await addHallToRankings(
         rankings,
@@ -4122,6 +4125,12 @@ async function autoCorrectDuplications(channel, client, options = {}) {
           progressCurrent: processed,
           progressTotal: hallMessages.length,
           currentHallUrl: getMessageJumpUrl(message),
+          currentHallAuthor: message.author
+            ? `${message.author.tag || message.author.username} (\`${message.author.id}\`)`
+            : "Autor indisponível na mensagem coletada",
+          currentHallPostedAt: Number.isFinite(message.createdTimestamp) && message.createdTimestamp > 0
+            ? `<t:${Math.floor(message.createdTimestamp / 1000)}:F>`
+            : "Data indisponível na mensagem coletada",
           currentEvent: evidence.eventName || "Evento",
           currentCity: evidence.cityName || CITIES[evidence.cityKey]?.label || "Não identificada",
           phase: "Análise e ranking"
@@ -4367,6 +4376,20 @@ async function autoCorrectDuplications(channel, client, options = {}) {
     saveCheckpoint();
     await finishPublication();
   } catch (error) {
+    console.error("[HALL SCAN INTERRUPTED]", {
+      channelId: String(channel.id),
+      generation: checkpoint?.generation || null,
+      phase: checkpoint?.phase || null,
+      processed,
+      checkpointProcessed: checkpoint?.processed ?? null,
+      totalHalls: checkpoint?.totalHalls ?? null,
+      scannedPages,
+      durationMs: Date.now() - startedAt,
+      name: error?.name || "Error",
+      code: error?.code || null,
+      message: error?.message || String(error),
+    });
+
     await report({
       status: "Varredura interrompida. Consulte o erro e retome pelo comando de varredura.",
       phase: "Erro"

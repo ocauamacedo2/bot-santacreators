@@ -1647,6 +1647,21 @@ const experience = createSiteHubExperience({
           return res.json({ scope: snapshotKey(guild, member, requested, requestedPayload) });
         }
 
+        if (
+          action === 'retention.snapshot' &&
+          payload.snapshotOnly === true
+        ) {
+          await assertModuleView(client, member, 'retention');
+          const prepared = await getFivemRetentionSiteSnapshot({
+            cityKey: payload.city || null,
+            snapshotOnly: true,
+          });
+          return res.json({
+            ...prepared,
+            cacheScope: snapshotKey(guild, member, action, payload),
+          });
+        }
+
         // Autorizar ANTES de ler qualquer consulta persistida, inclusive em atualização manual.
         const moduleKey = action === 'teamRequests.list' ? 'staff' : action.split('.')[0];
         if (

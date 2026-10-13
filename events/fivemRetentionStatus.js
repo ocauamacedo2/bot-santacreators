@@ -159,6 +159,46 @@ const FIVEM_SNAPSHOT_CACHE = {
 let FIVEM_SITE_REFRESH_INTERVAL_ID = null;
 let FIVEM_SITE_REFRESH_RUNNING = false;
 let FIVEM_SITE_LAST_EMITTED_SNAPSHOT = null;
+let FIVEM_SITE_PREPARED_VIEWS = new Map();
+const FIVEM_SITE_COMPARISON_JOBS = new WeakMap();
+
+function getFivemSiteComparisonData(current) {
+  const previous = FIVEM_SITE_COMPARISON_JOBS.get(current);
+  const now = Date.now();
+
+  if (
+    previous &&
+    (
+      !previous.completed ||
+      (now >= previous.at && now - previous.at < 30000)
+    )
+  ) {
+    return previous.task;
+  }
+
+  const record = { task: null, completed: false, at: now };
+  const task = Promise.all([
+    getSnapshotDaysAgo(1, current),
+    getSnapshotDaysAgo(7, current),
+    loadPeaksMap(),
+  ]).then(
+    result => {
+      record.completed = true;
+      record.at = Date.now();
+      return result;
+    },
+    error => {
+      if (FIVEM_SITE_COMPARISON_JOBS.get(current) === record) {
+        FIVEM_SITE_COMPARISON_JOBS.delete(current);
+      }
+      throw error;
+    }
+  );
+
+  record.task = task;
+  FIVEM_SITE_COMPARISON_JOBS.set(current, record);
+  return task;
+}
 
 async function refreshFivemSiteData(client) {
   if (
@@ -197,6 +237,26 @@ async function refreshFivemSiteData(client) {
         safe.snapshot
       );
     }
+
+    const preparationSnapshot = FIVEM_SNAPSHOT_CACHE.value?.snapshot;
+    const prepared = await Promise.all(
+      [null, ...FIVEM_CITIES.map(city => city.key)].map(async cityKey => [
+        cityKey || "all",
+        await buildFivemRetentionSiteSnapshot({
+          cityKey,
+          snapshotOnly: true,
+        }),
+      ])
+    );
+
+    if (
+      preparationSnapshot !== FIVEM_SNAPSHOT_CACHE.value?.snapshot ||
+      preparationSnapshot !== safe.snapshot
+    ) {
+      return;
+    }
+
+    FIVEM_SITE_PREPARED_VIEWS = new Map(prepared);
 
     if (
       FIVEM_SITE_LAST_EMITTED_SNAPSHOT !==
@@ -4806,7 +4866,38 @@ function buildFivemSiteWeeklyEventPeaks(
   });
 }
 
-export async function getFivemRetentionSiteSnapshot({
+export async function getFivemRetentionSiteSnapshot(options = {}) {
+  if (options.snapshotOnly !== true) {
+    return buildFivemRetentionSiteSnapshot(options);
+  }
+
+  let cityKey = options.cityKey;
+
+  if (cityKey == null || cityKey === '') {
+    cityKey = null;
+  } else {
+    if (typeof cityKey !== 'string') {
+      throw Object.assign(new Error('Cidade inválida.'), { status: 400 });
+    }
+    cityKey = cityKey.trim().toLowerCase();
+    if (!FIVEM_CITIES.some(city => city.key === cityKey)) {
+      throw Object.assign(new Error('Cidade inválida.'), { status: 400 });
+    }
+  }
+
+  const prepared = FIVEM_SITE_PREPARED_VIEWS.get(cityKey || "all");
+
+  if (!prepared) {
+    throw Object.assign(
+      new Error('A preparação automática da Retenção ainda não concluiu. Tente novamente em alguns segundos.'),
+      { status: 503 }
+    );
+  }
+
+  return JSON.parse(JSON.stringify(prepared));
+}
+
+async function buildFivemRetentionSiteSnapshot({
   cityKey = null,
   refresh = false,
   snapshotOnly = false,
@@ -4881,20 +4972,7 @@ export async function getFivemRetentionSiteSnapshot({
     yesterday,
     lastWeek,
     peaks,
-  ] =
-    await Promise.all([
-      getSnapshotDaysAgo(
-        1,
-        current
-      ),
-
-      getSnapshotDaysAgo(
-        7,
-        current
-      ),
-
-      loadPeaksMap(),
-    ]);
+  ] = await getFivemSiteComparisonData(current);
 
   const todayKey =
     current.spDate;
