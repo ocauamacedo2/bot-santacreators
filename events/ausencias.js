@@ -747,6 +747,44 @@ function salvarSnapshotAusenciasMensal({
   );
 }
 
+const ausenciasSiteRecoveryRequestedAt =
+  new WeakMap();
+
+export function requestAbsencesSiteSnapshot(client) {
+  if (
+    !client ||
+    typeof client.isReady !== "function" ||
+    !client.isReady()
+  ) {
+    return;
+  }
+
+  const now = Date.now();
+
+  const previous =
+    ausenciasSiteRecoveryRequestedAt.get(client);
+
+  if (
+    previous !== undefined &&
+    now - previous < 60000
+  ) {
+    return;
+  }
+
+  ausenciasSiteRecoveryRequestedAt.set(
+    client,
+    now
+  );
+
+  void atualizarDashboardAusenciasMensal(client)
+    .catch(error => {
+      console.error(
+        "[AUSÊNCIAS SITE] Falha ao gerar o snapshot:",
+        error
+      );
+    });
+}
+
 const ausenciasDashboardJobs =
   new Map();
 
