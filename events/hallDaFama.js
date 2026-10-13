@@ -3871,16 +3871,50 @@ async function autoCorrectDuplications(channel, client, options = {}) {
 
     const hallMessages = [...messagesById.values()]
       .filter(message => {
-        const migration = state.historicalHallMigrations?.[message.id];
+        const migration =
+          state.historicalHallMigrations?.[
+            message.id
+          ];
 
-        if (migration?.status === "completed") {
+        if (
+          migration?.status === "completed"
+        ) {
+          const replacementId =
+            String(
+              migration.newMessageId || ""
+            );
+
+          if (
+            !replacementId ||
+            !messagesById.has(
+              replacementId
+            )
+          ) {
+            throw new Error(
+              "O Hall " +
+              message.id +
+              " está marcado como migrado, mas sua publicação substituta " +
+              (
+                replacementId ||
+                "não informada"
+              ) +
+              " não foi encontrada entre os Halls coletados. " +
+              "A reconstrução foi interrompida para não excluir essa fonte sem conferência."
+            );
+          }
+
           return false;
         }
 
         if (
-          migration?.status === "published_pending_old_deletion" &&
+          migration?.status ===
+            "published_pending_old_deletion" &&
           migration.newMessageId &&
-          messagesById.has(String(migration.newMessageId))
+          messagesById.has(
+            String(
+              migration.newMessageId
+            )
+          )
         ) {
           return false;
         }
@@ -11070,6 +11104,32 @@ function addOrgRankingPoint(rankings, orgWinner, hallMeta) {
     at:
       hallMeta.createdTimestamp || Date.now()
   });
+
+  const audit =
+    rankings.scanAudit?.messages?.[
+      String(
+        hallMeta.messageId || ""
+      )
+    ];
+
+  if (audit) {
+    audit.countedOrgs ||= [];
+
+    if (
+      !audit.countedOrgs.some(
+        item =>
+          item.key === key
+      )
+    ) {
+      audit.countedOrgs.push({
+        key,
+        name:
+          org.name,
+        cityKey:
+          org.cityKey
+      });
+    }
+  }
 }
 
 function addPlayerRankingPoint(
@@ -13278,25 +13338,6 @@ await sendRequiredPlayerCityReviewIfNeeded(
     ) {
       const audit =
         rankings.scanAudit.messages[message.id];
-
-      audit.countedOrgs =
-        Object.values(
-          rankings.orgs || {}
-        )
-          .filter(org =>
-            (org.halls || []).some(hall =>
-              String(hall.messageId || "") ===
-              String(message.id)
-            )
-          )
-          .map(org => ({
-            key:
-              org.key,
-            name:
-              org.name,
-            cityKey:
-              org.cityKey
-          }));
 
       audit.pendingReviewCount =
         Object.values(
