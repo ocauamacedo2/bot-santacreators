@@ -2061,132 +2061,259 @@ const lastWeekWindow = resolveEventWindowFromPeaks(peaks[lastWeekKey], event);
 
 // ---------- FIVEM API ----------
 async function getDynamicUrlsForCity(city) {
- const cached = FIVEM_DYNAMIC_URL_CACHE.get(city.key);
+  const cached =
+    FIVEM_DYNAMIC_URL_CACHE.get(
+      city.key
+    );
 
- if (cached?.urls?.length && Date.now() - cached.createdAt < FIVEM_DYNAMIC_URL_CACHE_MS) {
-   return cached.urls;
- }
+  if (
+    cached?.urls?.length &&
+    Date.now() - cached.createdAt <
+      FIVEM_DYNAMIC_URL_CACHE_MS
+  ) {
+    return cached.urls;
+  }
 
- const urls = [...(city.dynamicUrls || [])];
+  const urls = [
+    ...(city.dynamicUrls || [])
+  ];
 
- const fetchFn = await getFetch();
+  const fetchFn =
+    await getFetch();
 
- try {
-   const controller = new AbortController();
-   const timeout = setTimeout(() => controller.abort(), FIVEM_FETCH_TIMEOUT_MS);
+  const controller =
+    new AbortController();
 
-   const res = await fetchFn(city.url, {
-     method: "GET",
-     signal: controller.signal,
-     headers: {
-       "User-Agent": "Mozilla/5.0",
-       "Accept": "application/json",
-       "Cache-Control": "no-cache",
-       "Pragma": "no-cache",
-     },
-   });
+  const timeout =
+    setTimeout(
+      () => controller.abort(),
+      FIVEM_FETCH_TIMEOUT_MS
+    );
 
-   clearTimeout(timeout);
+  try {
+    const res =
+      await fetchFn(
+        city.url,
+        {
+          method: "GET",
+          signal:
+            controller.signal,
+          headers: {
+            "User-Agent":
+              "Mozilla/5.0",
+            "Accept":
+              "application/json",
+            "Cache-Control":
+              "no-cache",
+            "Pragma":
+              "no-cache"
+          }
+        }
+      );
 
-   if (res.ok) {
-     const json = await res.json().catch(() => null);
-     const endpoints = Array.isArray(json?.Data?.connectEndPoints)
-       ? json.Data.connectEndPoints
-       : [];
+    if (res.ok) {
+      const json =
+        await res.json();
 
-     FIVEM_DEBUG && console.log(`[FIVEM_RETENTION] Endpoints encontrados para ${city.name}:`, endpoints);
+      const endpoints =
+        Array.isArray(
+          json?.Data?.connectEndPoints
+        )
+          ? json.Data.connectEndPoints
+          : [];
 
-     for (const endpoint of endpoints) {
-       if (!endpoint) continue;
+      FIVEM_DEBUG &&
+        console.log(
+          `[FIVEM_RETENTION] Endpoints encontrados para ${city.name}:`,
+          endpoints
+        );
 
-       urls.push(`http://${endpoint}/dynamic.json`);
-       urls.push(`https://${endpoint}/dynamic.json`);
-     }
-   }
- } catch (err) {
-   FIVEM_DEBUG && console.error(`[FIVEM_RETENTION] Falha ao descobrir endpoint real de ${city.name}:`, err?.message || err);
- }
+      for (const endpoint of endpoints) {
+        if (!endpoint) {
+          continue;
+        }
 
- const uniqueUrls = [...new Set(urls)];
+        urls.push(
+          `http://${endpoint}/dynamic.json`
+        );
 
- FIVEM_DYNAMIC_URL_CACHE.set(city.key, {
-   createdAt: Date.now(),
-   urls: uniqueUrls,
- });
+        urls.push(
+          `https://${endpoint}/dynamic.json`
+        );
+      }
+    }
+  } catch (err) {
+    FIVEM_DEBUG &&
+      console.error(
+        `[FIVEM_RETENTION] Falha ao descobrir endpoint real de ${city.name}:`,
+        err?.message || err
+      );
+  } finally {
+    clearTimeout(timeout);
+  }
 
- return uniqueUrls;
+  const uniqueUrls = [
+    ...new Set(urls)
+  ];
+
+  FIVEM_DYNAMIC_URL_CACHE.set(
+    city.key,
+    {
+      createdAt:
+        Date.now(),
+      urls:
+        uniqueUrls
+    }
+  );
+
+  return uniqueUrls;
 }
 
 async function fetchCityStatusFromDynamic(city) {
- const fetchFn = await getFetch();
- const dynamicUrls = await getDynamicUrlsForCity(city);
+  const fetchFn =
+    await getFetch();
 
- const attempts = dynamicUrls.map(async (dynamicUrl) => {
-   const controller = new AbortController();
-   const timeout = setTimeout(() => controller.abort(), FIVEM_FETCH_TIMEOUT_MS);
+  const dynamicUrls =
+    await getDynamicUrlsForCity(city);
 
-   try {
-     const res = await fetchFn(dynamicUrl, {
-       method: "GET",
-       signal: controller.signal,
-       headers: {
-         "User-Agent": "Mozilla/5.0",
-         "Accept": "application/json",
-         "Cache-Control": "no-cache",
-         "Pragma": "no-cache",
-       },
-     });
+  const controllers =
+    new Set();
 
-     if (!res.ok) return null;
+  const attempts =
+    dynamicUrls.map(async dynamicUrl => {
+      const controller =
+        new AbortController();
 
-     const data = await res.json().catch(() => null);
+      controllers.add(
+        controller
+      );
 
-     if (data && typeof data.clients !== "undefined" && typeof data.sv_maxclients !== "undefined") {
-       const clients = safeNumber(data.clients, 0);
-       const maxClients = safeNumber(data.sv_maxclients, 0);
+      const timeout =
+        setTimeout(
+          () => controller.abort(),
+          FIVEM_FETCH_TIMEOUT_MS
+        );
 
-       if (clients < 0 || maxClients <= 0) return null;
+      try {
+        const res =
+          await fetchFn(
+            dynamicUrl,
+            {
+              method: "GET",
+              signal:
+                controller.signal,
+              headers: {
+                "User-Agent":
+                  "Mozilla/5.0",
+                "Accept":
+                  "application/json",
+                "Cache-Control":
+                  "no-cache",
+                "Pragma":
+                  "no-cache"
+              }
+            }
+          );
 
-       return {
-         key: city.key,
-         name: city.name,
-         emoji: city.emoji,
-         clients,
-         maxClients,
-         selfReportedClients: 0,
-         apiClients: clients,
-         playersLength: 0,
-         online: true,
-         hostname: data.hostname || city.name,
-         source: "dynamic.json",
-         dynamicUrl,
-       };
-     }
+        if (!res.ok) {
+          return null;
+        }
 
-     return null;
-   } catch {
-     return null;
-   } finally {
-     clearTimeout(timeout);
-   }
- });
+        const data =
+          await res.json();
 
- const result = await Promise.any(
-   attempts.map(
-     attempt =>
-       attempt.then(status => {
-         if (!status) {
-           throw new Error(
-             "O endpoint não retornou dados válidos."
-           );
-         }
+        const rawClients =
+          data?.clients;
 
-         return status;
-       })
-   )
- ).catch(() => null);
+        const rawCapacity =
+          data?.sv_maxclients;
 
- return result;
+        const numericValue = value =>
+          (
+            typeof value === "number" ||
+            typeof value === "string"
+          ) &&
+          String(value).trim() !== "" &&
+          Number.isFinite(
+            Number(value)
+          );
+
+        if (
+          !numericValue(rawClients) ||
+          !numericValue(rawCapacity)
+        ) {
+          return null;
+        }
+
+        const clients =
+          Number(rawClients);
+
+        const maxClients =
+          Number(rawCapacity);
+
+        if (
+          !Number.isSafeInteger(clients) ||
+          !Number.isSafeInteger(maxClients) ||
+          clients < 0 ||
+          maxClients <= 0
+        ) {
+          return null;
+        }
+
+        return {
+          key:
+            city.key,
+          name:
+            city.name,
+          emoji:
+            city.emoji,
+          clients,
+          maxClients,
+          selfReportedClients:
+            0,
+          apiClients:
+            clients,
+          playersLength:
+            0,
+          online:
+            true,
+          hostname:
+            data.hostname || city.name,
+          source:
+            "dynamic.json",
+          dynamicUrl
+        };
+      } catch {
+        return null;
+      } finally {
+        clearTimeout(timeout);
+
+        controllers.delete(
+          controller
+        );
+      }
+    });
+
+  try {
+    return await Promise.any(
+      attempts.map(
+        attempt =>
+          attempt.then(status => {
+            if (!status) {
+              throw new Error(
+                "O endpoint não retornou dados válidos."
+              );
+            }
+
+            return status;
+          })
+      )
+    ).catch(() => null);
+  } finally {
+    for (const controller of controllers) {
+      controller.abort();
+    }
+  }
 }
 
 async function fetchCityStatus(city) {
@@ -2450,7 +2577,25 @@ async function createSafeCurrentSnapshotUnshared(options = {}) {
    }
 
    result = {
-     snapshot: fallbackSnapshot,
+     snapshot: {
+       ...fallbackSnapshot,
+       cities:
+         Object.fromEntries(
+           Object.entries(
+             fallbackSnapshot.cities || {}
+           ).map(([key, city]) => [
+             key,
+             {
+               ...city,
+               stale: true,
+               staleReason:
+                 "all_live_sources_failed"
+             }
+           ])
+         ),
+       sourceStatus:
+         "historical_fallback_all_live_sources_failed"
+     },
      shouldPersist: false,
      usedFallback: true,
    };
