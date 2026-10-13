@@ -34,6 +34,7 @@ const GI_DATA_FILE_ROOT = path.resolve(process.cwd(), "sc_gi_registros.json");
 const TZ = "America/Sao_Paulo";
 const ROLE_PRIORITY = "1371733765243670538"; // Membros Prioritários
 const LOG_CHANNEL_ID = "1506785173537292348"; // Auditoria
+const LOG_AUDIT_GUILD_ID = "1482114384208597174"; // Servidor oficial das auditorias
 
 const PANEL_CONFIG = {
   CHANNEL_ID: "1477800974574682242",
@@ -1067,10 +1068,8 @@ async function recoverChecklistChecksFromAuditChannel(client, weekKey, responsav
     );
   }
 
-  const expectedGuildId = String(
-    resolveMainGuild(client)?.id ||
-    ""
-  );
+  const expectedGuildId =
+    LOG_AUDIT_GUILD_ID;
 
   const actualGuildId = String(
     channel.guildId ||
@@ -3362,11 +3361,8 @@ async function logAudit(
     ""
   );
 
-  const expectedGuildId = String(
-    details.guildId ||
-    resolveMainGuild(client)?.id ||
-    ""
-  );
+  const expectedGuildId =
+    LOG_AUDIT_GUILD_ID;
 
   if (
     !expectedGuildId ||
