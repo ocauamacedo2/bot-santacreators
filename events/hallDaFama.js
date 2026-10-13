@@ -2606,17 +2606,36 @@ async function readHallRecoveryAuditRecords(client) {
   ) {
     assertDeadline();
 
+    let auditFetchTimer;
+
     const messages =
-      await auditChannel.messages.fetch(
-        beforeId
-          ? {
-              limit: 100,
-              before: beforeId
-            }
-          : {
-              limit: 100
-            }
-      );
+      await Promise.race([
+        auditChannel.messages.fetch(
+          beforeId
+            ? {
+                limit: 100,
+                before: beforeId
+              }
+            : {
+                limit: 100
+              }
+        ),
+
+        new Promise((resolve, reject) => {
+          auditFetchTimer = setTimeout(() => {
+            reject(
+              new Error(
+                "A busca de mensagens da auditoria não respondeu em 30 segundos. " +
+                "A recuperação foi interrompida; os arquivos já lidos foram preservados."
+              )
+            );
+          }, 30000);
+        }),
+      ]).finally(() => {
+        clearTimeout(auditFetchTimer);
+      });
+
+    assertDeadline();
 
     if (messages.size === 0) {
       reachedEnd = true;
@@ -2805,17 +2824,40 @@ async function readHallRecoveryAuditRecords(client) {
       page === 0 ||
       (page + 1) % 5 === 0
     ) {
+      const identifiedHallCount =
+        new Set(
+          records.map(record =>
+            String(
+              record.after.messageId
+            )
+          )
+        ).size;
+
       await updateHallScanProgress(
         client,
         {
           status:
             `Auditoria: ${seenMessageIds.size} mensagens examinadas; ` +
-            `${attachmentsRead} arquivos lidos.`,
+            `${attachmentsRead} arquivos lidos; ` +
+            `${records.length} registros válidos recuperados; ` +
+            `${identifiedHallCount} Halls distintos identificados. ` +
+            "A restauração começa somente após concluir a leitura.",
           totalMessages:
             seenMessageIds.size,
+          totalHalls:
+            identifiedHallCount,
           processed:
-            records.length,
-          edited: 0,
+            0,
+          progressCurrent:
+            0,
+          progressTotal:
+            identifiedHallCount,
+          edited:
+            0,
+          currentEvent:
+            "Lendo histórico de auditoria",
+          currentCity:
+            "Ainda não analisada",
           phase:
             "Recuperação pelos logs",
         }
@@ -14402,10 +14444,23 @@ const progressBar = `${"🟩".repeat(filled)}${"⬛".repeat(20 - filled)} ${prog
     const hallUrl = data.currentHallUrl || "";
     const hallLine = hallUrl ? `[abrir Hall atual](${hallUrl})` : "`aguardando Hall atual`";
     const isFinished = data.phase === "Finalizado" || String(data.status || "").toLowerCase().includes("finalizado");
+    const isInterrupted = data.phase === "Erro";
 
     const embed = new EmbedBuilder()
-      .setTitle(isFinished ? "✅ Varredura Hall da Fama finalizada" : "🧹 Varredura Hall da Fama em andamento")
-      .setColor(isFinished ? "#2ecc71" : "#e74c3c")
+      .setTitle(
+        isInterrupted
+          ? "❌ Varredura Hall da Fama interrompida"
+          : isFinished
+            ? "✅ Varredura Hall da Fama finalizada"
+            : "🧹 Varredura Hall da Fama em andamento"
+      )
+      .setColor(
+        isInterrupted
+          ? "#e74c3c"
+          : isFinished
+            ? "#2ecc71"
+            : "#9b59b6"
+      )
       .setDescription(
         `📍 **Progresso:** ${progressBar}\n\n` +
         `📌 **Status:** ${data.status || "Processando..."}\n` +
@@ -18572,6 +18627,27 @@ const channel =
             "[HallDaFama] Recuperação automática não concluída:",
             error
           );
+
+          await updateHallScanProgress(
+            client,
+            {
+              status:
+                "Recuperação interrompida: " +
+                String(
+                  error?.message || error
+                ).slice(0, 900),
+              edited:
+                0,
+              currentDate:
+                "Interrompido",
+              currentEvent:
+                "Consulte o motivo no status",
+              currentCity:
+                "Não concluída",
+              phase:
+                "Erro"
+            }
+          ).catch(() => {});
 
           await sendHallScanLog(
             client,

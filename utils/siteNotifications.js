@@ -1010,35 +1010,74 @@ export function createSiteNotifications({
         }),
       };
 
-      const token = randomUUID();
+      const tokenIssuedAt =
+        Date.now();
 
-      for (const [id, session] of issued) {
-        if (session.expires < Date.now()) {
-          issued.delete(id);
-        }
-      }
-
-      if (issued.size >= 1000) {
-        issued.delete(
-          issued.keys().next().value
-        );
-      }
-
-      issued.set(
-        token,
-        {
-          actorKey,
-
-          expires:
-            Date.now() + 120000,
-
-          keys: new Set(
+      const notificationKeys =
+        [
+          ...new Set(
             data.groups.flatMap(group =>
               group.records.map(item =>
                 item.key
               )
             )
           ),
+        ].sort();
+
+      const tokenScope =
+        createHash('sha256')
+          .update(
+            JSON.stringify([
+              buildKey,
+              notificationKeys,
+            ])
+          )
+          .digest('hex');
+
+      for (const [id, session] of issued) {
+        if (
+          session.expires <=
+          tokenIssuedAt
+        ) {
+          issued.delete(id);
+        }
+      }
+
+      let token;
+
+      for (const [id, session] of issued) {
+        if (
+          session.actorKey === actorKey &&
+          session.scope === tokenScope
+        ) {
+          token = id;
+          break;
+        }
+      }
+
+      if (!token) {
+        token = randomUUID();
+
+        if (issued.size >= 1000) {
+          issued.delete(
+            issued.keys().next().value
+          );
+        }
+      }
+
+      issued.set(
+        token,
+        {
+          actorKey,
+          scope:
+            tokenScope,
+          expires:
+            tokenIssuedAt +
+            10 * 60 * 1000,
+          keys:
+            new Set(
+              notificationKeys
+            ),
         }
       );
 

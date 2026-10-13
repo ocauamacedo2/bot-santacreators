@@ -1020,6 +1020,7 @@ const experience = createSiteHubExperience({
           action === 'profile-options' ||
           action === 'identity.batch' ||
           action === 'ai.ask' ||
+          action === 'notifications.seen' ||
           action.endsWith('.snapshot') ||
           [
             'cache.authorize',
