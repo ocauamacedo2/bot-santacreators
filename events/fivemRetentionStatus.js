@@ -4358,18 +4358,33 @@ function buildFivemSiteWeeklyEventPeaks(current, peaks) {
 export async function getFivemRetentionSiteSnapshot({
   cityKey = null,
   refresh = false,
+  snapshotOnly = false,
 } = {}) {
   const cached = FIVEM_SNAPSHOT_CACHE.value;
   const cacheAge = Date.now() - FIVEM_SNAPSHOT_CACHE.createdAt;
+
+  if (snapshotOnly && !cached?.snapshot) {
+    throw Object.assign(
+      new Error(
+        "A coleta automática da retenção ainda não disponibilizou um snapshot."
+      ),
+      { status: 503 }
+    );
+  }
+
   const safe =
-    refresh !== true &&
-    cached?.snapshot &&
-    cacheAge >= 0 &&
-    cacheAge < 15000
+    snapshotOnly
       ? cached
-      : await createSafeCurrentSnapshot({
-          forceFresh: refresh === true,
-        });
+      : (
+          refresh !== true &&
+          cached?.snapshot &&
+          cacheAge >= 0 &&
+          cacheAge < 15000
+            ? cached
+            : await createSafeCurrentSnapshot({
+                forceFresh: refresh === true,
+              })
+        );
 
   const current =
     safe?.snapshot;

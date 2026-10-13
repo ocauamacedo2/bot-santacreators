@@ -2135,6 +2135,9 @@ if (await experience.handle({ guild, member, action, payload, res })) return;
 
               refresh:
                 payload.refresh === true,
+
+              snapshotOnly:
+                payload.snapshotOnly === true,
             })
           );
         }
