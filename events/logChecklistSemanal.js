@@ -1968,7 +1968,13 @@ export async function getChecklistSiteSnapshot({
 
 function scheduleChecklistPanel(client, guild) {
   checklistPanelDirty = true;
-  clearTimeout(checklistPanelTimer);
+
+  if (
+    checklistPanelRunning ||
+    checklistPanelTimer != null
+  ) {
+    return;
+  }
 
   checklistPanelTimer = setTimeout(async () => {
     checklistPanelTimer = null;
@@ -1989,6 +1995,8 @@ function scheduleChecklistPanel(client, guild) {
         );
       }
     } catch (error) {
+      checklistPanelDirty = true;
+
       console.error(
         '[ChecklistLogs] Painel:',
         error

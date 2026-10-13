@@ -4026,6 +4026,103 @@ async function autoCorrectDuplications(channel, client, options = {}) {
         rebuiltOrgs
       );
 
+    const rebuiltByKey =
+      new Map(
+        rebuiltOrgs.map(org => [
+          org.key,
+          org
+        ])
+      );
+
+    const decreasedOrgs =
+      previousOrgs.flatMap(previous => {
+        const rebuilt =
+          rebuiltByKey.get(
+            previous.key
+          );
+
+        const before =
+          Number(previous.total);
+
+        const after =
+          rebuilt
+            ? Number(rebuilt.total)
+            : 0;
+
+        if (after >= before) {
+          return [];
+        }
+
+        return [{
+          key:
+            previous.key,
+          name:
+            previous.name,
+          cityKey:
+            previous.cityKey,
+          before,
+          after,
+          difference:
+            before - after,
+          previousHalls:
+            previous.halls || [],
+          rebuiltHalls:
+            rebuilt?.halls || []
+        }];
+      });
+
+    if (decreasedOrgs.length > 0) {
+      const diagnosticFile =
+        path.join(
+          DATA_DIR,
+          `hall_org_losses_${checkpoint.generation}.json`
+        );
+
+      const temporary =
+        diagnosticFile + ".tmp";
+
+      fs.writeFileSync(
+        temporary,
+        JSON.stringify(
+          {
+            generatedAt:
+              Date.now(),
+            generation:
+              checkpoint.generation,
+            previousOrgTotal,
+            rebuiltOrgTotal,
+            decreasedOrgs
+          },
+          null,
+          2
+        ),
+        "utf8"
+      );
+
+      fs.renameSync(
+        temporary,
+        diagnosticFile
+      );
+
+      const examples =
+        decreasedOrgs
+          .slice(0, 5)
+          .map(
+            org =>
+              `${org.name}: ${org.before} → ${org.after}`
+          )
+          .join("; ");
+
+      throw new Error(
+        "A reconstrução reduziria vitórias de organizações: " +
+        examples +
+        ". O ranking existente foi preservado. " +
+        "Comparação salva em " +
+        diagnosticFile +
+        "."
+      );
+    }
+
     if (
       rebuiltOrgTotal <
       previousOrgTotal
@@ -10772,56 +10869,170 @@ function resolveRankingCityKey(primaryCityKey = "", cityName = "", fallbackCityK
 }
 
 function addOrgRankingPoint(rankings, orgWinner, hallMeta) {
-  const orgName = normalizeOrgDisplayName(orgWinner.orgName);
+  const orgName =
+    normalizeOrgDisplayName(
+      orgWinner.orgName
+    );
+
   if (!orgName) return;
   if (isInvalidWinnerName(orgName)) return;
   if (looksLikePrizeOnly(orgName)) return;
-  if (/^\d+\s*(kk|k|mil|milh[oõ]es|milh[aã]o)\b/i.test(normalizeHallName(orgName))) return;
-  if (/\b(vip|vips|rolepass|pass|gente boa|evento ouro|evento prata)\b/i.test(normalizeHallName(orgName))) return;
 
-const cityKey =
-  getManualOrgCityKey(orgName) ||
-  resolveRankingCityKey(orgWinner.cityKey, orgWinner.cityName, hallMeta.cityKey);
+  if (
+    /^\d+\s*(kk|k|mil|milh[oõ]es|milh[aã]o)\b/i.test(
+      normalizeHallName(orgName)
+    )
+  ) {
+    return;
+  }
 
-const key = getOrgRankingKey(orgName, cityKey);
-const cityName = CITIES[cityKey]?.label || "Cidade Nobre";
-const eventName = normalizeHallEventName(hallMeta.eventName, cityKey);
+  if (
+    /\b(vip|vips|rolepass|pass|gente boa|evento ouro|evento prata)\b/i.test(
+      normalizeHallName(orgName)
+    )
+  ) {
+    return;
+  }
 
-    rankings.orgs[key] ??= {
-      key,
-      name: orgName,
-      cityKey,
-      cityName,
-      total: 0,
-      events: {},
-      halls: []
-    };
+  const cityKey =
+    getManualOrgCityKey(orgName) ||
+    resolveRankingCityKey(
+      orgWinner.cityKey,
+      orgWinner.cityName,
+      hallMeta.cityKey
+    );
 
-    rankings.orgs[key].name = rankings.orgs[key].name || orgName;
-    rankings.orgs[key].cityKey = cityKey;
-    rankings.orgs[key].cityName = cityName;
-    rankings.orgs[key].total += 1;
+  const key =
+    getOrgRankingKey(
+      orgName,
+      cityKey
+    );
 
-    rankings.orgs[key].events[eventName] ??= 0;
-    rankings.orgs[key].events[eventName] += 1;
+  const cityName =
+    CITIES[cityKey]?.label ||
+    "Cidade Nobre";
 
-    rankings.orgs[key].halls.push({
-      messageId: hallMeta.messageId,
-      eventName,
-      cityKey,
-      cityName,
-      channelId: hallMeta.channelId || "",
-      guildId: hallMeta.guildId || "",
-      jumpUrl: hallMeta.jumpUrl || "",
-      historicalVictoryTimestamp: Number(
+  const eventName =
+    normalizeHallEventName(
+      hallMeta.eventName,
+      cityKey
+    );
+
+  rankings.orgs[key] ??= {
+    key,
+    name: orgName,
+    cityKey,
+    cityName,
+    total: 0,
+    events: {},
+    halls: []
+  };
+
+  const org =
+    rankings.orgs[key];
+
+  if (
+    !Array.isArray(org.halls) ||
+    !org.events ||
+    typeof org.events !== "object" ||
+    Array.isArray(org.events)
+  ) {
+    throw new Error(
+      "Os registros da organização " +
+      orgName +
+      " possuem estrutura inválida."
+    );
+  }
+
+  const messageId =
+    String(
+      hallMeta.messageId || ""
+    );
+
+  const jumpUrl =
+    String(
+      hallMeta.jumpUrl || ""
+    );
+
+  const alreadyCounted =
+    org.halls.some(hall => {
+      if (
+        messageId &&
+        String(hall.messageId || "") === messageId
+      ) {
+        return true;
+      }
+
+      return Boolean(
+        jumpUrl &&
+        String(hall.jumpUrl || "") === jumpUrl
+      );
+    });
+
+  if (alreadyCounted) {
+    return;
+  }
+
+  const previousTotal =
+    Number(org.total);
+
+  const previousEventTotal =
+    Number(
+      org.events[eventName] || 0
+    );
+
+  if (
+    !Number.isSafeInteger(previousTotal) ||
+    previousTotal < 0 ||
+    !Number.isSafeInteger(previousEventTotal) ||
+    previousEventTotal < 0
+  ) {
+    throw new Error(
+      "Os totais da organização " +
+      orgName +
+      " estão inválidos. Nenhuma vitória foi acrescentada."
+    );
+  }
+
+  org.name =
+    org.name || orgName;
+
+  org.cityKey =
+    cityKey;
+
+  org.cityName =
+    cityName;
+
+  org.total =
+    previousTotal + 1;
+
+  org.events[eventName] =
+    previousEventTotal + 1;
+
+  org.halls.push({
+    messageId:
+      hallMeta.messageId,
+    eventName,
+    cityKey,
+    cityName,
+    channelId:
+      hallMeta.channelId || "",
+    guildId:
+      hallMeta.guildId || "",
+    jumpUrl:
+      hallMeta.jumpUrl || "",
+    historicalVictoryTimestamp:
+      Number(
         hallMeta.historicalVictoryTimestamp || 0
       ),
-      createdTimestamp: Number(
+    createdTimestamp:
+      Number(
         hallMeta.createdTimestamp || 0
       ),
-      at: hallMeta.createdTimestamp || Date.now()
-    });
-  }
+    at:
+      hallMeta.createdTimestamp || Date.now()
+  });
+}
 
 function addPlayerRankingPoint(
   rankings,

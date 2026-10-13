@@ -760,10 +760,112 @@ function clearLegacyGiHiddenAdjustment(
 function applyManualAdjustment({
   weekKey,
   userId,
-  delta
+  delta,
+  operationId = null,
+  actorId = null
 }) {
   const data =
     loadAdjustments();
+
+  const canonicalUserId =
+    resolveDiscordIdentity(
+      userId
+    );
+
+  const numericDelta =
+    Number(delta);
+
+  if (
+    !/^\d{17,20}$/.test(
+      String(canonicalUserId || "")
+    ) ||
+    !Number.isSafeInteger(numericDelta) ||
+    numericDelta === 0
+  ) {
+    throw new Error(
+      "Identidade ou quantidade inválida para o ajuste de pontos."
+    );
+  }
+
+  let operationKey =
+    null;
+
+  if (operationId !== null) {
+    if (
+      typeof operationId !== "string" ||
+      !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(
+        operationId
+      ) ||
+      !/^\d{17,20}$/.test(
+        String(actorId || "")
+      )
+    ) {
+      throw Object.assign(
+        new Error(
+          "Identificação da operação de pontos inválida."
+        ),
+        { status: 400 }
+      );
+    }
+
+    if (data.operations == null) {
+      data.operations = {};
+    }
+
+    if (
+      typeof data.operations !== "object" ||
+      Array.isArray(data.operations)
+    ) {
+      throw new Error(
+        "O histórico de operações de pontos está inválido. O arquivo existente foi preservado."
+      );
+    }
+
+    operationKey =
+      String(actorId) +
+      ":" +
+      operationId.toLowerCase();
+
+    const saved =
+      Object.hasOwn(
+        data.operations,
+        operationKey
+      )
+        ? data.operations[operationKey]
+        : null;
+
+    if (saved) {
+      if (
+        saved.weekKey !== weekKey ||
+        saved.userId !== canonicalUserId ||
+        saved.delta !== numericDelta ||
+        saved.actorId !== String(actorId) ||
+        !Number.isSafeInteger(saved.before) ||
+        !Number.isSafeInteger(saved.after) ||
+        saved.after - saved.before !== saved.delta
+      ) {
+        throw Object.assign(
+          new Error(
+            "Este identificador de operação já está associado a outro ajuste ou possui dados inválidos."
+          ),
+          { status: 409 }
+        );
+      }
+
+      return {
+        before:
+          saved.before,
+        after:
+          saved.after,
+        data,
+        userId:
+          canonicalUserId,
+        alreadyApplied:
+          true,
+        operationId
+      };
+    }
+  }
 
   data.byWeek =
     data.byWeek || {};
@@ -771,29 +873,47 @@ function applyManualAdjustment({
   data.byWeek[weekKey] =
     data.byWeek[weekKey] || {};
 
-  const canonicalUserId =
-    resolveDiscordIdentity(
-      userId
-    );
-
   const before =
     Number(
-      data.byWeek[
-        weekKey
-      ][canonicalUserId] ||
+      data.byWeek[weekKey][canonicalUserId] ||
       0
     );
 
+  if (!Number.isSafeInteger(before)) {
+    throw new Error(
+      "A pontuação anterior está inválida. Nenhum ajuste foi gravado."
+    );
+  }
+
   const after =
     before +
-    Number(
-      delta || 0
-    );
+    numericDelta;
 
-  data.byWeek[
-    weekKey
-  ][canonicalUserId] =
+  if (!Number.isSafeInteger(after)) {
+    throw new Error(
+      "O resultado do ajuste ultrapassa o limite numérico permitido."
+    );
+  }
+
+  data.byWeek[weekKey][canonicalUserId] =
     after;
+
+  if (operationKey) {
+    data.operations[operationKey] = {
+      operationId,
+      actorId:
+        String(actorId),
+      weekKey,
+      userId:
+        canonicalUserId,
+      delta:
+        numericDelta,
+      before,
+      after,
+      appliedAt:
+        Date.now()
+    };
+  }
 
   saveAdjustments(data);
 
@@ -805,13 +925,14 @@ function applyManualAdjustment({
         userId:
           canonicalUserId,
         delta:
-          Number(delta || 0),
+          numericDelta,
         before,
         after,
+        operationId,
         source:
           "scGeralWeeklyRanking",
         __at:
-          Date.now(),
+          Date.now()
       }
     );
   } catch (error) {
@@ -827,6 +948,9 @@ function applyManualAdjustment({
     data,
     userId:
       canonicalUserId,
+    alreadyApplied:
+      false,
+    operationId
   };
 }
 
@@ -3834,16 +3958,9 @@ const bottomLines = bottom.map((u, i) => {
 
 // ================== CORE UPSERT ==================
 async function upsertWeeklyRank(client, reason, { scanMode = "light", targetWeekKey = null } = {}) {
-  // ✅ FIX: Auto-unlock global se travado > 2min
   if (globalThis.__SC_GERAL_WEEKLY_RANK_UPSERTING__) {
-    const now = Date.now();
-    const last = globalThis.__SC_GERAL_WEEKLY_RANK_LOCK_TS__ || 0;
-    if (now - last > 120000) {
-       console.warn("[SC_GERAL_WEEKLY_RANK] ⚠️ Global lock travado. Forçando reset.");
-       globalThis.__SC_GERAL_WEEKLY_RANK_UPSERTING__ = false;
-    } else {
-       return false; // ✅ Retorna false indicando que NÃO rodou
-    }
+    DIRTY = true;
+    return false;
   }
 
   globalThis.__SC_GERAL_WEEKLY_RANK_UPSERTING__ = true;
@@ -4195,14 +4312,9 @@ return true; // ✅ Sucesso
 }
 
 async function safeUpdate(client, reason, opts = {}) {
-  // ✅ FIX: Auto-unlock local se travado > 2min
   if (LOCK) {
-     if (Date.now() - LOCK_TS > 120000) {
-        console.warn("[SC_GERAL_WEEKLY_RANK] ⚠️ Local LOCK travado. Resetando.");
-        LOCK = false;
-     } else {
-        return false;
-     }
+    DIRTY = true;
+    return false;
   }
 
   LOCK = true;
@@ -6470,6 +6582,7 @@ export async function adjustWeeklyPointsFromSite({
   targetId,
   amount,
   mode,
+  operationId = null,
 }) {
   const qty =
     Number(amount);
@@ -6590,6 +6703,7 @@ export async function adjustWeeklyPointsFromSite({
   const {
     before,
     after,
+    alreadyApplied,
   } =
     applyManualAdjustment({
       weekKey,
@@ -6600,6 +6714,13 @@ export async function adjustWeeklyPointsFromSite({
         ),
 
       delta,
+
+      operationId,
+
+      actorId:
+        String(
+          actorId
+        ),
     });
 
   clearWeeklyRankCache();
@@ -6627,6 +6748,10 @@ export async function adjustWeeklyPointsFromSite({
 
     refreshPending:
       true,
+
+    alreadyApplied,
+
+    operationId,
 
     weekKey,
     before,

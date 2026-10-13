@@ -4794,17 +4794,9 @@ async function upsertDashboard(
   reason,
   { scanMode = "light", emitLog = false } = {}
 ) {
-  // ✅ TRAVA GLOBAL (resolve o “edita uma e manda outra”)
-  // Isso evita 2 execuções simultâneas (boot + interval + hub) gerarem duplicata.
   if (globalThis.__SC_GERAL_DASH_UPSERTING__) {
-     const now = Date.now();
-     const last = globalThis.__SC_GERAL_DASH_LOCK_TS__ || 0;
-     if (now - last > 120000) { // 2 min
-        console.warn("[SC_GERAL_DASH] ⚠️ Global lock travado. Forçando reset.");
-        globalThis.__SC_GERAL_DASH_UPSERTING__ = false;
-     } else {
-        return false; // ✅ Retorna false indicando que pulou
-     }
+    DIRTY = true;
+    return false;
   }
 
   globalThis.__SC_GERAL_DASH_UPSERTING__ = true;
@@ -5245,14 +5237,9 @@ try {
 
 
 async function safeUpdate(client, reason, opts = {}) {
-  // ✅ FIX: Auto-unlock local se travado > 2min
   if (LOCK) {
-     if (Date.now() - LOCK_TS > 120000) {
-        console.warn("[SC_GERAL_DASH] ⚠️ Local LOCK travado. Resetando.");
-        LOCK = false;
-     } else {
-        return false;
-     }
+    DIRTY = true;
+    return false;
   }
 
   LOCK = true;
@@ -5292,11 +5279,15 @@ function wireHub(client) {
   if (client.__scGeralDashHubWired) return;
   client.__scGeralDashHubWired = true;
 
+let dirtyRevision = 0;
+
 const markDirty = (opts = {}) => {
+  dirtyRevision += 1;
   DIRTY = true;
-  if (opts.invalidateScanCache) clearGeneralDashCache();
 
   if (opts.invalidateScanCache) {
+    clearGeneralDashCache();
+
     CACHE = { at: 0, payload: null };
     DEBUG.weekKeysFound = {};
   }
@@ -5304,18 +5295,44 @@ const markDirty = (opts = {}) => {
 
 const scheduleFastSync = () => {
   if (client.__SC_GERAL_DASH_FAST_SYNC_TIMER__) {
-    clearTimeout(client.__SC_GERAL_DASH_FAST_SYNC_TIMER__);
+    return;
   }
 
   client.__SC_GERAL_DASH_FAST_SYNC_TIMER__ = setTimeout(async () => {
     client.__SC_GERAL_DASH_FAST_SYNC_TIMER__ = null;
 
+    const revisionAtStart =
+      dirtyRevision;
+
     try {
       clearGeneralDashCache();
-      await safeUpdate(client, "hub fast sync", { scanMode: "full", emitLog: false });
-      DIRTY = false;
+
+      const didRun =
+        await safeUpdate(
+          client,
+          "hub fast sync",
+          {
+            scanMode: "full",
+            emitLog: false
+          }
+        );
+
+      if (
+        didRun &&
+        dirtyRevision === revisionAtStart
+      ) {
+        DIRTY = false;
+      } else {
+        DIRTY = true;
+        scheduleFastSync();
+      }
     } catch (e) {
-      console.error("[SC_GERAL_DASH] erro no fast sync:", e);
+      DIRTY = true;
+
+      console.error(
+        "[SC_GERAL_DASH] erro no fast sync:",
+        e
+      );
     }
   }, 5000);
 };
@@ -5385,14 +5402,36 @@ dashOn("bp:sync", async (p) => {
 
   markDirty({ invalidateScanCache: true });
 
+  const revisionAtStart =
+    dirtyRevision;
+
   try {
-    await safeUpdate(client, "bp:sync rebuild", {
-      scanMode: "light",
-      emitLog: true,
-    });
-    DIRTY = false;
+    const didRun =
+      await safeUpdate(
+        client,
+        "bp:sync rebuild",
+        {
+          scanMode: "light",
+          emitLog: true,
+        }
+      );
+
+    if (
+      didRun &&
+      dirtyRevision === revisionAtStart
+    ) {
+      DIRTY = false;
+    } else {
+      DIRTY = true;
+      scheduleFastSync();
+    }
   } catch (e) {
-    console.error("[SC_GERAL_DASH] bp:sync update erro:", e);
+    DIRTY = true;
+
+    console.error(
+      "[SC_GERAL_DASH] bp:sync update erro:",
+      e
+    );
   }
 });
 

@@ -2345,6 +2345,9 @@ if (await experience.handle({ guild, member, action, payload, res })) return;
 
               mode:
                 payload.mode,
+
+              operationId:
+                payload.operationId ?? null,
             })
           );
         }
