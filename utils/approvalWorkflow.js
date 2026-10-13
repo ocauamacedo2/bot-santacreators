@@ -311,6 +311,72 @@ export function createApprovalWorkflow(cfg) {
       : `${action === 'approve' ? cfg.approvePrefix : cfg.rejectPrefix}${reqId}`;
   }
 
+  function collectWorkflowRecordImages(message, data) {
+    const urls = new Set();
+    const imageExtension = /\.(?:png|jpe?g|gif|webp|avif)(?:$|[?#])/i;
+
+    const add = raw => {
+      if (typeof raw !== 'string' || !raw.trim()) return;
+
+      try {
+        const url = new URL(raw.trim());
+
+        if (
+          !['http:', 'https:'].includes(url.protocol) ||
+          url.username ||
+          url.password
+        ) return;
+
+        urls.add(url.href);
+      } catch {}
+    };
+
+    for (const attachment of message.attachments?.values?.() || []) {
+      if (
+        String(attachment.contentType || '').startsWith('image/') ||
+        imageExtension.test(String(attachment.name || attachment.url || ''))
+      ) {
+        add(attachment.url || attachment.proxyURL);
+      }
+    }
+
+    for (const rawEmbed of message.embeds || []) {
+      const embed = rawEmbed.data || rawEmbed;
+
+      add(embed.image?.url);
+      add(embed.thumbnail?.url);
+
+      for (const field of embed.fields || []) {
+        const value = String(field.value || '');
+
+        for (const match of value.matchAll(/https?:\/\/[^\s<>`]+/g)) {
+          const raw = match[0].replace(/[),.;]+$/, '');
+
+          if (imageExtension.test(raw)) {
+            add(raw);
+          }
+        }
+      }
+    }
+
+    if (Array.isArray(data.imageUrls)) {
+      for (const url of data.imageUrls) {
+        add(url);
+      }
+    }
+
+    for (const url of [
+      data.imageUrl,
+      data.imageUrl2,
+      data.imageUrl3,
+      data.imageUrl4,
+    ]) {
+      add(url);
+    }
+
+    return [...urls];
+  }
+
   function view(
     message,
     data,
@@ -342,16 +408,7 @@ export function createApprovalWorkflow(cfg) {
         data.createdAt ||
         message.createdTimestamp,
 
-      images: [
-        ...new Set(
-          data.imageUrls || [
-            data.imageUrl,
-            data.imageUrl2,
-            data.imageUrl3,
-            data.imageUrl4,
-          ].filter(Boolean)
-        ),
-      ],
+      images: collectWorkflowRecordImages(message, data),
 
       status,
 
