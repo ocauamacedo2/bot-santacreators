@@ -12,6 +12,10 @@ import {
 
 import path from 'node:path';
 
+import {
+  getOfficialSantaCreatorsAuthorityLevel,
+} from '../events/hierarquiaDivisoes.js';
+
 const GROUPS = {
   tickets: {
     label: 'Tickets',
@@ -208,6 +212,168 @@ export function createSiteNotifications({
     }
 
     return actor;
+  }
+
+  const organizationLeaderTicketCategories =
+    new Set([
+      '1414687963161559180',
+      '1428572742051168378',
+      '1482874296685695118',
+    ]);
+
+  const additionalTicketTeamRoles =
+    new Set([
+      '1352493359897378941',
+      '1414651836861907006',
+    ]);
+
+  async function canSeeTicketNotification(
+    guild,
+    member,
+    item,
+    authorReads
+  ) {
+    const channelId =
+      String(
+        item.id ||
+        item.channelId ||
+        ''
+      );
+
+    const channel =
+      guild.channels.cache.get(
+        channelId
+      );
+
+    if (
+      !channel ||
+      channel.guildId !== guild.id ||
+      !channel.permissionsFor(member)?.has([
+        'ViewChannel',
+        'ReadMessageHistory',
+      ])
+    ) {
+      return false;
+    }
+
+    const openerId =
+      String(
+        channel.topic || ''
+      ).match(
+        /aberto_por:(\d{17,20})/i
+      )?.[1];
+
+    if (
+      !openerId ||
+      openerId === member.id ||
+      openerId === '660311795327828008'
+    ) {
+      return false;
+    }
+
+    if (
+      !authorReads.has(openerId)
+    ) {
+      const cached =
+        guild.members.cache.get(
+          openerId
+        );
+
+      authorReads.set(
+        openerId,
+        cached
+          ? Promise.resolve(cached)
+          : guild.members.fetch({
+              user:
+                openerId,
+              force:
+                false,
+            }).catch(error => {
+              if (
+                Number(error?.code) === 10007
+              ) {
+                return null;
+              }
+
+              throw error;
+            })
+      );
+    }
+
+    const opener =
+      await authorReads.get(
+        openerId
+      );
+
+    if (
+      !opener ||
+      opener.user?.bot ||
+      opener.roles.cache.has(
+        '1262262852949905408'
+      ) ||
+      opener.roles.cache.has(
+        '1352408327983861844'
+      )
+    ) {
+      return false;
+    }
+
+    const teamOpener =
+      isTeamMember(opener) ||
+      opener.roles.cache.some(role =>
+        additionalTicketTeamRoles.has(
+          role.id
+        )
+      );
+
+    if (!teamOpener) {
+      return true;
+    }
+
+    if (
+      organizationLeaderTicketCategories.has(
+        channel.parentId
+      )
+    ) {
+      return false;
+    }
+
+    if (
+      member.id === '660311795327828008'
+    ) {
+      return true;
+    }
+
+    const viewerLevel =
+      getOfficialSantaCreatorsAuthorityLevel(
+        member
+      );
+
+    const openerLevel =
+      getOfficialSantaCreatorsAuthorityLevel(
+        opener
+      );
+
+    if (
+      !Number.isFinite(
+        viewerLevel
+      )
+    ) {
+      return false;
+    }
+
+    if (
+      !Number.isFinite(
+        openerLevel
+      )
+    ) {
+      return viewerLevel <= 1;
+    }
+
+    return (
+      viewerLevel <
+      openerLevel
+    );
   }
 
   async function build(guild, member) {
@@ -986,28 +1152,67 @@ export function createSiteNotifications({
 
       const seen = state.users[actorKey] || {};
 
+      const ticketAuthorReads =
+        new Map();
+
       const data = {
         ...operation.data,
 
-        groups: operation.data.groups.map(group => {
-          const records = group.records.map(item => ({
-            ...item,
-            seen: Boolean(seen[item.key]),
-          }));
+        groups:
+          await Promise.all(
+            operation.data.groups.map(
+              async group => {
+                const visibleRecords = [];
 
-          return {
-            ...group,
-            records,
+                for (
+                  const item
+                  of group.records
+                ) {
+                  if (
+                    group.key === 'tickets' &&
+                    !(
+                      await canSeeTicketNotification(
+                        guild,
+                        member,
+                        item,
+                        ticketAuthorReads
+                      )
+                    )
+                  ) {
+                    continue;
+                  }
 
-            unread: records.filter(item =>
-              !item.seen
-            ).length,
+                  visibleRecords.push(
+                    item
+                  );
+                }
 
-            pending: records.filter(item =>
-              item.pending
-            ).length,
-          };
-        }),
+                const records =
+                  visibleRecords.map(item => ({
+                    ...item,
+                    seen:
+                      Boolean(
+                        seen[item.key]
+                      ),
+                  }));
+
+                return {
+                  ...group,
+                  records,
+
+                  unread:
+                    records.filter(item =>
+                      !item.seen
+                    ).length,
+
+                  pending:
+                    records.filter(item =>
+                      item.pending
+                    ).length,
+                };
+              }
+            )
+          ),
       };
 
       const tokenIssuedAt =
