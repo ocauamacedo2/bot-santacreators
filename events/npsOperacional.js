@@ -5359,20 +5359,16 @@ function buildExecutiveDashboardEmbeds({
         "🏢 Resultado por área"
       )
       .setDescription(
-        "Cada área possui sua própria nota. Isso permite descobrir exatamente onde a operação está forte e onde precisa de acompanhamento."
-      )
-      .addFields(
-        {
-          name:
-            "📋 Áreas avaliadas",
-          value:
-            truncate(
-              categoryLines,
-              4000
-            ),
-          inline:
-            false,
-        }
+        truncate(
+          [
+            "Cada área possui sua própria nota. Isso permite descobrir exatamente onde a operação está forte e onde precisa de acompanhamento.",
+            "",
+            "📋 **Áreas avaliadas**",
+            "",
+            categoryLines,
+          ].join("\n"),
+          4096
+        )
       )
       .setFooter({
         text:
