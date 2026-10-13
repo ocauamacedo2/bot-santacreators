@@ -69,6 +69,10 @@ import {
 
 import { createSiteHubExperience } from "../utils/siteHubExperience.js";
 import { getNpsSiteSnapshot } from "./npsOperacional.js";
+
+import {
+  requestAbsencesSiteSnapshot,
+} from "./ausencias.js";
 import { readFile as readSiteAbsencesFile } from "node:fs/promises";
 import { resolve as resolveSiteAbsencesPath } from "node:path";
 
@@ -485,6 +489,21 @@ export function installSiteHubApi({
 
   const missingSnapshotLogs =
     new Map();
+
+  if (client.isReady()) {
+    requestAbsencesSiteSnapshot(
+      client
+    );
+  } else {
+    client.once(
+      'ready',
+      () => {
+        requestAbsencesSiteSnapshot(
+          client
+        );
+      }
+    );
+  }
 
   const teamRequests = createSiteTeamRequests({
     client,
@@ -1338,6 +1357,14 @@ const experience = createSiteHubExperience({
               )
             );
           } catch (error) {
+            if (
+              error.code === 'ENOENT'
+            ) {
+              requestAbsencesSiteSnapshot(
+                client
+              );
+            }
+
             throw Object.assign(
               new Error(
                 error.code === 'ENOENT'

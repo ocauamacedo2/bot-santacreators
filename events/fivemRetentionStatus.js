@@ -195,6 +195,27 @@ const FIVEM_LAST_PRIORITY_SAFE_SNAPSHOT = {
 
 const FIVEM_SHARED_SNAPSHOT_MAX_AGE_MS = 45 * 1000;
 const FIVEM_DYNAMIC_URL_CACHE = new Map(); // cityKey -> { createdAt, urls }
+const FIVEM_SOURCE_FAILURE_LOGS = new Map();
+
+function reportFivemSourceHttpFailure(city, source, response) {
+  const key = `${city.key}:${source}:${response.status}`;
+  const now = Date.now();
+  const previous = FIVEM_SOURCE_FAILURE_LOGS.get(key);
+
+  if (previous !== undefined && now - previous < 60000) {
+    return;
+  }
+
+  FIVEM_SOURCE_FAILURE_LOGS.set(key, now);
+
+  console.warn("[FIVEM SOURCE HTTP]", {
+    city: city.key,
+    source,
+    status: response.status,
+    retryAfter: response.headers.get("retry-after") || null,
+  });
+}
+
 const FIVEM_DEBUG = false; // 🛑 Desativa os logs de depuração para evitar flood
 const FIVEM_UNRELIABLE_WARN_COOLDOWN_MS = 10 * 60 * 1000; // evita flood de aviso quando a API oscila
 let FIVEM_LAST_UNRELIABLE_WARN_AT = 0;
@@ -2216,6 +2237,12 @@ async function fetchCityStatusFromDynamic(city) {
           );
 
         if (!res.ok) {
+          reportFivemSourceHttpFailure(
+            city,
+            "dynamic.json",
+            res
+          );
+
           return null;
         }
 
@@ -2336,6 +2363,14 @@ async function fetchCityStatus(city) {
 }
    });
 
+   if (!res.ok) {
+     reportFivemSourceHttpFailure(
+       city,
+       "cfx_fallback",
+       res
+     );
+   }
+
    if (res.ok) {
      const data = await res.json().catch(() => null);
      if (data?.Data) {
@@ -2426,7 +2461,7 @@ function isReliableSnapshotForPersistence(snapshot) {
  const onlineCities = cities.filter(c =>
    c?.online === true &&
    c?.stale !== true &&
-   safeNumber(c?.clients, 0) > 0 &&
+   safeNumber(c?.clients, -1) >= 0 &&
    safeNumber(c?.maxClients, 0) > 0
  ).length;
 

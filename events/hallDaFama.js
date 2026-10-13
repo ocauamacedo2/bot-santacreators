@@ -1092,6 +1092,8 @@ const saveHallRankings = (data) => {
     }
   }
 
+  repairConfirmedPlayerOccurrences(data);
+
   const serialized =
     JSON.stringify(
       data,
@@ -1271,6 +1273,25 @@ const loadHallRankings = () => {
     lastUpdatedAt > 0
       ? lastUpdatedAt
       : 0;
+
+  const repaired =
+    repairConfirmedPlayerOccurrences(data);
+
+  if (repaired) {
+    const backupFile =
+      HALL_RANKING_FILE +
+      ".before-confirmed-player-occurrence-v1.bak";
+
+    if (!fs.existsSync(backupFile)) {
+      fs.copyFileSync(
+        HALL_RANKING_FILE,
+        backupFile,
+        fs.constants.COPYFILE_EXCL
+      );
+    }
+
+    saveHallRankings(data);
+  }
 
   return data;
 };
@@ -10699,6 +10720,251 @@ function getPlayerRankingKey(player) {
     return `${finalCityKey}:${normalizeHallKey(finalOrgName)}`;
   }
 
+function getConfirmedPlayerOccurrenceId(
+  playerId,
+  cityKey,
+  eventName,
+  messageId
+) {
+  const sourceId = String(messageId || "").trim();
+
+  if (
+    String(playerId || "").trim() !== "210553" ||
+    cityKey !== "nobre" ||
+    normalizeHallKey(eventName) !== "socializar"
+  ) {
+    return "";
+  }
+
+  const confirmedSourceIds = [
+    "1508314460128018442",
+    "1505811603290062980",
+    "1505802119423332402"
+  ];
+
+  return confirmedSourceIds.includes(sourceId)
+    ? "1505802119423332402"
+    : "";
+}
+
+function recordConfirmedPlayerOccurrenceSource(
+  rankings,
+  playerId,
+  cityKey,
+  eventName,
+  evidence
+) {
+  const occurrenceId = getConfirmedPlayerOccurrenceId(
+    playerId,
+    cityKey,
+    eventName,
+    evidence.messageId
+  );
+
+  if (!occurrenceId) {
+    return false;
+  }
+
+  if (rankings.playerOccurrenceEvidence == null) {
+    rankings.playerOccurrenceEvidence = {};
+  }
+
+  if (
+    typeof rankings.playerOccurrenceEvidence !== "object" ||
+    Array.isArray(rankings.playerOccurrenceEvidence)
+  ) {
+    throw new Error(
+      "O histórico de fontes das ocorrências de jogadores está inválido."
+    );
+  }
+
+  const key = `${cityKey}:${playerId}:${occurrenceId}`;
+
+  if (rankings.playerOccurrenceEvidence[key] == null) {
+    rankings.playerOccurrenceEvidence[key] = {
+      occurrenceId,
+      playerId: String(playerId),
+      cityKey,
+      eventName,
+      confirmedByUser: true,
+      reason:
+        "Hall e dois pagamentos identificados pelo usuário como a mesma vitória.",
+      declaredSourceIds: [
+        "1508314460128018442",
+        "1505811603290062980",
+        "1505802119423332402"
+      ],
+      sources: {}
+    };
+  }
+
+  const occurrence = rankings.playerOccurrenceEvidence[key];
+
+  if (
+    !occurrence ||
+    typeof occurrence !== "object" ||
+    Array.isArray(occurrence) ||
+    !occurrence.sources ||
+    typeof occurrence.sources !== "object" ||
+    Array.isArray(occurrence.sources)
+  ) {
+    throw new Error(
+      "As fontes da ocorrência confirmada do Guzzman estão inválidas."
+    );
+  }
+
+  const sourceId = String(evidence.messageId || "").trim();
+
+  if (
+    Object.prototype.hasOwnProperty.call(
+      occurrence.sources,
+      sourceId
+    )
+  ) {
+    return false;
+  }
+
+  occurrence.sources[sourceId] = {
+    ...evidence,
+    messageId: sourceId,
+    playerId: String(playerId),
+    cityKey,
+    eventName
+  };
+
+  return true;
+}
+
+function repairConfirmedPlayerOccurrences(rankings) {
+  let changed = false;
+
+  const playerMaps = [
+    rankings.players || {}
+  ];
+
+  for (
+    const seasons of Object.values(
+      rankings.playerRankingHistory || {}
+    )
+  ) {
+    if (!Array.isArray(seasons)) {
+      continue;
+    }
+
+    for (const season of seasons) {
+      playerMaps.push(season.players || {});
+    }
+  }
+
+  for (const players of playerMaps) {
+    for (const player of Object.values(players)) {
+      if (!Array.isArray(player.halls)) {
+        continue;
+      }
+
+      const matching = player.halls.filter(hall =>
+        Boolean(
+          getConfirmedPlayerOccurrenceId(
+            player.playerId,
+            hall.cityKey || player.cityKey,
+            hall.eventName,
+            hall.messageId
+          )
+        )
+      );
+
+      if (!matching.length) {
+        continue;
+      }
+
+      for (const hall of matching) {
+        const recorded = recordConfirmedPlayerOccurrenceSource(
+          rankings,
+          player.playerId,
+          hall.cityKey || player.cityKey,
+          hall.eventName,
+          hall
+        );
+
+        changed = recorded || changed;
+      }
+
+      if (matching.length < 2) {
+        continue;
+      }
+
+      const keep = matching.find(
+        hall =>
+          String(hall.messageId) ===
+          "1505802119423332402"
+      ) || matching[0];
+
+      const removed = matching.filter(
+        hall => hall !== keep
+      );
+
+      const decrements = new Map();
+
+      for (const hall of removed) {
+        const eventName = hall.eventName;
+
+        decrements.set(
+          eventName,
+          (decrements.get(eventName) || 0) + 1
+        );
+      }
+
+      const total = Number(player.total);
+
+      if (
+        !Number.isSafeInteger(total) ||
+        total < removed.length ||
+        !player.events ||
+        typeof player.events !== "object" ||
+        Array.isArray(player.events)
+      ) {
+        throw new Error(
+          "Não foi possível reconciliar os totais do Guzzman com segurança."
+        );
+      }
+
+      for (const [eventName, amount] of decrements) {
+        const count = Number(player.events[eventName]);
+
+        if (
+          !Number.isSafeInteger(count) ||
+          count < amount
+        ) {
+          throw new Error(
+            "O detalhamento por evento do Guzzman não corresponde às fontes armazenadas."
+          );
+        }
+      }
+
+      player.halls = player.halls.filter(
+        hall =>
+          !matching.includes(hall) ||
+          hall === keep
+      );
+
+      player.total = total - removed.length;
+
+      for (const [eventName, amount] of decrements) {
+        player.events[eventName] =
+          Number(player.events[eventName]) - amount;
+
+        if (player.events[eventName] === 0) {
+          delete player.events[eventName];
+        }
+      }
+
+      changed = true;
+    }
+  }
+
+  return changed;
+}
+
   function dedupeHallWinners(winners = []) {
     const seenPlayers = new Set();
     const seenOrgs = new Set();
@@ -11302,8 +11568,30 @@ const activeSeason =
       cityKey
     );
 
+  const confirmedOccurrenceId =
+    getConfirmedPlayerOccurrenceId(
+      playerId,
+      cityKey,
+      eventName,
+      hallMeta.messageId
+    );
+
+  if (confirmedOccurrenceId) {
+    recordConfirmedPlayerOccurrenceSource(
+      rankings,
+      playerId,
+      cityKey,
+      eventName,
+      {
+        ...hallMeta,
+        playerName
+      }
+    );
+  }
+
   const uniqueKey =
     `${
+      confirmedOccurrenceId ||
       hallMeta.messageId ||
       hallMeta.jumpUrl ||
       hallMeta.createdTimestamp
@@ -11333,8 +11621,17 @@ const activeSeason =
         rankings.players[key].seasonId ||
         "";
 
+      const storedOccurrenceId =
+        getConfirmedPlayerOccurrenceId(
+          playerId,
+          hallCityKey,
+          hallEventName,
+          hall.messageId
+        );
+
       const hallUniqueKey =
         `${
+          storedOccurrenceId ||
           hall.messageId ||
           hall.jumpUrl ||
           hall.at
@@ -23769,10 +24066,21 @@ function getLifetimeHallPlayers(rankings) {
       const hall of
       source.halls || []
     ) {
+      const confirmedOccurrenceId =
+        getConfirmedPlayerOccurrenceId(
+          source.playerId,
+          hall.cityKey ||
+            source.cityKey ||
+            '',
+          hall.eventName,
+          hall.messageId
+        );
+
       const evidenceKey =
         hall.messageId
           ? [
-              hall.messageId,
+              confirmedOccurrenceId ||
+                hall.messageId,
               hall.eventName || '',
               hall.cityKey ||
                 source.cityKey ||
