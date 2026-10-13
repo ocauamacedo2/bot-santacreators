@@ -11664,6 +11664,18 @@ const activeSeason =
       messageId:
         hallMeta.messageId,
 
+      channelId:
+        hallMeta.channelId ||
+        "",
+
+      guildId:
+        hallMeta.guildId ||
+        "",
+
+      jumpUrl:
+        hallMeta.jumpUrl ||
+        "",
+
       eventName,
 
       cityKey,
@@ -11675,9 +11687,37 @@ const activeSeason =
         hallMeta.evidenceSource ||
         "",
 
+      evidenceConfidence:
+        Number(
+          hallMeta.evidenceConfidence ||
+          0
+        ),
+
+      eventDateKey:
+        hallMeta.eventDateKey ||
+        "",
+
+      paymentEventTimestamp:
+        Number(
+          hallMeta.paymentEventTimestamp ||
+          0
+        ),
+
+      paymentOriginalCreatedTimestamp:
+        Number(
+          hallMeta.paymentOriginalCreatedTimestamp ||
+          0
+        ),
+
       historicalVictoryTimestamp:
         Number(
           hallMeta.historicalVictoryTimestamp ||
+          0
+        ),
+
+      createdTimestamp:
+        Number(
+          hallMeta.createdTimestamp ||
           0
         ),
 
