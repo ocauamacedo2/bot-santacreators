@@ -1067,6 +1067,30 @@ async function recoverChecklistChecksFromAuditChannel(client, weekKey, responsav
     );
   }
 
+  const expectedGuildId = String(
+    resolveMainGuild(client)?.id ||
+    ""
+  );
+
+  const actualGuildId = String(
+    channel.guildId ||
+    channel.guild?.id ||
+    ""
+  );
+
+  if (
+    !expectedGuildId ||
+    actualGuildId !== expectedGuildId
+  ) {
+    throw checklistError(
+      "A recuperação do checklist foi interrompida: o canal de auditoria pertence a outro servidor ou o servidor esperado não foi identificado. " +
+      `channelId=${LOG_CHANNEL_ID}; ` +
+      `expectedGuildId=${expectedGuildId || "não identificado"}; ` +
+      `actualGuildId=${actualGuildId || "não identificado"}`,
+      503
+    );
+  }
+
   const recovered = cloneJSONSafe(responsaveis || {}, {});
   const auditActions = [];
   const visited = new Set();
@@ -3304,19 +3328,55 @@ async function logAudit(
   isBulk = false,
   details = {}
 ) {
-  const channel = await client.channels.fetch(
-    LOG_CHANNEL_ID
+  let channel;
+
+  try {
+    channel = await client.channels.fetch(
+      LOG_CHANNEL_ID
+    );
+  } catch (error) {
+    throw new Error(
+      "Não foi possível buscar o canal de auditoria do checklist. " +
+      `channelId=${LOG_CHANNEL_ID}; ` +
+      `discordCode=${error.code || "não informado"}; ` +
+      `motivo=${error.message}`,
+      { cause: error }
+    );
+  }
+
+  if (
+    !channel ||
+    !channel.isTextBased() ||
+    typeof channel.send !== "function"
+  ) {
+    throw new Error(
+      "O canal configurado não permite enviar a auditoria do checklist. " +
+      `channelId=${LOG_CHANNEL_ID}; ` +
+      `channelType=${channel?.type ?? "não encontrado"}`
+    );
+  }
+
+  const actualGuildId = String(
+    channel.guildId ||
+    channel.guild?.id ||
+    ""
+  );
+
+  const expectedGuildId = String(
+    details.guildId ||
+    resolveMainGuild(client)?.id ||
+    ""
   );
 
   if (
-    !channel?.isTextBased() ||
-    (
-      details.guildId &&
-      channel.guildId !== details.guildId
-    )
+    !expectedGuildId ||
+    actualGuildId !== expectedGuildId
   ) {
     throw new Error(
-      'Canal de auditoria do checklist indisponível ou de outro servidor.'
+      "O canal de auditoria do checklist não pertence ao servidor esperado. " +
+      `channelId=${LOG_CHANNEL_ID}; ` +
+      `expectedGuildId=${expectedGuildId || "não identificado"}; ` +
+      `actualGuildId=${actualGuildId || "não identificado"}`
     );
   }
 
