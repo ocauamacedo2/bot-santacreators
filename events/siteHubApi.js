@@ -68,6 +68,9 @@ import {
 } from "./hierarquiaDivisoes.js";
 
 import { createSiteHubExperience } from "../utils/siteHubExperience.js";
+import { getNpsSiteSnapshot } from "./npsOperacional.js";
+import { readFile as readSiteAbsencesFile } from "node:fs/promises";
+import { resolve as resolveSiteAbsencesPath } from "node:path";
 
 import {
   getWeeklyRankingSiteSnapshot,
@@ -131,6 +134,15 @@ const GUILD_ID =
 
 
 const CHANNELS = {
+  absences: [
+    "1425945370621640704",
+    "1520197927614677143",
+  ],
+
+  nps: [
+    "1534315364152905959",
+  ],
+
   retention: [
     "1501321157259956244",
     "1513967298690420876",
@@ -351,6 +363,16 @@ async function canAccessSiteModule(
   }
 
   if (moduleKey === 'quiz') {
+    return true;
+  }
+
+  if (
+    isCentralMember &&
+    (
+      moduleKey === 'events' ||
+      moduleKey === 'nps'
+    )
+  ) {
     return true;
   }
 
@@ -1282,6 +1304,110 @@ const experience = createSiteHubExperience({
               action,
               payload,
             })
+          );
+        }
+
+        if (action === 'absences.snapshot') {
+          await assertModuleView(
+            client,
+            member,
+            'absences'
+          );
+
+          if (guild.id !== '1262262852782129183') {
+            throw Object.assign(
+              new Error('Ausências indisponíveis neste servidor.'),
+              { status: 403 }
+            );
+          }
+
+          let stored;
+
+          try {
+            stored = JSON.parse(
+              await readSiteAbsencesFile(
+                resolveSiteAbsencesPath(
+                  process.cwd(),
+                  'data',
+                  'ausencias_dashboard.json'
+                ),
+                'utf8'
+              )
+            );
+          } catch (error) {
+            throw Object.assign(
+              new Error(
+                error.code === 'ENOENT'
+                  ? 'O bot ainda não gerou o snapshot de ausências.'
+                  : 'Não foi possível ler o snapshot de ausências.'
+              ),
+              {
+                status: 503,
+                cause: error
+              }
+            );
+          }
+
+          if (
+            stored?.version !== 1 ||
+            !stored.months ||
+            typeof stored.months !== 'object' ||
+            Array.isArray(stored.months)
+          ) {
+            throw Object.assign(
+              new Error('O snapshot de ausências está inválido.'),
+              { status: 503 }
+            );
+          }
+
+          const months = Object.keys(stored.months)
+            .filter(key =>
+              /^\d{4}-(0[1-9]|1[0-2])$/.test(key)
+            )
+            .sort()
+            .reverse();
+
+          const requestedMonth = String(
+            payload.month || months[0] || ''
+          );
+
+          if (
+            !months.includes(requestedMonth)
+          ) {
+            throw Object.assign(
+              new Error('Não há snapshot disponível para este mês.'),
+              { status: 404 }
+            );
+          }
+
+          const month = stored.months[requestedMonth];
+
+          if (
+            !month ||
+            month.monthKey !== requestedMonth ||
+            !Array.isArray(month.ranking)
+          ) {
+            throw Object.assign(
+              new Error('Os dados deste mês estão inválidos.'),
+              { status: 503 }
+            );
+          }
+
+          return res.json({
+            months,
+            month
+          });
+        }
+
+        if (action === 'nps.snapshot') {
+          await assertModuleView(
+            client,
+            member,
+            'nps'
+          );
+
+          return res.json(
+            getNpsSiteSnapshot({ guild })
           );
         }
 
@@ -2282,35 +2408,105 @@ if (await experience.handle({ guild, member, action, payload, res })) return;
               /[\u0300-\u036f]/g,
               ''
             )
+            .replace(
+              /\s+/g,
+              ' '
+            )
             .trim()
             .toLocaleLowerCase('pt-BR');
 
-          const repeated = new Set();
+          const eventsByName =
+            new Map();
 
           for (const event of catalog.events) {
-            const name = normalize(event.name);
+            const name =
+              normalize(
+                event.name
+              );
 
             if (!name) {
               continue;
             }
 
-            if (Object.hasOwn(eventCovers, name)) {
-              repeated.add(name);
+            let group =
+              eventsByName.get(name);
+
+            if (!group) {
+              group = {
+                count:
+                  0,
+                covers:
+                  new Set(),
+                publication:
+                  null,
+              };
+
+              eventsByName.set(
+                name,
+                group
+              );
             }
 
-            eventCovers[name] = event.cover || '';
+            group.count += 1;
 
-            if (event.publicationOnline && event.id) {
-              eventPublications[name] = {
-                id: String(event.id),
-                name: event.name
+            if (
+              typeof event.cover === 'string'
+            ) {
+              try {
+                const imageUrl =
+                  new URL(
+                    event.cover.trim()
+                  );
+
+                if (
+                  imageUrl.protocol === 'https:'
+                ) {
+                  group.covers.add(
+                    imageUrl.href
+                  );
+                }
+              } catch {
+                // Uma URL inválida não elimina as outras capas.
+              }
+            }
+
+            if (
+              event.publicationOnline &&
+              event.id
+            ) {
+              group.publication = {
+                id:
+                  String(event.id),
+                name:
+                  event.name,
               };
             }
           }
 
-          for (const name of repeated) {
-            delete eventCovers[name];
-            delete eventPublications[name];
+          for (
+            const [name, group]
+            of eventsByName
+          ) {
+            if (
+              group.covers.size === 1
+            ) {
+              eventCovers[name] =
+                [...group.covers][0];
+            } else if (
+              group.covers.size > 1
+            ) {
+              eventWarnings.push(
+                `Há imagens diferentes cadastradas para "${name}". A capa não foi escolhida automaticamente.`
+              );
+            }
+
+            if (
+              group.count === 1 &&
+              group.publication
+            ) {
+              eventPublications[name] =
+                group.publication;
+            }
           }
         } catch (error) {
           console.warn(

@@ -250,6 +250,10 @@ async function resolveMemberPlainName(guild, userId) {
 // PERSISTÊNCIA ATÔMICA
 // ===============================
 function loadJSON(file, fallback = {}) {
+  if (path.resolve(file) === path.resolve(CHECKLIST_FILE)) {
+    return checklistReadStrict();
+  }
+
   try {
     if (!fs.existsSync(file)) return fallback;
     return JSON.parse(fs.readFileSync(file, "utf8"));
@@ -265,6 +269,11 @@ function cloneJSONSafe(value, fallback = {}) {
 }
 
 function saveJSON(file, data) {
+  if (path.resolve(file) === path.resolve(CHECKLIST_FILE)) {
+    checklistWriteStrict(data);
+    return;
+  }
+
   try {
     const dir = path.dirname(file);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
@@ -862,7 +871,29 @@ function parseChecklistAuditEmbed(message, weekKey) {
 
   const respId = extractFirstMentionId(respValue);
   const actorId = extractFirstMentionId(actorValue);
-  const status = String(actionValue || "").includes("Marcou como Conferido");
+
+  const normalizedAction = String(actionValue || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+
+  let status;
+
+  if (
+    normalizedAction === "✅ marcou como conferido" ||
+    normalizedAction === "marcou como conferido"
+  ) {
+    status = true;
+  } else if (
+    normalizedAction === "❌ marcou como pendente" ||
+    normalizedAction === "marcou como pendente"
+  ) {
+    status = false;
+  } else {
+    return null;
+  }
 
   if (!respId) return null;
 
@@ -889,37 +920,126 @@ function parseChecklistAuditEmbed(message, weekKey) {
 }
 
 async function recoverChecklistChecksFromAuditChannel(client, weekKey, responsaveis = {}) {
-  const channel = await client.channels.fetch(LOG_CHANNEL_ID).catch(() => null);
+  const startedAt = Date.now();
+  const weekStart = getWeekSnapshotCutoffMs(weekKey);
+
+  if (!weekStart) {
+    throw checklistError(
+      'Semana inválida para recuperação do checklist.',
+      503
+    );
+  }
+
+  const channel = await client.channels.fetch(LOG_CHANNEL_ID);
+
   if (!channel?.messages?.fetch) {
-    console.warn("[ChecklistLogs] Canal de auditoria não encontrado para recuperação.");
-    return responsaveis;
+    throw checklistError(
+      'O canal de auditoria do checklist está indisponível. Nenhuma recuperação foi gravada.',
+      503
+    );
   }
 
   const recovered = cloneJSONSafe(responsaveis || {}, {});
   const auditActions = [];
+  const visited = new Set();
 
   let before = null;
+  let complete = false;
 
-  for (let page = 0; page < 10; page++) {
-    const fetched = await channel.messages.fetch({
-      limit: 100,
-      ...(before ? { before } : {})
-    }).catch(() => null);
-
-    if (!fetched || fetched.size === 0) break;
-
-    const messages = [...fetched.values()];
-    before = messages[messages.length - 1]?.id || null;
-
-    for (const msg of messages) {
-      const parsed = parseChecklistAuditEmbed(msg, weekKey);
-      if (parsed) auditActions.push(parsed);
+  for (let page = 0; page < 50; page++) {
+    if (Date.now() - startedAt >= 60000) {
+      throw checklistError(
+        'A recuperação excedeu o tempo disponível. Nenhuma recuperação parcial foi gravada.',
+        503
+      );
     }
 
-    if (fetched.size < 100) break;
+    let timer;
+
+    const fetched = await Promise.race([
+      channel.messages.fetch({
+        limit: 100,
+        ...(before ? { before } : {})
+      }),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => {
+          reject(checklistError(
+            'O Discord demorou para responder à recuperação. Nenhuma recuperação parcial foi gravada.',
+            503
+          ));
+        }, 20000);
+      })
+    ]).finally(() => {
+      clearTimeout(timer);
+    });
+
+    if (fetched.size === 0) {
+      complete = true;
+      break;
+    }
+
+    const messages = [...fetched.values()].sort((a, b) =>
+      BigInt(a.id) < BigInt(b.id)
+        ? -1
+        : BigInt(a.id) > BigInt(b.id)
+          ? 1
+          : 0
+    );
+
+    const oldest = messages[0];
+
+    if (
+      !oldest ||
+      (
+        before &&
+        BigInt(oldest.id) >= BigInt(before)
+      )
+    ) {
+      throw checklistError(
+        'A paginação da auditoria não avançou. Nenhuma recuperação parcial foi gravada.',
+        503
+      );
+    }
+
+    before = oldest.id;
+
+    for (const message of messages) {
+      if (visited.has(message.id)) continue;
+      visited.add(message.id);
+
+      if (message.createdTimestamp < weekStart) continue;
+      if (message.author?.id !== client.user?.id) continue;
+
+      const parsed = parseChecklistAuditEmbed(message, weekKey);
+
+      if (parsed) {
+        auditActions.push(parsed);
+      }
+    }
+
+    if (
+      oldest.createdTimestamp < weekStart ||
+      fetched.size < 100
+    ) {
+      complete = true;
+      break;
+    }
   }
 
-  auditActions.sort((a, b) => a.createdTimestamp - b.createdTimestamp);
+  if (!complete) {
+    throw checklistError(
+      'A auditoria da semana excedeu 5.000 mensagens. Nenhuma recuperação parcial foi gravada.',
+      503
+    );
+  }
+
+  auditActions.sort((a, b) =>
+    BigInt(a.messageId) < BigInt(b.messageId)
+      ? -1
+      : BigInt(a.messageId) > BigInt(b.messageId)
+        ? 1
+        : 0
+  );
 
   for (const action of auditActions) {
     const respData = recovered[action.respId];
@@ -943,7 +1063,10 @@ async function recoverChecklistChecksFromAuditChannel(client, weekKey, responsav
     memberData.checkedBy = action.status ? action.actorId : null;
   }
 
-  console.log(`[ChecklistLogs] Recuperação por auditoria aplicada: ${auditActions.length} ações da semana ${weekKey}.`);
+  console.log(
+    `[ChecklistLogs] Recuperação concluída: ${auditActions.length} ações reconhecidas da semana ${weekKey}; ${visited.size} mensagens examinadas.`
+  );
+
   return recovered;
 }
 
@@ -998,11 +1121,57 @@ async function syncWeekDataLive(client, force = false) {
 
   const currentWeek = checklist.weeks[weekKey];
 
-  // 🔒 Depois que o snapshot semanal foi criado, ele NÃO é reconstruído.
-  // Trocas de responsável durante a semana são aplicadas pontualmente pelo evento
-  // gi:responsavel_transferido, sem puxar membros novos para a semana em andamento.
+  // 🔒 A lista congelada mantém exatamente os vínculos já existentes.
+  // Uma recuperação forçada restaura apenas os estados das conferências.
   if (currentWeek.snapshotLocked === true) {
-    return checklist;
+    if (!force) {
+      return checklist;
+    }
+
+    const originalRevision = createHash('sha256')
+      .update(JSON.stringify(currentWeek.responsaveis || {}))
+      .digest('hex');
+
+    const originalDecisionAt = Number(
+      checklist.siteDecisionAt || 0
+    );
+
+    const recoveredResponsaveis =
+      await recoverChecklistChecksFromAuditChannel(
+        client,
+        weekKey,
+        currentWeek.responsaveis || {}
+      );
+
+    const latest = checklistReadStrict();
+    const latestWeek = latest.weeks[weekKey];
+
+    const latestRevision = createHash('sha256')
+      .update(JSON.stringify(latestWeek?.responsaveis || {}))
+      .digest('hex');
+
+    if (
+      weekKey !== weekKeyFromDateSP() ||
+      latestWeek?.snapshotLocked !== true ||
+      latestRevision !== originalRevision ||
+      Number(latest.siteDecisionAt || 0) !== originalDecisionAt ||
+      (
+        Array.isArray(latest.siteAuditOutbox) &&
+        latest.siteAuditOutbox.length > 0
+      )
+    ) {
+      throw checklistError(
+        'O checklist mudou ou possui auditorias pendentes. A recuperação não substituiu os dados atuais.',
+        409
+      );
+    }
+
+    latestWeek.responsaveis = recoveredResponsaveis;
+    latestWeek.lastSyncedAt = Date.now();
+
+    checklistWriteStrict(latest);
+
+    return latest;
   }
 
   // ✅ THROTTLE: Se sincronizou há menos de 5 minutos e não for um "Sincronizar" forçado,
@@ -3121,12 +3290,34 @@ export async function checklistOnReady(client) {
   const checklist = readChecklistWeek(weekKey);
   const currentWeekData = checklist.weeks[weekKey];
 
-  // ✅ Recuperação segura:
-  // Se o bot estava desligado no domingo às 00:00, cria a lista uma única vez
-  // quando voltar. Se a lista já estiver congelada, o restart não altera nada.
-  if (currentWeekData?.snapshotLocked !== true) {
+  const checkedCount = Object.values(
+    currentWeekData?.responsaveis || {}
+  )
+    .flatMap(group => Object.values(group?.members || {}))
+    .filter(record => record?.checked === true)
+    .length;
+
+  const hasPendingAudits =
+    Array.isArray(checklist.siteAuditOutbox) &&
+    checklist.siteAuditOutbox.length > 0;
+
+  const shouldRecoverEmptyState =
+    currentWeekData?.snapshotLocked === true &&
+    checkedCount === 0 &&
+    Number(checklist.siteDecisionAt || 0) === 0 &&
+    !hasPendingAudits;
+
+  // Cria a semana ausente ou tenta recuperar uma lista congelada zerada.
+  // A recuperação não adiciona vínculos à lista já congelada.
+  if (
+    currentWeekData?.snapshotLocked !== true ||
+    shouldRecoverEmptyState
+  ) {
     await syncWeekData(client, true).catch((error) => {
-      console.error("[ChecklistLogs] Falha ao criar a lista semanal:", error);
+      console.error(
+        "[ChecklistLogs] Falha ao criar ou recuperar a lista semanal:",
+        error
+      );
     });
   }
 

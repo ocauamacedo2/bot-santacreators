@@ -1290,11 +1290,37 @@ while (atual.getTime() <= fimLimitado.getTime()) {
       ? await resolverNomeDashboardAusencias(client, canalDestino.guild, rankingId)
       : limparNomeRanking(String(rankingId).replace('nome:', ''));
 
+    const membro =
+      isDiscordUser
+        ? canalDestino.guild.members.cache.get(
+            String(rankingId)
+          )
+        : null;
+
+    const usuario =
+      isDiscordUser
+        ? client.users.cache.get(
+            String(rankingId)
+          )
+        : null;
+
+    const dias =
+      [...dados.dias].sort();
+
     rankingOrdenado.push({
       userId: rankingId,
       nome: nomeResolvido,
       total: dados.total,
       semanas: dados.semanas,
+      dias,
+      avatar:
+        membro?.displayAvatarURL({
+          size: 128
+        }) ||
+        usuario?.displayAvatarURL({
+          size: 128
+        }) ||
+        null,
     });
   }
 

@@ -3,6 +3,7 @@ import { resolve, join } from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
 import { PermissionFlagsBits } from 'discord.js';
 import { createShareAuditQueue } from './shareAuditQueue.js';
+import { isOfficialSantaCreatorsTeamMember } from '../events/hierarquiaDivisoes.js';
 
 const MAIN = '1457573495952248883';
 const MENUS = '1457577651152883797';
@@ -87,17 +88,75 @@ export function createSiteEventsLibrary({ client }) {
   };
 
   async function read() {
-    try {
-      return JSON.parse(await readFile(file, 'utf8'));
-    } catch (error) {
-      if (error.code !== 'ENOENT') throw error;
+    let state;
 
-      return {
-        items: {},
-        hidden: {},
-        covers: {}
-      };
+    try {
+      state = JSON.parse(await readFile(file, 'utf8'));
+    } catch (error) {
+      if (error.code === 'ENOENT') {
+        return {
+          items: {},
+          hidden: {},
+          covers: {}
+        };
+      }
+
+      if (error instanceof SyntaxError) {
+        throw fail(
+          503,
+          'O JSON da biblioteca de eventos está inválido. Nenhum dado foi alterado.'
+        );
+      }
+
+      throw error;
     }
+
+    if (
+      !state ||
+      typeof state !== 'object' ||
+      Array.isArray(state)
+    ) {
+      throw fail(
+        503,
+        'A estrutura da biblioteca de eventos está inválida. Nenhum dado foi alterado.'
+      );
+    }
+
+    for (const key of ['items', 'hidden', 'covers']) {
+      if (!Object.hasOwn(state, key)) {
+        state[key] = {};
+        continue;
+      }
+
+      if (
+        !state[key] ||
+        typeof state[key] !== 'object' ||
+        Array.isArray(state[key])
+      ) {
+        throw fail(
+          503,
+          'O campo ' + key + ' da biblioteca de eventos está inválido. Nenhum dado foi alterado.'
+        );
+      }
+    }
+
+    for (const key of ['targets', 'names', 'publications', 'localEvents', 'removedEvents']) {
+      if (
+        Object.hasOwn(state, key) &&
+        (
+          !state[key] ||
+          typeof state[key] !== 'object' ||
+          Array.isArray(state[key])
+        )
+      ) {
+        throw fail(
+          503,
+          'O campo ' + key + ' da biblioteca de eventos está inválido. Nenhum dado foi alterado.'
+        );
+      }
+    }
+
+    return state;
   }
 
   async function save(state) {
@@ -117,7 +176,28 @@ export function createSiteEventsLibrary({ client }) {
     member.id === '660311795327828008' ||
     EDIT_ROLES.some(id => member.roles.cache.has(id));
 
+  const mayDeleteEvent = member =>
+    member?.id === '660311795327828008' ||
+    [
+      '1262262852949905408',
+      '1352408327983861844',
+      '1262262852949905409',
+      '1352407252216184833'
+    ].some(id => member?.roles?.cache?.has(id));
+
+  const mayReadLibrary = (guild, member) =>
+    member?.guild?.id === guild.id &&
+    member.user?.bot !== true &&
+    (
+      mayEdit(member) ||
+      isOfficialSantaCreatorsTeamMember(member)
+    );
+
   async function channel(guild, member, id, parent = null) {
+    if (!member || member.guild?.id !== guild.id) {
+      throw fail(403, 'Membro inválido para este servidor.');
+    }
+
     const value =
       guild.channels.cache.get(id) ||
       await guild.channels.fetch(id);
@@ -131,10 +211,32 @@ export function createSiteEventsLibrary({ client }) {
       throw fail(403, 'Canal de evento inválido ou privado.');
     }
 
+    const cdsChannelId = String(
+      process.env.SANTA_EVENTS_CDS_CHANNEL_ID || ''
+    ).trim();
+
+    const isLibraryChannel =
+      value.id === MAIN ||
+      value.id === MENUS ||
+      (
+        value.type === 11 &&
+        value.parentId === MENUS
+      ) ||
+      (
+        cdsChannelId !== '' &&
+        value.id === cdsChannelId
+      );
+
+    const siteReadAllowed =
+      isLibraryChannel &&
+      mayReadLibrary(guild, member);
+
     const permissions = value.permissionsFor(member);
 
     if (
-      member.id !== '660311795327828008' && (
+      member.id !== '660311795327828008' &&
+      !siteReadAllowed &&
+      (
         !permissions?.has(PermissionFlagsBits.ViewChannel) ||
         !permissions.has(PermissionFlagsBits.ReadMessageHistory)
       )
@@ -178,6 +280,26 @@ export function createSiteEventsLibrary({ client }) {
       }
     }
     const events = [...grouped.values()];
+    const libraryState = await read();
+
+    for (const [id, record] of Object.entries(
+      libraryState.localEvents || {}
+    )) {
+      if (
+        record?.guildId !== guild.id ||
+        libraryState.removedEvents?.[guild.id + ':' + id]
+      ) {
+        continue;
+      }
+
+      events.push({
+        id,
+        name: record.name,
+        aliasIds: [id],
+        areas: {},
+        siteCreated: true
+      });
+    }
 
     const cds = String(
       process.env.SANTA_EVENTS_CDS_CHANNEL_ID || ''
@@ -199,7 +321,11 @@ export function createSiteEventsLibrary({ client }) {
       }
     }
 
-    return events;
+    return events.filter(event =>
+      !(event.aliasIds || [event.id]).some(id =>
+        libraryState.removedEvents?.[guild.id + ':' + id]
+      )
+    );
   }
 
   async function eventSources(guild, member, event, section) {
@@ -347,7 +473,11 @@ export function createSiteEventsLibrary({ client }) {
           ? state.covers[guild.id + ':' + event.id]
           : (event.aliasIds || [event.id]).map(id => state.covers[guild.id + ':' + id]).find(Boolean) || ''
       })),
-      rights: { edit: mayEdit(member) },
+      rights: {
+        edit: mayEdit(member),
+        createEvent: mayEdit(member),
+        deleteEvent: mayDeleteEvent(member)
+      },
       sections: {},
       warnings: []
     };
@@ -563,6 +693,18 @@ export function createSiteEventsLibrary({ client }) {
   ) {
     return serial(
       async () => {
+        const decision = consumeEventDecision(
+          guild,
+          member,
+          'events.publish',
+          payload
+        );
+
+        payload = {
+          ...payload,
+          ...decision
+        };
+
         const data =
           await snapshot(
             guild,
@@ -806,6 +948,140 @@ export function createSiteEventsLibrary({ client }) {
     );
   }
 
+  function eventDecisionValue(operation, payload) {
+    if (operation === 'events.eventCreate') {
+      const name = String(payload.name || '').trim();
+
+      if (
+        !name ||
+        name.length > 120
+      ) {
+        throw fail(400, 'Use um nome de até 120 caracteres.');
+      }
+
+      return {
+        name,
+        cover: payload.cover
+          ? eventMediaUrl(payload.cover)
+          : ''
+      };
+    }
+
+    if (operation === 'events.eventDelete') {
+      const eventId = String(payload.eventId || '').trim();
+
+      if (
+        !eventId ||
+        eventId === 'cds'
+      ) {
+        throw fail(400, 'Evento inválido para exclusão.');
+      }
+
+      return {
+        eventId,
+        revision: String(payload.revision || '')
+      };
+    }
+
+    const eventId = String(payload.eventId || '').trim();
+
+    if (!eventId) {
+      throw fail(400, 'Informe o evento.');
+    }
+
+    if (operation === 'events.metadata') {
+      const field = String(payload.field || '');
+
+      if (!['name', 'cover'].includes(field)) {
+        throw fail(400, 'Campo de evento inválido.');
+      }
+
+      const value = String(payload.value || '').trim();
+
+      if (
+        field === 'name' &&
+        (
+          !value ||
+          value.length > 120
+        )
+      ) {
+        throw fail(400, 'Use um nome de até 120 caracteres.');
+      }
+
+      return {
+        eventId,
+        field,
+        value:
+          field === 'cover' && value
+            ? eventMediaUrl(value)
+            : value,
+        revision: String(payload.revision || '')
+      };
+    }
+
+    if (operation === 'events.publish') {
+      const status = String(payload.status || '');
+
+      if (!['online', 'offline'].includes(status)) {
+        throw fail(400, 'Estado de publicação inválido.');
+      }
+
+      return {
+        eventId,
+        status,
+        rulesRevision: String(payload.rulesRevision || '')
+      };
+    }
+
+    throw fail(400, 'Operação de confirmação inválida.');
+  }
+
+  function issueEventDecision(guild, member, operation, payload) {
+    const value = eventDecisionValue(operation, payload);
+
+    for (const [key, item] of confirmations) {
+      if (item.expires < Date.now()) {
+        confirmations.delete(key);
+      }
+    }
+
+    if (confirmations.size >= 1000) {
+      throw fail(429, 'Há muitas confirmações pendentes.');
+    }
+
+    const token = randomUUID();
+
+    confirmations.set(token, {
+      guild: guild.id,
+      actor: member.id,
+      operation,
+      hash: digest(value),
+      expires: Date.now() + 60000
+    });
+
+    return { token };
+  }
+
+  function consumeEventDecision(guild, member, operation, payload) {
+    const value = eventDecisionValue(operation, payload);
+    const confirmation = confirmations.get(payload.confirmation);
+
+    if (
+      !confirmation ||
+      confirmation.guild !== guild.id ||
+      confirmation.actor !== member.id ||
+      confirmation.operation !== operation ||
+      confirmation.hash !== digest(value) ||
+      confirmation.expires < Date.now()
+    ) {
+      throw fail(409, 'Confirme novamente esta alteração.');
+    }
+
+    confirmations.delete(payload.confirmation);
+
+    return value;
+  }
+
   async function handle({ guild, member, action, payload = {} }) {
     if (
       action ===
@@ -831,23 +1107,197 @@ export function createSiteEventsLibrary({ client }) {
       );
     }
 
+    if (
+      action === 'events.confirm' &&
+      [
+        'events.metadata',
+        'events.publish',
+        'events.eventCreate',
+        'events.eventDelete'
+      ].includes(payload.operation)
+    ) {
+      if (
+        payload.operation === 'events.eventDelete' &&
+        !mayDeleteEvent(member)
+      ) {
+        throw fail(
+          403,
+          'Somente os responsáveis autorizados podem excluir eventos.'
+        );
+      }
+
+      return issueEventDecision(
+        guild,
+        member,
+        payload.operation,
+        payload
+      );
+    }
+
+    if (action === 'events.eventCreate') {
+      return serial(async () => {
+        const decision = consumeEventDecision(
+          guild,
+          member,
+          'events.eventCreate',
+          payload
+        );
+
+        const current = await snapshot(guild, member, {});
+
+        const normalizeName = value =>
+          String(value || '')
+            .normalize('NFD')
+            .replace(/[\u0300-\u036f]/g, '')
+            .replace(/\s+/g, ' ')
+            .trim()
+            .toLowerCase();
+
+        const existing = current.events.some(event =>
+          normalizeName(event.name) ===
+          normalizeName(decision.name)
+        );
+
+        if (existing) {
+          throw fail(
+            409,
+            'Já existe um evento com esse nome na biblioteca.'
+          );
+        }
+
+        const state = await read();
+        const id = 'site-event:' + randomUUID();
+
+        state.localEvents ||= {};
+        state.localEvents[id] = {
+          guildId: guild.id,
+          name: decision.name,
+          createdBy: member.id,
+          createdAt: Date.now()
+        };
+
+        state.covers[guild.id + ':' + id] = decision.cover;
+
+        await save(state);
+
+        return {
+          ok: true,
+          eventId: id
+        };
+      });
+    }
+
+    if (action === 'events.eventDelete') {
+      if (!mayDeleteEvent(member)) {
+        throw fail(
+          403,
+          'Somente os responsáveis autorizados podem excluir eventos.'
+        );
+      }
+
+      return serial(async () => {
+        const decision = consumeEventDecision(
+          guild,
+          member,
+          'events.eventDelete',
+          payload
+        );
+
+        const current = await snapshot(guild, member, {});
+        const event = current.events.find(
+          item => item.id === decision.eventId
+        );
+
+        if (!event || event.id === 'cds') {
+          throw fail(404, 'Evento não encontrado.');
+        }
+
+        if (event.metadataRevision !== decision.revision) {
+          throw fail(
+            409,
+            'O evento mudou. Atualize antes de excluir.'
+          );
+        }
+
+        const state = await read();
+        const aliases = event.aliasIds || [event.id];
+
+        const isPublished = aliases.some(id =>
+          state.publications?.[
+            guild.id + ':' + id
+          ]?.online
+        );
+
+        if (isPublished) {
+          throw fail(
+            409,
+            'Retire a publicação das regras antes de excluir este evento.'
+          );
+        }
+
+        state.removedEvents ||= {};
+
+        for (const id of aliases) {
+          state.removedEvents[guild.id + ':' + id] = {
+            removedBy: member.id,
+            removedAt: Date.now(),
+            name: event.name
+          };
+
+          if (
+            state.localEvents?.[id]?.guildId === guild.id
+          ) {
+            delete state.localEvents[id];
+          }
+        }
+
+        await save(state);
+
+        return {
+          ok: true,
+          eventId: event.id
+        };
+      });
+    }
+
     if (action === 'events.metadata') {
       return serial(async () => {
+        const decision = consumeEventDecision(
+          guild,
+          member,
+          'events.metadata',
+          payload
+        );
+
         const current = await snapshot(guild, member, {});
-        const event = current.events.find(item => item.id === payload.eventId);
-        if (!event) throw fail(404, 'Evento não encontrado.');
-        if (event.metadataRevision !== payload.revision) throw fail(409, 'O evento mudou. Atualize antes de editar.');
-        if (!['name', 'cover'].includes(payload.field)) throw fail(400, 'Campo de evento inválido.');
-        const value = String(payload.value || '').trim();
-        if (payload.field === 'name' && (!value || value.length > 120)) throw fail(400, 'Use um nome de até 120 caracteres.');
-        const state = await read();
-        if (payload.field === 'name') {
-          state.names ||= {};
-          state.names[guild.id + ':' + event.id] = value;
-        } else {
-          state.covers[guild.id + ':' + event.id] = value ? eventMediaUrl(value) : '';
+        const event = current.events.find(
+          item => item.id === decision.eventId
+        );
+
+        if (!event) {
+          throw fail(404, 'Evento não encontrado.');
         }
+
+        if (event.metadataRevision !== decision.revision) {
+          throw fail(
+            409,
+            'O evento mudou. Atualize antes de editar.'
+          );
+        }
+
+        const state = await read();
+
+        if (decision.field === 'name') {
+          state.names ||= {};
+          state.names[guild.id + ':' + event.id] =
+            decision.value;
+        } else {
+          state.covers[guild.id + ':' + event.id] =
+            decision.value;
+        }
+
         await save(state);
+
         return { ok: true };
       });
     }
@@ -869,14 +1319,15 @@ export function createSiteEventsLibrary({ client }) {
 
     if (!event) throw fail(404, 'Evento não encontrado.');
 
-    const source = await target(guild, member, event, value.section);
-
     if (action === 'events.confirm') {
       const operation = payload.operation;
 
       if (
         !['events.save', 'events.delete'].includes(operation) ||
-        !value.id
+        (
+          operation === 'events.delete' &&
+          !value.id
+        )
       ) {
         throw fail(400, 'Confirmação inválida.');
       }
@@ -906,24 +1357,72 @@ export function createSiteEventsLibrary({ client }) {
       throw fail(404, 'Operação desconhecida.');
     }
 
-    return serial(async () => {
-      if (value.id) {
-        const confirmation = confirmations.get(payload.confirmation);
-        confirmations.delete(payload.confirmation);
+    if (
+      action === 'events.delete' &&
+      !value.id
+    ) {
+      throw fail(400, 'Informe o conteúdo a excluir.');
+    }
 
-        if (
-          !confirmation ||
-          confirmation.actor !== member.id ||
-          confirmation.guild !== guild.id ||
-          confirmation.operation !== action ||
-          confirmation.hash !== digest(value) ||
-          confirmation.expires < Date.now()
-        ) {
-          throw fail(409, 'Confirme novamente esta alteração.');
-        }
-      } else if (action === 'events.delete') {
-        throw fail(400, 'Informe o conteúdo a excluir.');
+    const pendingConfirmation = confirmations.get(
+      payload.confirmation
+    );
+
+    if (
+      !pendingConfirmation ||
+      pendingConfirmation.actor !== member.id ||
+      pendingConfirmation.guild !== guild.id ||
+      pendingConfirmation.operation !== action ||
+      pendingConfirmation.hash !== digest(value) ||
+      pendingConfirmation.expires < Date.now()
+    ) {
+      throw fail(409, 'Confirme novamente esta alteração.');
+    }
+
+    let source;
+
+    if (action === 'events.delete') {
+      const sources = await eventSources(
+        guild,
+        member,
+        event,
+        value.section
+      );
+
+      source = sources[0];
+
+      if (!source) {
+        throw fail(
+          409,
+          'O tópico deste conteúdo não foi encontrado. Atualize antes de excluir.'
+        );
       }
+    } else {
+      source = await target(
+        guild,
+        member,
+        event,
+        value.section
+      );
+    }
+
+    return serial(async () => {
+      const confirmation = confirmations.get(
+        payload.confirmation
+      );
+
+      if (
+        !confirmation ||
+        confirmation.actor !== member.id ||
+        confirmation.guild !== guild.id ||
+        confirmation.operation !== action ||
+        confirmation.hash !== digest(value) ||
+        confirmation.expires < Date.now()
+      ) {
+        throw fail(409, 'Confirme novamente esta alteração.');
+      }
+
+      confirmations.delete(payload.confirmation);
 
       const state = await read();
       const old = state.items[value.id];

@@ -11003,6 +11003,20 @@ async function updateDashboard(
   dashboardUpdating = true;
 
   try {
+    const results =
+      await generateResults(
+        client
+      );
+
+    try {
+      saveNpsSiteSnapshot(results);
+    } catch (error) {
+      console.error(
+        '[NPS Cultura] Falha ao atualizar o snapshot do site:',
+        error
+      );
+    }
+
     const [
       quickChannel,
       executiveChannel,
@@ -11019,11 +11033,6 @@ async function updateDashboard(
         () => null
       ),
     ]);
-
-    const results =
-      await generateResults(
-        client
-      );
 
     const components =
       buildDashboardComponents();
@@ -14163,6 +14172,166 @@ async function sendAutomaticWeeklyReport(
 // ============================================================================
 // RESULTADO ATUAL VISÍVEL DO PAINEL
 // ============================================================================
+
+function saveNpsSiteSnapshot(results) {
+  const finiteScore = value =>
+    typeof value === 'number' && Number.isFinite(value)
+      ? value
+      : null;
+
+  const previousCategories = new Map(
+    (results.previous.categories || []).map(category => [
+      category.categoryId,
+      category
+    ])
+  );
+
+  const categories = (results.current.categories || []).map(category => {
+    const previous = previousCategories.get(category.categoryId);
+
+    const score = category.hasData
+      ? finiteScore(category.score)
+      : null;
+
+    const previousScore = previous?.hasData
+      ? finiteScore(previous.score)
+      : null;
+
+    return {
+      id: category.categoryId,
+      label: category.label,
+      score,
+      previousScore,
+      difference:
+        score !== null && previousScore !== null
+          ? score - previousScore
+          : null,
+      activities: Number(category.raw?.events || 0)
+    };
+  });
+
+  const currentHasData = categories.some(
+    category => category.score !== null
+  );
+
+  const previousHasData = (results.previous.categories || []).some(
+    category =>
+      category.hasData &&
+      finiteScore(category.score) !== null
+  );
+
+  const currentScore = currentHasData
+    ? finiteScore(results.current.rawScore)
+    : null;
+
+  const previousScore = previousHasData
+    ? finiteScore(results.previous.rawScore)
+    : null;
+
+  const snapshot = {
+    version: 1,
+    guildId: '1262262852782129183',
+    title: 'NPS Cultura Santa Creators',
+    generatedAt: Date.now(),
+    weekKey: results.current.weekInfo.key,
+    previousWeekKey: results.previous.weekInfo.key,
+    displayedScore: currentHasData
+      ? finiteScore(results.displayed.score)
+      : null,
+    currentScore,
+    previousScore,
+    difference:
+      currentScore !== null && previousScore !== null
+        ? currentScore - previousScore
+        : null,
+    categories,
+    history: (results.current.week.snapshots || [])
+      .concat({
+        at: Date.now(),
+        score: currentHasData
+          ? finiteScore(results.displayed.score)
+          : null,
+        rawScore: currentScore
+      })
+      .map(item => ({
+        at: Number(item.at),
+        score: finiteScore(item.score),
+        rawScore: finiteScore(item.rawScore)
+      }))
+      .filter(item =>
+        Number.isFinite(item.at) &&
+        item.score !== null
+      )
+      .slice(-120)
+  };
+
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+
+  const file = path.join(
+    DATA_DIR,
+    'sc_nps_site_snapshot.json'
+  );
+
+  const temporary = file + '.tmp';
+
+  fs.writeFileSync(
+    temporary,
+    JSON.stringify(snapshot),
+    'utf8'
+  );
+
+  fs.renameSync(temporary, file);
+}
+
+export function getNpsSiteSnapshot({ guild }) {
+  const file = path.join(
+    DATA_DIR,
+    'sc_nps_site_snapshot.json'
+  );
+
+  if (!fs.existsSync(file)) {
+    throw Object.assign(
+      new Error(
+        'O NPS ainda não gerou uma atualização válida para o site.'
+      ),
+      { status: 503 }
+    );
+  }
+
+  let snapshot;
+
+  try {
+    snapshot = JSON.parse(
+      fs.readFileSync(file, 'utf8')
+    );
+  } catch (error) {
+    throw Object.assign(
+      new Error(
+        'Não foi possível ler o snapshot do NPS.'
+      ),
+      {
+        status: 503,
+        cause: error
+      }
+    );
+  }
+
+  if (
+    !snapshot ||
+    snapshot.version !== 1 ||
+    snapshot.guildId !== guild.id ||
+    !Array.isArray(snapshot.categories)
+  ) {
+    throw Object.assign(
+      new Error(
+        'O snapshot do NPS é inválido para este servidor.'
+      ),
+      { status: 503 }
+    );
+  }
+
+  return snapshot;
+}
 
 async function getCurrentDashboardResults(
   client

@@ -2145,7 +2145,7 @@ async function fetchCityStatusFromDynamic(city) {
        const clients = safeNumber(data.clients, 0);
        const maxClients = safeNumber(data.sv_maxclients, 0);
 
-       if (clients <= 0 || maxClients <= 0) return null;
+       if (clients < 0 || maxClients <= 0) return null;
 
        return {
          key: city.key,
@@ -2209,7 +2209,6 @@ async function fetchCityStatus(city) {
 }
    });
 
-   clearTimeout(timeout);
    if (res.ok) {
      const data = await res.json().catch(() => null);
      if (data?.Data) {
@@ -2331,7 +2330,7 @@ function isCompleteSnapshot(snapshot) {
    return (
      data?.online === true &&
      data?.stale !== true &&
-     safeNumber(data.clients, 0) > 0 &&
+     safeNumber(data.clients, -1) >= 0 &&
      safeNumber(data.maxClients, 0) > 0
    );
  });
@@ -2354,7 +2353,8 @@ function mergeSnapshotWithFallback(currentSnapshot, fallbackSnapshot) {
 
    const currentIsValid =
      currentCity?.online === true &&
-     safeNumber(currentCity.clients, 0) > 0 &&
+     currentCity?.stale !== true &&
+     safeNumber(currentCity.clients, -1) >= 0 &&
      safeNumber(currentCity.maxClients, 0) > 0;
 
    if (currentIsValid) {
@@ -4182,6 +4182,7 @@ export async function getFivemRetentionSiteSnapshot({
   const cached = FIVEM_SNAPSHOT_CACHE.value;
   const cacheAge = Date.now() - FIVEM_SNAPSHOT_CACHE.createdAt;
   const safe =
+    refresh !== true &&
     cached?.snapshot &&
     cacheAge >= 0 &&
     cacheAge < 15000

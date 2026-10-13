@@ -1067,23 +1067,62 @@ const loadState = () => {
 };
 
 const saveHallRankings = (data) => {
-  ensureDir();
+  if (
+    !data ||
+    typeof data !== "object" ||
+    Array.isArray(data)
+  ) {
+    throw new Error(
+      "Não foi possível salvar o ranking do Hall: estrutura principal inválida."
+    );
+  }
 
-  const temporary = HALL_RANKING_FILE + ".tmp";
+  for (const field of [
+    "orgs",
+    "players"
+  ]) {
+    if (
+      !data[field] ||
+      typeof data[field] !== "object" ||
+      Array.isArray(data[field])
+    ) {
+      throw new Error(
+        `Não foi possível salvar o ranking do Hall: campo ${field} inválido.`
+      );
+    }
+  }
 
-  fs.writeFileSync(
-    temporary,
+  const serialized =
     JSON.stringify(
       data,
       null,
       2
-    )
-  );
+    );
 
-  fs.renameSync(
-    temporary,
-    HALL_RANKING_FILE
-  );
+  ensureDir();
+
+  const temporary =
+    HALL_RANKING_FILE + ".tmp";
+
+  try {
+    fs.writeFileSync(
+      temporary,
+      serialized,
+      "utf8"
+    );
+
+    fs.renameSync(
+      temporary,
+      HALL_RANKING_FILE
+    );
+  } catch (error) {
+    throw new Error(
+      "Não foi possível gravar o ranking do Hall em " +
+      HALL_RANKING_FILE +
+      ". Verifique a causa da falha de persistência.",
+      { cause: error }
+    );
+  }
 };
 
 const loadPaymentOperationTraceForHallRanking =
@@ -1132,50 +1171,109 @@ const loadPaymentOperationTraceForHallRanking =
   };
 
 const loadHallRankings = () => {
-    try {
-      if (fs.existsSync(HALL_RANKING_FILE)) {
-        const data = JSON.parse(fs.readFileSync(HALL_RANKING_FILE, "utf8"));
+  let raw;
 
-        data.orgs ??= {};
-        data.players ??= {};
-        data.reviewedMessages ??= {};
-        data.reviewedPaymentMessages ??= {};
-        data.paymentEventKeys ??= {};
-data.pendingPaymentCityReview ??= {};
-data.pendingPlayerIdentityReview ??= {};
-data.manualPlayerIdentityMerges ??= {};
-data.manualPlayerCityOverrides ??= {};
+  try {
+    raw = fs.readFileSync(
+      HALL_RANKING_FILE,
+      "utf8"
+    );
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      return {
+        orgs: {},
+        players: {},
+        reviewedMessages: {},
+        reviewedPaymentMessages: {},
+        paymentEventKeys: {},
+        pendingPaymentCityReview: {},
+        pendingPlayerIdentityReview: {},
+        manualPlayerIdentityMerges: {},
+        manualPlayerCityOverrides: {},
+        playerRankingSeasons: {},
+        playerRankingHistory: {},
+        pendingReview: {},
+        manualReviews: {},
+        lastUpdatedAt: 0
+      };
+    }
 
-data.playerRankingSeasons ??= {};
-data.playerRankingHistory ??= {};
+    throw new Error(
+      "Não foi possível ler o ranking do Hall em " +
+      HALL_RANKING_FILE +
+      ". Nenhum ranking vazio foi criado para substituir os dados.",
+      { cause: error }
+    );
+  }
 
-data.manualReviews ??= {};
-data.pendingReview ??= {};
-data.lastUpdatedAt ??= Date.now();
+  let data;
 
-return data;
-      }
-    } catch {}
+  try {
+    data = JSON.parse(raw);
+  } catch (error) {
+    throw new Error(
+      "O JSON do ranking do Hall está inválido em " +
+      HALL_RANKING_FILE +
+      ". O arquivo existente foi preservado.",
+      { cause: error }
+    );
+  }
 
-return {
-  orgs: {},
-  players: {},
-  reviewedMessages: {},
-  reviewedPaymentMessages: {},
-  paymentEventKeys: {},
-  pendingPaymentCityReview: {},
-  pendingPlayerIdentityReview: {},
-  manualPlayerIdentityMerges: {},
-  manualPlayerCityOverrides: {},
+  if (
+    !data ||
+    typeof data !== "object" ||
+    Array.isArray(data)
+  ) {
+    throw new Error(
+      "O ranking do Hall possui estrutura inválida em " +
+      HALL_RANKING_FILE +
+      ". O arquivo existente foi preservado."
+    );
+  }
 
-  playerRankingSeasons: {},
-  playerRankingHistory: {},
+  const mapFields = [
+    "orgs",
+    "players",
+    "reviewedMessages",
+    "reviewedPaymentMessages",
+    "paymentEventKeys",
+    "pendingPaymentCityReview",
+    "pendingPlayerIdentityReview",
+    "manualPlayerIdentityMerges",
+    "manualPlayerCityOverrides",
+    "playerRankingSeasons",
+    "playerRankingHistory",
+    "manualReviews",
+    "pendingReview"
+  ];
 
-  pendingReview: {},
-  manualReviews: {},
-  lastUpdatedAt: Date.now()
+  for (const field of mapFields) {
+    if (data[field] == null) {
+      data[field] = {};
+    }
+
+    if (
+      typeof data[field] !== "object" ||
+      Array.isArray(data[field])
+    ) {
+      throw new Error(
+        `O campo ${field} do ranking do Hall está inválido. ` +
+        "O arquivo existente foi preservado."
+      );
+    }
+  }
+
+  const lastUpdatedAt =
+    Number(data.lastUpdatedAt);
+
+  data.lastUpdatedAt =
+    Number.isFinite(lastUpdatedAt) &&
+    lastUpdatedAt > 0
+      ? lastUpdatedAt
+      : 0;
+
+  return data;
 };
-  };
 function compareDiscordSnowflakes(a = "", b = "") {
   try {
     const left = BigInt(String(a || "0"));
@@ -2940,6 +3038,26 @@ async function restoreHallManualEditsFromAudit(client, hallChannel) {
   locks.add(lockKey);
 
   try {
+    await updateHallScanProgress(client, {
+      status:
+        "Iniciando a leitura da auditoria. Nenhum Hall foi alterado.",
+      totalMessages: 0,
+      totalHalls: 0,
+      processed: 0,
+      progressCurrent: 0,
+      progressTotal: 0,
+      edited: 0,
+      currentDate: "Preparando leitura",
+      currentEvent: "Lendo histórico de auditoria",
+      currentCity: "Ainda não analisada",
+      phase: "Recuperação pelos logs"
+    }).catch(error => {
+      console.warn(
+        "[HallDaFama] Não foi possível iniciar o painel de recuperação:",
+        error?.message || error
+      );
+    });
+
     // Toda a leitura termina antes da primeira edição.
     const records =
       await readHallRecoveryAuditRecords(
@@ -2973,10 +3091,60 @@ async function restoreHallManualEditsFromAudit(client, hallChannel) {
     let preserved = 0;
     let pending = 0;
 
+    await updateHallScanProgress(client, {
+      status:
+        `Leitura concluída: ${records.length} registros válidos; ` +
+        `${recordsByHall.size} Halls distintos para análise.`,
+      totalHalls: recordsByHall.size,
+      processed: 0,
+      progressCurrent: 0,
+      progressTotal: recordsByHall.size,
+      edited: 0,
+      currentDate: "Leitura concluída",
+      currentEvent: "Analisando necessidade de recuperação",
+      currentCity: "Conforme os registros de cada Hall",
+      phase: "Análise da recuperação"
+    }).catch(error => {
+      console.warn(
+        "[HallDaFama] Não foi possível atualizar a fase de recuperação:",
+        error?.message || error
+      );
+    });
+
     for (
       const [hallId, hallRecords]
       of recordsByHall
     ) {
+      const completed =
+        restored +
+        preserved +
+        pending;
+
+      if (
+        completed === 0 ||
+        completed % 10 === 0
+      ) {
+        await updateHallScanProgress(client, {
+          status:
+            `Recuperação: ${completed}/${recordsByHall.size} Halls analisados; ` +
+            `${restored} restaurados; ` +
+            `${preserved} preservados; ` +
+            `${pending} pendentes.`,
+          totalHalls: recordsByHall.size,
+          processed: completed,
+          progressCurrent: completed,
+          progressTotal: recordsByHall.size,
+          edited: restored,
+          currentEvent: `Analisando Hall ${hallId}`,
+          phase: "Análise da recuperação"
+        }).catch(error => {
+          console.warn(
+            "[HallDaFama] Não foi possível atualizar o progresso da recuperação:",
+            error?.message || error
+          );
+        });
+      }
+
       hallRecords.sort((a, b) => {
         if (
           a.actionAt !==
@@ -3356,11 +3524,73 @@ async function restoreHallManualEditsFromAudit(client, hallChannel) {
       }
     ).catch(() => {});
 
+    await updateHallScanProgress(client, {
+      status:
+        pending > 0
+          ? (
+              "Recuperação encerrada com pendências. " +
+              `${restored} Halls restaurados; ` +
+              `${preserved} preservados; ` +
+              `${pending} precisam de conferência.`
+            )
+          : (
+              "Recuperação concluída. " +
+              `${restored} Halls restaurados; ` +
+              `${preserved} preservados.`
+            ),
+      totalHalls: recordsByHall.size,
+      processed:
+        restored +
+        preserved +
+        pending,
+      progressCurrent:
+        restored +
+        preserved +
+        pending,
+      progressTotal: recordsByHall.size,
+      edited: restored,
+      currentDate: "Recuperação encerrada",
+      currentEvent:
+        pending > 0
+          ? "Existem casos pendentes de conferência"
+          : "Todos os casos foram analisados",
+      currentCity: "Análise encerrada",
+      phase:
+        pending > 0
+          ? "Finalizado com pendências"
+          : "Finalizado"
+    }).catch(error => {
+      console.warn(
+        "[HallDaFama] Recuperação encerrada; não foi possível atualizar o painel:",
+        error?.message || error
+      );
+    });
+
     return {
       restored,
       preserved,
       pending
     };
+  } catch (error) {
+    await updateHallScanProgress(client, {
+      status:
+        "Recuperação interrompida: " +
+        String(
+          error?.message ||
+          "Falha não identificada."
+        ).slice(0, 1000),
+      currentDate: "Interrompido",
+      currentEvent: "Consulte o motivo no status",
+      currentCity: "Recuperação não concluída",
+      phase: "Erro"
+    }).catch(panelError => {
+      console.warn(
+        "[HallDaFama] Não foi possível exibir o erro da recuperação:",
+        panelError?.message || panelError
+      );
+    });
+
+    throw error;
   } finally {
     locks.delete(lockKey);
   }
@@ -23157,8 +23387,21 @@ export async function getHallSiteSnapshot({
   const orgsVisible = viewer && guild.channels.cache.get(HALL_ORGS_RANKING_CHANNEL_ID)?.permissionsFor(viewer)?.has('ViewChannel');
   const playersVisible = viewer && guild.channels.cache.get(HALL_PLAYERS_RANKING_CHANNEL_ID)?.permissionsFor(viewer)?.has('ViewChannel');
   if (!orgsVisible && !playersVisible) {
-    throw new Error(
-      "Você não possui acesso ao ranking."
+    throw Object.assign(
+      new Error(
+        "Você não possui acesso ao ranking."
+      ),
+      { status: 403 }
+    );
+  }
+
+  if (!fs.existsSync(HALL_RANKING_FILE)) {
+    throw Object.assign(
+      new Error(
+        "O ranking do Hall ainda não possui um arquivo persistido. " +
+        "A reconstrução precisa concluir e salvar os dados antes da consulta pelo site."
+      ),
+      { status: 503 }
     );
   }
 
@@ -23186,7 +23429,7 @@ export async function getHallSiteSnapshot({
     updatedAt:
       Number(
         rankings.lastUpdatedAt ||
-        Date.now()
+        0
       ),
 
     orgs:
