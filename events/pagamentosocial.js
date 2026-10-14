@@ -4796,8 +4796,8 @@ async function buscarVipEventoPorDados(client, dados = {}) {
   if (!alvoTipo) camposObrigatoriosFaltando.push("premiação/tipo");
   if (!alvoCidade) camposObrigatoriosFaltando.push("cidade");
 
-  if (!/^\d{17,20}$/.test(alvoId)) {
-    camposObrigatoriosFaltando.push("ID Discord válido do ganhador");
+  if (!/^\d{1,25}$/.test(alvoId)) {
+    camposObrigatoriosFaltando.push("ID válido do ganhador");
   }
 
   if (camposObrigatoriosFaltando.length > 0) {
@@ -4901,8 +4901,8 @@ async function buscarVipEventoPorDados(client, dados = {}) {
     );
 
     const mesmoGanhador = Boolean(
-      /^\d{17,20}$/.test(alvoId) &&
-      /^\d{17,20}$/.test(idVip) &&
+      /^\d{1,25}$/.test(alvoId) &&
+      /^\d{1,25}$/.test(idVip) &&
       alvoId === idVip
     );
 
