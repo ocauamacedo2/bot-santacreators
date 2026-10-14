@@ -1182,9 +1182,11 @@ currentWeek.providerSnapshots[
           metric,
 
         previousSnapshots:
-          previousWeek.providerSnapshots[
-            metricId
-          ],
+          metric.scoreBasis === "weekly_ranking_goal_v1"
+            ? []
+            : previousWeek.providerSnapshots[
+                metricId
+              ],
 
         reference:
           referenceDate,
@@ -9584,6 +9586,259 @@ await ensureCoreOperationalMetrics(
 );
 
 /*
+ * Usa as fontes oficiais do Ranking Geral para preencher
+ * categorias que ainda não possuem uma métrica válida.
+ *
+ * A nota representa cumprimento da meta semanal.
+ * Não representa qualidade, satisfação ou taxa de aprovação.
+ */
+{
+  const rankingMetric = providerCollection.results.find(metric =>
+    metric &&
+    (
+      metric.id === "participacao_equipe" ||
+      metric.providerId === "participacao_equipe"
+    ) &&
+    metric.details?.operationalSources?.weekKey ===
+      currentWeekInfo.key &&
+    metric.details?.operationalSources?.previousWeekKey ===
+      previousWeekInfo.key
+  );
+
+  const rankingSources =
+    rankingMetric?.details?.operationalSources;
+
+  const sourceMappings = [
+    {
+      categoryId: "alinhamentos",
+      sources: ["alinhamentos"],
+    },
+    {
+      categoryId: "presencas",
+      sources: ["presencas"],
+    },
+    {
+      categoryId: "pagamentos",
+      sources: ["pagamentos"],
+    },
+    {
+      categoryId: "registro_poderes",
+      sources: ["poderes", "eventopoder"],
+    },
+    {
+      categoryId: "hall_da_fama",
+      sources: ["halldafama"],
+    },
+    {
+      categoryId: "eventos_diarios",
+      sources: ["eventosdiarios"],
+    },
+    {
+      categoryId: "cronograma",
+      sources: ["cronograma"],
+    },
+    {
+      categoryId: "eventos",
+      sources: ["eventos"],
+    },
+  ];
+
+  const validScore = value =>
+    (
+      typeof value === "number" ||
+      (
+        typeof value === "string" &&
+        value.trim() !== ""
+      )
+    ) &&
+    Number.isFinite(Number(value)) &&
+    Number(value) >= 0 &&
+    Number(value) <= 100;
+
+  const collectSourceTotals = (byUser, sources) => {
+    const users = {};
+    let total = 0;
+
+    for (const [userId, userSources] of Object.entries(byUser || {})) {
+      if (
+        !userSources ||
+        typeof userSources !== "object" ||
+        Array.isArray(userSources)
+      ) {
+        continue;
+      }
+
+      const selectedSources = {};
+      let userTotal = 0;
+
+      for (const source of sources) {
+        const amount = Number(userSources[source] ?? 0);
+
+        if (!Number.isSafeInteger(amount) || amount <= 0) {
+          continue;
+        }
+
+        selectedSources[source] = amount;
+        userTotal += amount;
+      }
+
+      if (userTotal === 0) {
+        continue;
+      }
+
+      users[userId] = {
+        total: userTotal,
+        sources: selectedSources,
+      };
+
+      total += userTotal;
+    }
+
+    return {
+      total,
+      byUser: users,
+    };
+  };
+
+  if (rankingSources) {
+    for (const mapping of sourceMappings) {
+      const categoryConfig =
+        config.categories?.[mapping.categoryId];
+
+      const goal = Number(categoryConfig?.weeklyGoal);
+
+      if (
+        !categoryConfig ||
+        categoryConfig.enabled === false ||
+        !Number.isFinite(goal) ||
+        goal <= 0
+      ) {
+        continue;
+      }
+
+      const existingIndex = providerCollection.results.findIndex(metric =>
+        metric &&
+        (
+          metric.id === mapping.categoryId ||
+          metric.providerId === mapping.categoryId
+        )
+      );
+
+      const existingMetric =
+        existingIndex >= 0
+          ? providerCollection.results[existingIndex]
+          : null;
+
+      if (
+        existingMetric &&
+        existingMetric.available !== false &&
+        validScore(existingMetric.score)
+      ) {
+        continue;
+      }
+
+      const currentSource = collectSourceTotals(
+        rankingSources.currentByUser,
+        mapping.sources
+      );
+
+      const previousSource = collectSourceTotals(
+        rankingSources.previousByUser,
+        mapping.sources
+      );
+
+      if (currentSource.total === 0) {
+        continue;
+      }
+
+      const score = Math.min(
+        100,
+        currentSource.total / goal * 100
+      );
+
+      const previousScore =
+        previousSource.total > 0
+          ? Math.min(
+              100,
+              previousSource.total / goal * 100
+            )
+          : null;
+
+      const metric = {
+        id: mapping.categoryId,
+        providerId: mapping.categoryId,
+        label: categoryConfig.label || mapping.categoryId,
+        available: true,
+        officialSource: true,
+        sourceType: "weekly_ranking_sources",
+        scoreBasis: "weekly_ranking_goal_v1",
+        source: mapping.sources.join(","),
+        score,
+        previousScore,
+        confidence: 70,
+        volume: currentSource.total,
+        current: currentSource.total,
+        previous: previousSource.total,
+        goal,
+        difference:
+          currentSource.total - previousSource.total,
+
+        positivePoints: [
+          `${currentSource.total} ponto(s) registrados na fonte oficial do Ranking Geral.`,
+        ],
+
+        attentionPoints: [
+          "A nota representa cumprimento da meta semanal, não qualidade ou satisfação.",
+        ],
+
+        recommendations: [
+          "Acompanhar a meta semanal e a distribuição dos pontos por usuário.",
+        ],
+
+        details: {
+          weekKey: currentWeekInfo.key,
+          previousWeekKey: previousWeekInfo.key,
+          sources: [...mapping.sources],
+          scoreBasis: "weekly_ranking_goal_v1",
+          current: currentSource.total,
+          previous: previousSource.total,
+          goal,
+          byUser: currentSource.byUser,
+          previousByUser: previousSource.byUser,
+        },
+      };
+
+      if (existingIndex >= 0) {
+        providerCollection.results[existingIndex] = metric;
+      } else {
+        providerCollection.results.push(metric);
+      }
+
+      console.info(
+        "[NPS Ranking Sources] Métrica aplicada:",
+        {
+          categoryId: mapping.categoryId,
+          sources: mapping.sources,
+          current: currentSource.total,
+          previous: previousSource.total,
+          goal,
+          score,
+          previousScore,
+        }
+      );
+    }
+  } else {
+    console.warn(
+      "[NPS Ranking Sources] A coleta não entregou as fontes das duas semanas esperadas.",
+      {
+        currentWeekKey: currentWeekInfo.key,
+        previousWeekKey: previousWeekInfo.key,
+      }
+    );
+  }
+}
+
+/*
  * Usa a distribuição oficial do Ranking Semanal Geral
  * para calcular o desempenho por hierarquia.
  *
@@ -10351,6 +10606,53 @@ recalculateWeekResult(
 // Recupera as notas reais já persistidas na semana anterior.
 for (const category of previous.categories) {
   if (!PROVIDER_REQUIRED_CATEGORY_IDS.has(category.categoryId)) {
+    continue;
+  }
+
+  const currentCategory = current.categories.find(item =>
+    item.categoryId === category.categoryId
+  );
+
+  const currentMetric =
+    currentCategory?.raw?.providerMetric;
+
+  /*
+   * Quando a nota atual vem das metas do Ranking Geral,
+   * a anterior precisa usar a mesma fonte e a mesma fórmula.
+   *
+   * Não compara produtividade com uma nota antiga de qualidade.
+   */
+  if (
+    currentMetric?.scoreBasis ===
+    "weekly_ranking_goal_v1"
+  ) {
+    const previousScore =
+      currentMetric.previousScore;
+
+    if (
+      typeof previousScore === "number" &&
+      Number.isFinite(previousScore) &&
+      previousScore >= 0 &&
+      previousScore <= 100
+    ) {
+      category.hasData = true;
+      category.score = previousScore;
+
+      category.raw = {
+        ...category.raw,
+        events: currentMetric.previous,
+        awaitingProvider: false,
+        recoveredFromWeeklyRanking: true,
+
+        providerMetric: {
+          ...currentMetric,
+          score: previousScore,
+          volume: currentMetric.previous,
+          current: currentMetric.previous,
+        },
+      };
+    }
+
     continue;
   }
 

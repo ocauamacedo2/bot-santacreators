@@ -5627,6 +5627,21 @@ const recommendations = [];
       sourceTotals: {
         ...sourceTotals,
       },
+
+      operationalSources: {
+        weekKey: currentWeekKey,
+        previousWeekKey,
+
+        currentByUser:
+          current.allBySourceByUser ||
+          current.bySourceByUser ||
+          {},
+
+        previousByUser:
+          previous.allBySourceByUser ||
+          previous.bySourceByUser ||
+          {},
+      },
     },
   };
 }
