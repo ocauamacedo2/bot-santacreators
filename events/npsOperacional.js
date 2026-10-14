@@ -1450,6 +1450,33 @@ function resolveConsolidatedCategory(sourceName) {
   }
 
   if (
+    source === "halldafama" ||
+    source === "hall_da_fama"
+  ) {
+    return "hall_da_fama";
+  }
+
+  if (
+    source === "eventosdiarios" ||
+    source === "eventos_diarios"
+  ) {
+    return "eventos_diarios";
+  }
+
+  if (source === "cronograma") {
+    return "cronograma";
+  }
+
+  if (
+    source === "poderes" ||
+    source === "registro_poderes" ||
+    source === "eventopoder" ||
+    source === "evento_poder"
+  ) {
+    return "registro_poderes";
+  }
+
+  if (
     source.includes("evento") ||
     source.includes("cronograma") ||
     source.includes("hall") ||
@@ -9628,7 +9655,29 @@ await ensureCoreOperationalMetrics(
       previousWeekInfo.key
   );
 
+  const rankingFile = readJson(
+    GERAL_WEEKLY_SOURCES_FILE,
+    null
+  );
+
+  const isSourceWeek = value =>
+    value !== null &&
+    typeof value === "object" &&
+    !Array.isArray(value);
+
+  const fileRankingSources =
+    isSourceWeek(rankingFile?.[currentWeekInfo.key]) &&
+    isSourceWeek(rankingFile?.[previousWeekInfo.key])
+      ? {
+          weekKey: currentWeekInfo.key,
+          previousWeekKey: previousWeekInfo.key,
+          currentByUser: rankingFile[currentWeekInfo.key],
+          previousByUser: rankingFile[previousWeekInfo.key],
+        }
+      : null;
+
   const rankingSources =
+    fileRankingSources ||
     rankingMetric?.details?.operationalSources;
 
   const sourceMappings = [

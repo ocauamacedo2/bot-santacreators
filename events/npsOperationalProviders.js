@@ -920,11 +920,13 @@ function collectWeekData(
 // MÉTRICA: PARTICIPAÇÃO DA EQUIPE
 // ============================================================================
 
-function buildTeamParticipationMetric() {
+function buildTeamParticipationMetric(context = {}) {
   const currentWeekKey =
+    context.currentWeek?.key ||
     getWeekKeySP();
 
   const previousWeekKey =
+    context.previousWeek?.key ||
     addDaysToWeekKey(
       currentWeekKey,
       -7
@@ -1094,11 +1096,13 @@ function buildTeamParticipationMetric() {
 // MÉTRICA: RITMO GERAL DA OPERAÇÃO
 // ============================================================================
 
-function buildGeneralPerformanceMetric() {
+function buildGeneralPerformanceMetric(context = {}) {
   const currentWeekKey =
+    context.currentWeek?.key ||
     getWeekKeySP();
 
   const previousWeekKey =
+    context.previousWeek?.key ||
     addDaysToWeekKey(
       currentWeekKey,
       -7
@@ -5189,14 +5193,14 @@ function buildWeeklyLogChecklistMetric(
 // ============================================================================
 registerOperationalMetricProvider(
   "participacao_equipe",
-  async () =>
-    buildTeamParticipationMetric()
+  async context =>
+    buildTeamParticipationMetric(context)
 );
 
 registerOperationalMetricProvider(
   "desempenho_geral",
-  async () =>
-    buildGeneralPerformanceMetric()
+  async context =>
+    buildGeneralPerformanceMetric(context)
 );
 
 registerOperationalMetricProvider(
