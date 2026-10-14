@@ -6270,6 +6270,80 @@ export async function findFormsCreatorThreadIdByUserId(
     });
 }
 
+export function getSavedFormsCreatorName(userId) {
+    const targetUserId = String(userId || "").trim();
+
+    if (!/^\d{17,20}$/.test(targetUserId)) {
+        return null;
+    }
+
+    const canonicalUserId =
+        resolveDiscordIdentity(targetUserId) ||
+        targetUserId;
+
+    const state = readState();
+
+    const candidates = Object.entries(
+        state.registrations || {}
+    ).filter(([threadId, registration]) => {
+        if (
+            !/^\d{17,20}$/.test(threadId) ||
+            !registration ||
+            typeof registration !== "object"
+        ) {
+            return false;
+        }
+
+        const registeredUserId =
+            String(registration.userId || "").trim();
+
+        if (!/^\d{17,20}$/.test(registeredUserId)) {
+            return false;
+        }
+
+        const canonicalRegisteredUserId =
+            resolveDiscordIdentity(registeredUserId) ||
+            registeredUserId;
+
+        return canonicalRegisteredUserId === canonicalUserId;
+    });
+
+    candidates.sort(([firstId], [secondId]) => {
+        const first = BigInt(firstId);
+        const second = BigInt(secondId);
+
+        return first < second ? -1 : first > second ? 1 : 0;
+    });
+
+    for (const [, registration] of candidates) {
+        const nome =
+            String(registration.nome || "").trim();
+
+        if (
+            !nome ||
+            /^\d{17,20}$/.test(nome) ||
+            nome === "?"
+        ) {
+            continue;
+        }
+
+        const idCidade =
+            String(registration.idCidade || "").trim();
+
+        if (
+            idCidade &&
+            idCidade !== "?" &&
+            !nome.endsWith(" | " + idCidade)
+        ) {
+            return nome + " | " + idCidade;
+        }
+
+        return nome;
+    }
+
+    return null;
+}
+
 export async function getFormsCreatorPersonData(client, userId) {
     const targetUserId = String(userId || "").trim();
 
