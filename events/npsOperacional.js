@@ -1145,11 +1145,21 @@ if (
  */
 if (
   metric.available === false ||
+  (
+    typeof metric.score !== "number" &&
+    typeof metric.score !== "string"
+  ) ||
+  (
+    typeof metric.score === "string" &&
+    metric.score.trim() === ""
+  ) ||
   !Number.isFinite(
     Number(
       metric.score
     )
-  )
+  ) ||
+  Number(metric.score) < 0 ||
+  Number(metric.score) > 100
 ) {
   continue;
 }
@@ -10336,6 +10346,55 @@ for (
 // o volume e o NPS Geral após aplicar as métricas reais.
 recalculateWeekResult(
   current
+);
+
+// Recupera as notas reais já persistidas na semana anterior.
+for (const category of previous.categories) {
+  if (!PROVIDER_REQUIRED_CATEGORY_IDS.has(category.categoryId)) {
+    continue;
+  }
+
+  const snapshots =
+    previous.week.providerSnapshots?.[category.categoryId];
+
+  if (!Array.isArray(snapshots)) {
+    continue;
+  }
+
+  const validSnapshots = snapshots.filter(snapshot =>
+    snapshot &&
+    snapshot.id === category.categoryId &&
+    typeof snapshot.score === "number" &&
+    Number.isFinite(snapshot.score) &&
+    snapshot.score >= 0 &&
+    snapshot.score <= 100 &&
+    Number.isSafeInteger(snapshot.at) &&
+    snapshot.at >= previous.weekInfo.start.getTime() &&
+    snapshot.at < previous.weekInfo.endExclusive.getTime()
+  );
+
+  const latestSnapshot = validSnapshots.reduce(
+    (latest, snapshot) =>
+      !latest || snapshot.at > latest.at ? snapshot : latest,
+    null
+  );
+
+  if (!latestSnapshot) {
+    continue;
+  }
+
+  category.hasData = true;
+  category.score = latestSnapshot.score;
+  category.raw = {
+    ...category.raw,
+    awaitingProvider: false,
+    recoveredFromProviderSnapshot: true,
+    providerSnapshotAt: latestSnapshot.at
+  };
+}
+
+recalculateWeekResult(
+  previous
 );
 
 const displayedBase =

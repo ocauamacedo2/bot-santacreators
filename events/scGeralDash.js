@@ -2694,7 +2694,29 @@ async function resolveDashboardMessage(dashChannel, st) {
 
 
 
-async function collectAllGeneral(client, mode = "light") {
+let generalCollectionPromise = null;
+
+function collectAllGeneral(client, mode = "light") {
+  if (generalCollectionPromise) {
+    return generalCollectionPromise;
+  }
+
+  const collectionPromise = Promise.resolve().then(
+    () => collectAllGeneralInternal(client, mode)
+  );
+
+  const sharedPromise = collectionPromise.finally(() => {
+    if (generalCollectionPromise === sharedPromise) {
+      generalCollectionPromise = null;
+    }
+  });
+
+  generalCollectionPromise = sharedPromise;
+
+  return sharedPromise;
+}
+
+async function collectAllGeneralInternal(client, mode = "light") {
   const wkNow = weekKeyFromDateSP(nowSP());
   const weekFloorKey = addDaysToWeekKey(wkNow, -35);
   const now = Date.now();
@@ -3335,8 +3357,8 @@ try {
     DEBUG.weekKeysFound[wk] = (DEBUG.weekKeysFound[wk] || 0) + 1;
   }
   
-     const payload = { items };
-    CACHE = { at: now, payload };
+    const payload = { items };
+    CACHE = { at: Date.now(), payload };
     return payload;
   } finally {
     SCAN_LOCK = false;
