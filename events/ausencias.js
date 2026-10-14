@@ -505,10 +505,30 @@ async function buscarNomePorFormsCreator(
 }
 
 async function resolverNomeDashboardAusencias(client, guild, userId) {
-  const nomeForms = await buscarNomePorFormsCreator(client, userId).catch(() => null);
+  const membroEmCache =
+    guild.members.cache.get(userId);
+
+  const nomeEmCache =
+    String(
+      membroEmCache?.displayName || ""
+    ).trim();
+
+  if (nomeEmCache) {
+    return limparNomeRanking(
+      nomeEmCache
+    );
+  }
+
+  const nomeForms =
+    await buscarNomePorFormsCreator(
+      client,
+      userId
+    ).catch(() => null);
 
   if (nomeForms) {
-    return limparNomeRanking(nomeForms);
+    return limparNomeRanking(
+      nomeForms
+    );
   }
 
   const membro =
