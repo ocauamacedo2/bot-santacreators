@@ -2,6 +2,7 @@
 
 import {
   validatePrizeInput,
+  parsePrizeComponents,
 } from '../utils/prizeValidation.js';
 import fs from "node:fs";
 import path from "node:path";
@@ -4704,6 +4705,37 @@ async function resolverVipEventoPorLink(client, texto) {
   };
 }
 
+function normalizeVipDate(value) {
+  const match = String(value || '')
+    .replace(/[`*_]/g, '')
+    .trim()
+    .match(/^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{4})$/);
+
+  if (!match) return '';
+
+  const day = Number(match[1]);
+  const month = Number(match[2]);
+  const year = Number(match[3]);
+
+  const date = new Date(
+    Date.UTC(year, month - 1, day)
+  );
+
+  if (
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() !== month - 1 ||
+    date.getUTCDate() !== day
+  ) {
+    return '';
+  }
+
+  return [
+    year,
+    String(month).padStart(2, '0'),
+    String(day).padStart(2, '0'),
+  ].join('-');
+}
+
 function normalizarBuscaVip(texto) {
   return String(texto || "")
     .toLowerCase()
@@ -4777,7 +4809,7 @@ async function buscarVipEventoPorDados(client, dados = {}) {
   }
 
   const alvoEvento = normalizarBuscaVip(dados.eventoNome);
-  const alvoData = normalizarBuscaVip(dados.eventoData);
+  const alvoData = normalizeVipDate(dados.eventoData);
   const alvoId = String(dados.ganhadorId || "").replace(/\D/g, "").trim();
   const alvoNome = normalizarBuscaVip(dados.ganhadorNome);
   const alvoCidade = normalizarBuscaVip(dados.cidade);
@@ -4836,7 +4868,7 @@ async function buscarVipEventoPorDados(client, dados = {}) {
   }
 
   const quantidadePagamento =
-    extrairQuantidadePremiacaoVinculo(tipoPagamentoRaw);
+    parsePrizeComponents(tipoPagamentoRaw);
 
   const candidatos = mensagens
     .filter((msg) => msg.author?.id === client.user?.id)
@@ -4855,7 +4887,7 @@ async function buscarVipEventoPorDados(client, dados = {}) {
     const infoVip = extrairInfoDoEmbedVipEvento(embed);
 
     const eventoVip = normalizarBuscaVip(infoVip.evento);
-    const dataVip = normalizarBuscaVip(infoVip.data);
+    const dataVip = normalizeVipDate(infoVip.data);
     const idVip = String(infoVip.ganhadorId || "").replace(/\D/g, "").trim();
     const nomeVip = normalizarBuscaVip(infoVip.ganhadorNome);
     const cidadeVip = normalizarBuscaVip(infoVip.cidade);
@@ -4866,7 +4898,11 @@ async function buscarVipEventoPorDados(client, dados = {}) {
       : "";
 
     const quantidadeVip =
-      extrairQuantidadePremiacaoVinculo(infoVip.premiacao || infoVip.tipo || "");
+      parsePrizeComponents(
+        infoVip.premiacao ||
+        infoVip.tipo ||
+        ""
+      );
 
     const mesmoEvento = Boolean(
       alvoEvento &&
@@ -4887,17 +4923,23 @@ async function buscarVipEventoPorDados(client, dados = {}) {
     );
 
     const mesmoTipo = Boolean(
-      alvoTipo &&
-      tipoVip &&
-      alvoTipo === tipoVip
+      quantidadePagamento &&
+      quantidadeVip &&
+      Object.keys(quantidadePagamento).every(tipo =>
+        Object.hasOwn(
+          quantidadeVip,
+          tipo
+        )
+      )
     );
 
     const mesmaQuantidade = Boolean(
-      Number.isFinite(quantidadePagamento) &&
-      Number.isFinite(quantidadeVip) &&
-      quantidadePagamento > 0 &&
-      quantidadeVip > 0 &&
-      quantidadePagamento === quantidadeVip
+      quantidadePagamento &&
+      quantidadeVip &&
+      Object.entries(quantidadePagamento).every(
+        ([tipo, quantidade]) =>
+          quantidadeVip[tipo] === quantidade
+      )
     );
 
     const mesmoGanhador = Boolean(
@@ -5050,9 +5092,22 @@ async function resolverVipEventoProfissional(client, texto, dados = {}) {
       [dados.eventoData, info.data, "data"],
       [dados.cidade, info.cidade, "cidade"],
     ]) {
+      const normalize = nome === "data"
+        ? normalizeVipDate
+        : normalizarBuscaVip;
+
+      const normalizedReceived =
+        normalize(recebido);
+
+      const normalizedRegistered =
+        normalize(registrado);
+
       if (
         recebido &&
-        normalizarBuscaVip(recebido) !== normalizarBuscaVip(registrado)
+        (
+          !normalizedReceived ||
+          normalizedReceived !== normalizedRegistered
+        )
       ) {
         return {
           ok: false,
@@ -5065,9 +5120,43 @@ async function resolverVipEventoProfissional(client, texto, dados = {}) {
 
     if (tipoPagamentoRaw) {
       const tipoPagamento = normalizarTipoPremiacao(tipoPagamentoRaw);
-      const tipoVip = normalizarTipoPremiacao(
-        `${info.tipo || ""}\n${info.premiacao || ""}`
+
+      const paymentComponents =
+        parsePrizeComponents(tipoPagamentoRaw);
+
+      const vipComponents =
+        parsePrizeComponents(
+          info.premiacao ||
+          info.tipo ||
+          ""
+        );
+
+      const componentsMatch = Boolean(
+        paymentComponents &&
+        vipComponents &&
+        Object.entries(paymentComponents).every(
+          ([tipo, quantidade]) =>
+            vipComponents[tipo] === quantidade
+        )
       );
+
+      if (
+        paymentComponents &&
+        !componentsMatch
+      ) {
+        return {
+          ok: false,
+          erro:
+            "O tipo ou a quantidade da premiação não corresponde ao Registro VIP. " +
+            "Confira o prêmio solicitado e o pacote registrado.",
+        };
+      }
+
+      const tipoVip = componentsMatch
+        ? tipoPagamento
+        : normalizarTipoPremiacao(
+            `${info.tipo || ""}\n${info.premiacao || ""}`
+          );
 
       if (
         !tipoPagamento ||

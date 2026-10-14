@@ -71,6 +71,10 @@ import { createSiteHubExperience } from "../utils/siteHubExperience.js";
 import { getNpsSiteSnapshot } from "./npsOperacional.js";
 
 import {
+  createSiteCommunity,
+} from "../utils/siteCommunity.js";
+
+import {
   requestAbsencesSiteSnapshot,
 } from "./ausencias.js";
 import { readFile as readSiteAbsencesFile } from "node:fs/promises";
@@ -552,7 +556,9 @@ const notifications = createSiteNotifications({
     getChecklistSitePendingNotifications,
 
   isTeamMember:
-    isOfficialSantaCreatorsTeamMember,
+    member =>
+      member?.id === '660311795327828008' ||
+      isOfficialSantaCreatorsTeamMember(member),
 });
 
 async function workflowCatalog(
@@ -710,6 +716,10 @@ const experience = createSiteHubExperience({
 
   const eventsLibrary = createSiteEventsLibrary({ client });
 
+  const community = createSiteCommunity({
+    client,
+  });
+
   globalThis.__SC_QUIZ_SITE_API__ ||=
     createQuizRemoteClient();
 
@@ -746,8 +756,10 @@ const experience = createSiteHubExperience({
       return previous.promise;
     }
     const record = { at: Date.now(), promise: null };
-    const cached = !force ? guild.members.cache.get(actorId) : null;
-    record.promise = (cached ? Promise.resolve(cached) : guild.members.fetch({ user: actorId, force: true }))
+    record.promise = guild.members.fetch({
+      user: actorId,
+      force: true,
+    })
       .then(member => {
         record.at = Date.now();
         return member;
@@ -1187,6 +1199,7 @@ const experience = createSiteHubExperience({
             'workflow.list',
             'workflow.schema',
             'events.published',
+            'mywins.detail',
           ].includes(action) ||
           action.startsWith('history.') ||
           action.startsWith('public.');
@@ -1234,11 +1247,24 @@ const experience = createSiteHubExperience({
             });
         }
 
+        if (
+          await community.handle({
+            guild,
+            member,
+            action,
+            payload,
+            res,
+          })
+        ) {
+          return;
+        }
+
         const isCentralActor =
           member.id === '660311795327828008' ||
           isOfficialSantaCreatorsTeamMember(member);
 
         const internalModules = new Set([
+          'absences',
           'checklist',
           'workflow',
           'events',
@@ -2090,6 +2116,23 @@ if (await experience.handle({ guild, member, action, payload, res })) return;
     isCentralMember && checklistCatalog.allowed,
   ]);
 
+  const communityAccess =
+    await community.access(member);
+
+  for (const key of [
+    'mywins',
+    'viprequest',
+    'orgticket',
+    'orgpresence',
+    'orginvites',
+    'orgblacklist',
+  ]) {
+    entries.push([
+      key,
+      communityAccess[key] === true,
+    ]);
+  }
+
   return res.json({
     modules:
       Object.fromEntries(
@@ -2108,6 +2151,17 @@ if (await experience.handle({ guild, member, action, payload, res })) return;
     })),
     profile: { ...experience.profile(member), preferences: await experience.preferences(guild, member) },
     team: isCentralMember,
+
+    community: {
+      organizations:
+        communityAccess.organizations,
+
+      tickets:
+        communityAccess.tickets.map(item => ({
+          channelId: item.channelId,
+          name: item.orgName,
+        })),
+    },
 
     source:
       'discord-live',
@@ -2730,6 +2784,8 @@ if (await experience.handle({ guild, member, action, payload, res })) return;
           const normalize = name => String(
             name || ''
           )
+            .replace(/^[#\s]+/, '')
+            .replace(/[*_`]/g, '')
             .normalize('NFD')
             .replace(
               /[\u0300-\u036f]/g,
@@ -2803,7 +2859,10 @@ if (await experience.handle({ guild, member, action, payload, res })) return;
             ) {
               group.publication = {
                 id:
-                  String(event.id),
+                  String(
+                    event.publicationEventId ||
+                    event.id
+                  ),
                 name:
                   event.name,
               };

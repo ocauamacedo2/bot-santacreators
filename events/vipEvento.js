@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { randomUUID, createHash } from "node:crypto";
 import {
   EmbedBuilder,
   ActionRowBuilder,
@@ -134,6 +135,24 @@ const VIP_PRESERVAR_PREMIACAO_ORIGINAL = true;
 const VIP_OPEN_PREPARED_MODAL_PREFIX = "vip_open_prepared_modal:";
 const VIP_PREPARED_MODALS = new Map();
 const VIP_PREPARED_MODAL_TTL_MS = 5 * 60_000;
+
+const VIP_SITE_DIRECTORY =
+  path.join(DATA_DIR, 'vip-site-requests');
+
+const VIP_SITE_IN_FLIGHT =
+  new Map();
+
+const VIP_SITE_ACTOR_LOCKS =
+  new Map();
+
+const VIP_SITE_UUID =
+  /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i;
+
+const VIP_siteFail = (status, message) =>
+  Object.assign(
+    new Error(message),
+    { status }
+  );
 
 async function VIP_prepareModal(i, modal, onOpened = null) {
   const key = i.id;
@@ -415,19 +434,56 @@ function getTodayDateFormatted() {
 
 function getTodayEventData() {
   try {
-    if (!fs.existsSync(CRONO_FILE)) return null;
-    const crono = JSON.parse(fs.readFileSync(CRONO_FILE, "utf8"));
-    const todayKey = getTodayKey();
-    
-    const normal = crono.schedule?.[todayKey];
-    if (normal && normal.active) return normal;
+    if (!fs.existsSync(CRONO_FILE)) {
+      return null;
+    }
 
-    const madru = crono.madrugada?.[todayKey];
-    if (madru && madru.active) return madru;
+    const crono = JSON.parse(
+      fs.readFileSync(CRONO_FILE, "utf8")
+    );
 
-    return null;
+    const todayKey =
+      getTodayKey();
+
+    const blocks = [
+      crono.schedule?.[todayKey],
+      crono.madrugada?.[todayKey],
+    ].flatMap(value =>
+      Array.isArray(value)
+        ? value
+        : value
+          ? [value]
+          : []
+    );
+
+    const weekday = [
+      'dom',
+      'seg',
+      'ter',
+      'qua',
+      'qui',
+      'sex',
+      'sab',
+    ].indexOf(todayKey);
+
+    if (Array.isArray(crono.events)) {
+      blocks.push(
+        ...crono.events.filter(event =>
+          Number(event.weekday) === weekday
+        )
+      );
+    }
+
+    return blocks.find(event =>
+      event &&
+      event.active
+    ) || null;
   } catch (e) {
-    console.error("[vipEvento] Erro ao ler cronograma:", e);
+    console.error(
+      "[vipEvento] Erro ao ler cronograma:",
+      e
+    );
+
     return null;
   }
 }
@@ -548,8 +604,28 @@ function VIP_buildReproveModal(messageId) {
     );
 }
 
-function VIP_parseGanhadorFlex(input, orgFallback = "Não identificado") {
-  const raw = String(input || "").trim();
+function VIP_parseGanhadorFlex(
+  input,
+  orgFallback = "Não identificado"
+) {
+  const raw =
+    String(input || "").trim();
+
+  const tokenId = value => {
+    const text = String(value || "")
+      .replace(/`/g, "")
+      .trim();
+
+    return (
+      text.match(
+        /^(?:id\s*:?\s*)?(\d{1,25})$/i
+      )?.[1] ||
+      text.match(
+        /^<@!?(\d{1,25})>$/
+      )?.[1] ||
+      ""
+    );
+  };
 
   if (!raw) {
     return {
@@ -558,62 +634,69 @@ function VIP_parseGanhadorFlex(input, orgFallback = "Não identificado") {
     };
   }
 
-  const partes = raw
+  const parts = raw
     .split(/[|\/\\]/g)
-    .map((p) => p.trim())
+    .map(part => part.trim())
     .filter(Boolean);
 
-  const extrairId = (texto) => {
-    const mention = String(texto || "").match(/<@!?(\d{1,25})>/);
-    if (mention?.[1]) return mention[1];
-
-    const numero = String(texto || "").match(/\b\d{1,25}\b/);
-    return numero?.[0] || "";
-  };
-
-  if (partes.length >= 2) {
-    const a = partes[0];
-    const b = partes.slice(1).join(" | ");
-
-    const idA = extrairId(a);
-    const idB = extrairId(b);
-
-    if (idA && !idB) {
-      return {
-        id: idA,
-        nome: b || orgFallback || "Não identificado",
-      };
-    }
-
-    if (idB) {
-      return {
-        id: idB,
-        nome: a || orgFallback || "Não identificado",
-      };
-    }
-
+  if (parts.length === 1) {
     return {
-      nome: a || orgFallback || "Não identificado",
-      id: b || "",
+      id: tokenId(raw),
+      nome:
+        tokenId(raw)
+          ? "Não identificado"
+          : raw,
     };
   }
 
-  const unico = partes[0] || raw;
-  const idUnico = extrairId(unico);
+  if (parts.length !== 2) {
+    return {
+      id: "",
+      nome: orgFallback || "Não identificado",
+    };
+  }
 
-return {
-  id: idUnico,
-  nome: idUnico ? "Não identificado" : unico,
-};
+  const idA =
+    tokenId(parts[0]);
+
+  const idB =
+    tokenId(parts[1]);
+
+  if (Boolean(idA) === Boolean(idB)) {
+    return {
+      id: "",
+      nome: orgFallback || "Não identificado",
+    };
+  }
+
+  return idA
+    ? {
+        id: idA,
+        nome: parts[1],
+      }
+    : {
+        id: idB,
+        nome: parts[0],
+      };
 }
 
 function VIP_formatarCampoIdGanhador(ganhadorId) {
-  const id = String(ganhadorId || "").trim();
+  const id =
+    String(ganhadorId || "").trim();
 
-  if (!id) return "`Não informado`";
-  if (/^\d{1,25}$/.test(id)) return `<@${id}> (\`${id}\`)`;
+  if (!id) {
+    return "`Não informado`";
+  }
 
-  return `\`${id}\``;
+  if (/^\d{17,20}$/.test(id)) {
+    return `<@${id}> (\`${id}\`)`;
+  }
+
+  if (/^\d{1,25}$/.test(id)) {
+    return `\`${id}\``;
+  }
+
+  return "`Não informado`";
 }
 
 function VIP_buildRegistroEmbed(guild, registrante, payload, cityName) {
@@ -1522,6 +1605,758 @@ movidos++;
 // ✅ EXPORTS (o que o index vai chamar)
 // =====================================================
 
+function VIP_siteDate(value) {
+  const match = String(value || '')
+    .trim()
+    .match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+
+  if (!match) {
+    throw VIP_siteFail(
+      400,
+      'Informe a data no formato DD/MM/AAAA.'
+    );
+  }
+
+  const day = Number(match[1]);
+  const month = Number(match[2]);
+  const year = Number(match[3]);
+
+  const date = new Date(
+    Date.UTC(year, month - 1, day)
+  );
+
+  if (
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() !== month - 1 ||
+    date.getUTCDate() !== day
+  ) {
+    throw VIP_siteFail(
+      400,
+      'A data do evento não existe no calendário.'
+    );
+  }
+
+  return [
+    String(day).padStart(2, '0'),
+    String(month).padStart(2, '0'),
+    year,
+  ].join('/');
+}
+
+async function VIP_siteActor(guild, actorId) {
+  const member = await guild.members.fetch({
+    user: String(actorId),
+    force: true,
+  });
+
+  if (
+    member?.guild?.id !== guild.id ||
+    member.user?.bot ||
+    !member.roles.cache.has(IDS.LIDERES) ||
+    !canRegister(member)
+  ) {
+    throw VIP_siteFail(
+      403,
+      'O formulário do site é exclusivo dos líderes autorizados.'
+    );
+  }
+
+  const context =
+    await VIP_getLeaderRequestContext(member);
+
+  if (
+    !context.strict ||
+    !context.ok
+  ) {
+    throw VIP_siteFail(
+      context.source === 'error' ? 503 : 403,
+      context.message ||
+      'Não foi possível validar sua organização ou cidade.'
+    );
+  }
+
+  return {
+    member,
+    context,
+  };
+}
+
+export async function getVipEventoSiteForm({
+  guild,
+  actorId,
+}) {
+  const { context } =
+    await VIP_siteActor(guild, actorId);
+
+  const today =
+    getTodayEventData();
+
+  return {
+    cities: context.cityKeys.map(key => ({
+      key,
+      label: CITIES[key].label,
+      emoji: CITIES[key].emoji,
+    })),
+
+    orgLocked:
+      context.source === 'org_ticket',
+
+    defaults: {
+      cityKey:
+        context.cityKeys.length === 1
+          ? context.cityKeys[0]
+          : '',
+
+      evento:
+        typeof today?.eventName === 'string'
+          ? today.eventName
+          : '',
+
+      data:
+        getTodayDateFormatted(),
+
+      ganhador:
+        '',
+
+      org:
+        context.orgName || '',
+
+      premiacao:
+        typeof today?.prizes === 'string'
+          ? today.prizes
+          : '',
+    },
+
+    limits: {
+      evento: 100,
+      data: 10,
+      ganhador: 200,
+      org: 100,
+      premiacao: 900,
+    },
+
+    generatedAt:
+      Date.now(),
+  };
+}
+
+async function VIP_sitePrepare(
+  guild,
+  actorId,
+  payload
+) {
+  const { member, context } =
+    await VIP_siteActor(guild, actorId);
+
+  const cityKey =
+    String(payload.cityKey || '');
+
+  if (!context.cityKeys.includes(cityKey)) {
+    throw VIP_siteFail(
+      403,
+      'A cidade não corresponde aos seus cargos atuais.'
+    );
+  }
+
+  const values = {};
+
+  for (const [key, limit] of Object.entries({
+    evento: 100,
+    data: 10,
+    ganhador: 200,
+    org: 100,
+    premiacao: 900,
+  })) {
+    if (
+      key === 'org' &&
+      context.source === 'org_ticket'
+    ) {
+      values.org = context.orgName;
+      continue;
+    }
+
+    if (typeof payload[key] !== 'string') {
+      throw VIP_siteFail(
+        400,
+        'Preencha o campo ' + key + '.'
+      );
+    }
+
+    const value =
+      payload[key].trim();
+
+    if (
+      !value ||
+      value.length > limit
+    ) {
+      throw VIP_siteFail(
+        400,
+        'O campo ' +
+        key +
+        ' deve ter entre 1 e ' +
+        limit +
+        ' caracteres.'
+      );
+    }
+
+    values[key] = value;
+  }
+
+  values.data =
+    VIP_siteDate(values.data);
+
+  const winner = VIP_parseGanhadorFlex(
+    values.ganhador,
+    values.org
+  );
+
+  if (
+    !/^\d{1,25}$/.test(
+      String(winner.id || '')
+    )
+  ) {
+    throw VIP_siteFail(
+      400,
+      'Informe Nome | ID ou ID | Nome, com um único ID válido.'
+    );
+  }
+
+  const error = validatePrizeInput({
+    prize:
+      values.premiacao,
+
+    type:
+      VIP_normalizarTipoPremiacao(values.premiacao),
+
+    classify:
+      VIP_normalizarTipoPremiacao,
+  });
+
+  if (error) {
+    throw VIP_siteFail(400, error);
+  }
+
+  return {
+    member,
+    cityKey,
+    values,
+  };
+}
+
+function VIP_siteRead(file) {
+  if (!fs.existsSync(file)) {
+    return null;
+  }
+
+  let record;
+
+  try {
+    record = JSON.parse(
+      fs.readFileSync(file, 'utf8')
+    );
+  } catch {
+    throw VIP_siteFail(
+      503,
+      'Não foi possível ler o comprovante do pedido. Nenhum novo registro foi criado.'
+    );
+  }
+
+  if (
+    !record ||
+    !/^[a-f0-9]{64}$/.test(record.fingerprint || '') ||
+    ![
+      'pending',
+      'created',
+      'retryable',
+    ].includes(record.phase)
+  ) {
+    throw VIP_siteFail(
+      503,
+      'O comprovante do pedido está inválido. Nenhum novo registro foi criado.'
+    );
+  }
+
+  if (
+    record.phase === 'created' &&
+    (
+      !/^\d{17,20}$/.test(
+        String(record.messageId || '')
+      ) ||
+      !/^https:\/\/discord\.com\/channels\/\d{17,20}\/\d{17,20}\/\d{17,20}$/.test(
+        String(record.url || '')
+      )
+    )
+  ) {
+    throw VIP_siteFail(
+      503,
+      'O comprovante não contém um link válido. Confira o canal VIP.'
+    );
+  }
+
+  return record;
+}
+
+function VIP_siteSave(file, record) {
+  const temporary =
+    file + '.' + randomUUID() + '.tmp';
+
+  fs.writeFileSync(
+    temporary,
+    JSON.stringify(record),
+    {
+      flag: 'wx',
+      mode: 0o600,
+    }
+  );
+
+  fs.renameSync(
+    temporary,
+    file
+  );
+}
+
+function VIP_siteResult(record, reused = false) {
+  return {
+    ok: true,
+    messageId: record.messageId,
+    url: record.url,
+    reused,
+  };
+}
+
+async function VIP_siteRecover(
+  client,
+  guild,
+  key,
+  file,
+  fingerprint
+) {
+  const channel = await guild.channels.fetch(
+    VIP_MENU_CHANNEL_ID
+  );
+
+  if (
+    channel?.guildId !== guild.id ||
+    !channel.isTextBased()
+  ) {
+    throw VIP_siteFail(
+      503,
+      'Não foi possível conferir o pedido no canal VIP.'
+    );
+  }
+
+  let before;
+
+  for (let page = 0; page < 5; page++) {
+    const messages = await channel.messages.fetch({
+      limit: 100,
+      ...(before ? { before } : {}),
+    });
+
+    const message = [
+      ...messages.values(),
+    ].find(item =>
+      item.author.id === client.user.id &&
+      item.embeds.some(embed =>
+        String(embed.footer?.text || '')
+          .includes('SITE:' + key)
+      )
+    );
+
+    if (message) {
+      const record = {
+        phase: 'created',
+        fingerprint,
+        messageId: message.id,
+        url: message.url,
+        at: Date.now(),
+      };
+
+      VIP_siteSave(file, record);
+
+      return VIP_siteResult(record, true);
+    }
+
+    if (messages.size < 100) {
+      break;
+    }
+
+    before =
+      messages.last()?.id;
+
+    if (!before) {
+      break;
+    }
+  }
+
+  return null;
+}
+
+function VIP_siteInteraction(guild, prepared) {
+  const fields = {
+    vip_evt_nome:
+      prepared.values.evento,
+
+    vip_evt_data:
+      prepared.values.data,
+
+    vip_ganhador_id:
+      prepared.values.ganhador,
+
+    vip_org_nome:
+      prepared.values.org,
+
+    vip_premiacao:
+      prepared.values.premiacao,
+  };
+
+  return {
+    __scSiteVip: true,
+
+    id:
+      'site-vip-' + randomUUID(),
+
+    customId:
+      VIP_MODAL_ID + ':' + prepared.cityKey,
+
+    guild,
+    guildId: guild.id,
+
+    member:
+      prepared.member,
+
+    user:
+      prepared.member.user,
+
+    client:
+      null,
+
+    channel:
+      null,
+
+    channelId:
+      VIP_MENU_CHANNEL_ID,
+
+    createdTimestamp:
+      Date.now(),
+
+    deferred:
+      false,
+
+    replied:
+      false,
+
+    fields: {
+      getTextInputValue:
+        key => fields[key] || '',
+    },
+
+    isButton:
+      () => false,
+
+    isStringSelectMenu:
+      () => false,
+
+    isModalSubmit:
+      () => true,
+
+    isMessageComponent:
+      () => false,
+
+    isRepliable:
+      () => true,
+
+    async deferReply() {
+      this.deferred = true;
+    },
+
+    async reply(payload) {
+      this.replied = true;
+      this.lastReply = payload;
+      return payload;
+    },
+
+    async editReply(payload) {
+      this.lastReply = payload;
+      return payload;
+    },
+
+    async followUp(payload) {
+      this.lastReply = payload;
+      return payload;
+    },
+  };
+}
+
+async function VIP_siteExecute({
+  client,
+  guild,
+  prepared,
+  file,
+  fingerprint,
+}) {
+  const interaction =
+    VIP_siteInteraction(guild, prepared);
+
+  interaction.client =
+    client;
+
+  interaction.__scSiteVipRequestKey =
+    path.basename(file, '.json');
+
+  const record = {
+    phase: 'pending',
+    fingerprint,
+    at: Date.now(),
+  };
+
+  fs.mkdirSync(
+    VIP_SITE_DIRECTORY,
+    {
+      recursive: true,
+      mode: 0o700,
+    }
+  );
+
+  if (!fs.existsSync(file)) {
+    fs.writeFileSync(
+      file,
+      JSON.stringify(record),
+      {
+        flag: 'wx',
+        mode: 0o600,
+      }
+    );
+  } else {
+    VIP_siteSave(file, record);
+  }
+
+  return new Promise((resolve, reject) => {
+    interaction.__scSiteVipCreatedHook = async message => {
+      const saved = {
+        ...record,
+        phase: 'created',
+        messageId: message.id,
+        url: message.url,
+        at: Date.now(),
+      };
+
+      let warning = '';
+
+      try {
+        VIP_siteSave(file, saved);
+      } catch (error) {
+        warning =
+          'O registro foi criado, mas o comprovante local não pôde ser atualizado. Guarde o link e não repita o pedido.';
+
+        console.error(
+          '[VIP SITE] Falha ao salvar comprovante:',
+          error
+        );
+      }
+
+      resolve({
+        ...VIP_siteResult(saved),
+        warning,
+      });
+    };
+
+    void vipEventoHandleInteraction(
+      interaction,
+      client
+    ).then(() => {
+      if (interaction.__scSiteVipCreated) {
+        return;
+      }
+
+      if (!interaction.__scSiteVipSending) {
+        try {
+          VIP_siteSave(
+            file,
+            {
+              ...record,
+              phase: 'retryable',
+            }
+          );
+        } catch (error) {
+          console.error(
+            '[VIP SITE] Falha ao registrar tentativa:',
+            error
+          );
+        }
+      }
+
+      const reply =
+        interaction.lastReply;
+
+      const message =
+        typeof reply === 'string'
+          ? reply
+          : reply?.content;
+
+      const status =
+        interaction.__scSiteVipSending
+          ? 409
+          : Number(interaction.__scSiteVipError?.status) || 503;
+
+      reject(
+        VIP_siteFail(
+          status,
+
+          interaction.__scSiteVipSending
+            ? 'O envio ao Discord não foi confirmado. Não crie outro pedido; consulte o registro antes de repetir.'
+            : message ||
+              interaction.__scSiteVipError?.message ||
+              'Não foi possível criar o registro VIP. Tente novamente.'
+        )
+      );
+    }).catch(reject);
+  });
+}
+
+export async function submitVipEventoFromSite({
+  client,
+  guild,
+  actorId,
+  payload = {},
+}) {
+  const operationId = String(payload.operationId || '')
+    .toLowerCase();
+
+  if (!VIP_SITE_UUID.test(operationId)) {
+    throw VIP_siteFail(
+      400,
+      'Identificador do pedido inválido. Abra novamente o formulário.'
+    );
+  }
+
+  const prepared =
+    await VIP_sitePrepare(
+      guild,
+      actorId,
+      payload
+    );
+
+  const actorKey =
+    guild.id + ':' + prepared.member.id;
+
+  const key = createHash('sha256')
+    .update(actorKey + ':' + operationId)
+    .digest('hex');
+
+  const file = path.join(
+    VIP_SITE_DIRECTORY,
+    key + '.json'
+  );
+
+  const fingerprint = createHash('sha256')
+    .update(
+      JSON.stringify([
+        prepared.cityKey,
+        prepared.values,
+      ])
+    )
+    .digest('hex');
+
+  let stored =
+    VIP_siteRead(file);
+
+  if (
+    stored &&
+    stored.fingerprint !== fingerprint
+  ) {
+    throw VIP_siteFail(
+      409,
+      'Este identificador já pertence a um pedido com outros dados.'
+    );
+  }
+
+  if (stored?.phase === 'created') {
+    return VIP_siteResult(stored, true);
+  }
+
+  if (stored?.phase === 'pending') {
+    const recovered =
+      await VIP_siteRecover(
+        client,
+        guild,
+        key,
+        file,
+        fingerprint
+      );
+
+    if (recovered) {
+      return recovered;
+    }
+
+    stored =
+      VIP_siteRead(file);
+
+    if (stored?.phase === 'created') {
+      return VIP_siteResult(stored, true);
+    }
+  }
+
+  const running =
+    VIP_SITE_IN_FLIGHT.get(key);
+
+  if (running) {
+    if (running.fingerprint !== fingerprint) {
+      throw VIP_siteFail(
+        409,
+        'O pedido em andamento possui outros dados.'
+      );
+    }
+
+    return running.promise;
+  }
+
+  if (stored?.phase === 'pending') {
+    throw VIP_siteFail(
+      409,
+      'Este pedido está em verificação após uma interrupção. Confira o canal VIP antes de criar outro.'
+    );
+  }
+
+  if (VIP_SITE_ACTOR_LOCKS.has(actorKey)) {
+    throw VIP_siteFail(
+      429,
+      'Você já possui um pedido sendo enviado. Aguarde.'
+    );
+  }
+
+  VIP_SITE_ACTOR_LOCKS.set(
+    actorKey,
+    key
+  );
+
+  const promise = VIP_siteExecute({
+    client,
+    guild,
+    prepared,
+    file,
+    fingerprint,
+  }).finally(() => {
+    VIP_SITE_IN_FLIGHT.delete(key);
+
+    if (
+      VIP_SITE_ACTOR_LOCKS.get(actorKey) === key
+    ) {
+      VIP_SITE_ACTOR_LOCKS.delete(actorKey);
+    }
+  });
+
+  VIP_SITE_IN_FLIGHT.set(
+    key,
+    {
+      fingerprint,
+      promise,
+    }
+  );
+
+  return promise;
+}
+
 export async function vipEventoOnReady(client) {
   if (!VIP_PRESERVAR_PREMIACAO_ORIGINAL) {
     VIP_instalarProtecaoContraEdicaoIncorreta(client);
@@ -2082,10 +2917,57 @@ if (
   },
   cityName
 );
+      if (i.__scSiteVip) {
+        const latestMember = await guild.members.fetch({
+          user: i.user.id,
+          force: true,
+        });
+
+        const latestContext =
+          await VIP_getLeaderRequestContext(latestMember);
+
+        if (
+          !latestMember.roles.cache.has(IDS.LIDERES) ||
+          !canRegister(latestMember) ||
+          !latestContext.strict ||
+          !latestContext.ok ||
+          !latestContext.cityKeys.includes(cityKey) ||
+          (
+            latestContext.source === 'org_ticket' &&
+            latestContext.orgName !== org
+          )
+        ) {
+          throw VIP_siteFail(
+            403,
+            'Seus cargos ou organização mudaram. Reabra o formulário antes de solicitar o VIP.'
+          );
+        }
+
+        embed.setFooter({
+          text:
+            'SantaCreators • VIP por Evento • SITE:' +
+            i.__scSiteVipRequestKey,
+
+          iconURL:
+            guild.iconURL({ size: 64 }) || undefined,
+        });
+
+        i.__scSiteVipSending = true;
+      }
+
       const msg = await menuCh.send({
         content: `Novo registro de VIP para a ${cityName}! ${cityRoleMention}`,
         embeds: [embed],
         components: VIP_buildRegistroButtons(false, false, false) });
+
+      if (i.__scSiteVip) {
+        i.__scSiteVipCreated = {
+          messageId: msg.id,
+          url: msg.url,
+        };
+
+        await i.__scSiteVipCreatedHook?.(msg);
+      }
 
       await VIP_sendDM_VIP(
         client,
@@ -2353,7 +3235,12 @@ extra: [
 
     return true;
   } catch (err) {
+    if (i.__scSiteVip) {
+      i.__scSiteVipError = err;
+    }
+
     if (!isUnknownInteractionError(err)) console.error("[VIP] erro:", err);
+
     return true;
   }
 }

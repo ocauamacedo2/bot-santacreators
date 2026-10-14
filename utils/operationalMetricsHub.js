@@ -90,6 +90,9 @@ const OPERATIONAL_HEAVY_PROVIDER_IDS =
     "hall_da_fama",
     "eventos_diarios",
     "cronograma",
+    "participacao_equipe",
+    "desempenho_geral",
+    "registro_manager",
   ]);
 
 /*

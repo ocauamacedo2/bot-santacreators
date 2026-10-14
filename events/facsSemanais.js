@@ -1885,6 +1885,100 @@ export async function facsSemanaisAppendFromRM(client, displayOrg, options = {})
 // ===============================
 // EXPORTS (HOOKS)
 // ===============================
+export async function getFacsSemanaisSiteSnapshot({
+  client,
+  guild,
+}) {
+  const weekKey = getCurrentWeekSP().weekKey;
+
+  let lista =
+    await readVisibleFacsListFromPanel(client);
+
+  let currentWeek =
+    lista !== null;
+
+  let source =
+    'discord-panel';
+
+  if (lista === null) {
+    if (!fs.existsSync(FACSMENU_STORE)) {
+      throw Object.assign(
+        new Error('A lista de convites ainda não está disponível.'),
+        { status: 503 }
+      );
+    }
+
+    const stored = JSON.parse(
+      fs.readFileSync(FACSMENU_STORE, 'utf8')
+    );
+
+    if (
+      !stored ||
+      typeof stored.weekKey !== 'string' ||
+      typeof stored.lista !== 'string'
+    ) {
+      throw Object.assign(
+        new Error('O arquivo de convites possui formato inválido.'),
+        { status: 503 }
+      );
+    }
+
+    currentWeek =
+      stored.weekKey === weekKey;
+
+    lista =
+      currentWeek ? stored.lista : '';
+
+    source =
+      'json';
+  }
+
+  const readable = value => String(value || '')
+    .replace(
+      /<@&(\d{17,20})>/g,
+      (_, id) =>
+        guild.roles.cache.get(id)?.name ||
+        'Organização'
+    )
+    .replace(/[*_`]/g, '')
+    .trim();
+
+  const organizations = [
+    ...new Map(
+      _lines(lista).map(line => {
+        const name = readable(
+          _extractOrgNameFromLine(line)
+        );
+
+        const role = guild.roles.cache.find(
+          item => norm(item.name) === norm(name)
+        );
+
+        return [
+          norm(name),
+
+          {
+            name,
+
+            image:
+              role?.iconURL?.({ size: 128 }) ||
+              guild.iconURL({ size: 128 }) ||
+              '',
+          },
+        ];
+      }).filter(([, item]) => item.name)
+    ).values(),
+  ];
+
+  return {
+    weekKey,
+    currentWeek,
+    organizations,
+    source,
+    generatedAt: Date.now(),
+  };
+}
+
 export async function facsSemanaisOnReady(client) {
   installBridge(client);
 

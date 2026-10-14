@@ -195,6 +195,108 @@ async function sendFreshBlacklistButton(channel, clientUser) {
 // ================== EXPORTS ==================
 
 // 1. Chamado no 'ready'
+export async function getBlacklistSiteSnapshot({
+  client,
+  guild,
+  member,
+  before,
+}) {
+  if (
+    member?.guild?.id !== guild.id ||
+    !member.roles.cache.has('1353858422063239310')
+  ) {
+    throw Object.assign(
+      new Error('Esta consulta é exclusiva dos líderes.'),
+      { status: 403 }
+    );
+  }
+
+  const cursor = String(before || '');
+
+  if (
+    cursor &&
+    !/^\d{17,20}$/.test(cursor)
+  ) {
+    throw Object.assign(
+      new Error('Página de blacklist inválida.'),
+      { status: 400 }
+    );
+  }
+
+  const channel = await client.channels.fetch(
+    BLACKLIST_BUTTON_CHANNEL_ID
+  );
+
+  if (
+    channel?.guildId !== guild.id ||
+    !channel.isTextBased()
+  ) {
+    throw Object.assign(
+      new Error('O canal de blacklist está indisponível.'),
+      { status: 503 }
+    );
+  }
+
+  const page = await channel.messages.fetch({
+    limit: 100,
+    ...(cursor ? { before: cursor } : {}),
+  });
+
+  const readable = value => String(value || '')
+    .replace(
+      /<@&(\d{17,20})>/g,
+      (_, id) =>
+        guild.roles.cache.get(id)?.name ||
+        'Organização'
+    )
+    .replace(
+      /<@!?(\d{17,20})>/g,
+      (_, id) =>
+        guild.members.cache.get(id)?.displayName ||
+        'Responsável'
+    )
+    .replace(/[*_`]/g, '')
+    .trim();
+
+  const records = [];
+
+  for (const message of page.values()) {
+    const embed = message.embeds[0];
+
+    if (
+      message.author?.id !== client.user.id ||
+      embed?.title !== '🛑 REGISTRO DE BLACKLIST'
+    ) {
+      continue;
+    }
+
+    const field = name => readable(
+      (embed.fields || []).find(
+        item => item.name === name
+      )?.value
+    );
+
+    records.push({
+      name: field('Organização'),
+      family: field('Família Ativa'),
+      responsible: field('Resp que autorizou'),
+      reason: field('Motivo'),
+      image: embed.image?.url || '',
+      at: message.createdTimestamp,
+      url: message.url,
+    });
+  }
+
+  return {
+    records,
+    nextBefore:
+      page.size === 100
+        ? page.last()?.id || null
+        : null,
+    generatedAt: Date.now(),
+  };
+}
+
 export async function blacklistFacsOnReady(client) {
   try {
     const ch = await client.channels

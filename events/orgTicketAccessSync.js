@@ -335,6 +335,7 @@ export async function getMemberOrgTicketContext(member) {
     return {
       matches: [],
       missingTagTickets: [],
+      tags: [],
     };
   }
 
@@ -444,12 +445,22 @@ export async function getMemberOrgTicketContext(member) {
     return {
       matches,
       missingTagTickets,
+
+      tags: tagRoles.map(role => ({
+        roleId: role.id,
+        roleName: role.name,
+      })),
     };
   }
 
   return {
     matches: [],
     missingTagTickets: [],
+
+    tags: tagRoles.map(role => ({
+      roleId: role.id,
+      roleName: role.name,
+    })),
   };
 }
 

@@ -347,6 +347,46 @@ function canSetMaster(member, userId) {
 // ===============================
 // EXPORTS (HOOKS)
 // ===============================
+export async function getFacsComparativoSiteSnapshot() {
+  if (!fs.existsSync(MASTER_PATH)) {
+    throw Object.assign(
+      new Error('A lista MASTER de organizações ainda não está disponível.'),
+      { status: 503 }
+    );
+  }
+
+  const stored = JSON.parse(
+    fs.readFileSync(MASTER_PATH, 'utf8')
+  );
+
+  if (!Array.isArray(stored?.orgs)) {
+    throw Object.assign(
+      new Error('A lista MASTER possui formato inválido.'),
+      { status: 503 }
+    );
+  }
+
+  const organizations = [
+    ...new Map(
+      stored.orgs
+        .map(value =>
+          extractOrgName(value)
+            .replace(/[*_`]/g, '')
+            .trim()
+        )
+        .filter(Boolean)
+        .map(name => [norm(name), name])
+    ).values(),
+  ].sort(
+    (a, b) => a.localeCompare(b, 'pt-BR')
+  );
+
+  return {
+    organizations,
+    generatedAt: Date.now(),
+  };
+}
+
 export async function facsComparativoOnReady(client) {
   // guard
   if (client.__SC_FACS_COMPARATIVO_ACTIVE) return;

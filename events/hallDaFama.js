@@ -24635,6 +24635,140 @@ function getLifetimeHallPlayers(rankings) {
     );
 }
 
+export async function getPersonalHallSiteSnapshot({
+  guild,
+  member,
+  organizations = [],
+}) {
+  if (
+    member?.guild?.id !== guild.id ||
+    member.user?.bot
+  ) {
+    throw Object.assign(
+      new Error('Membro inválido.'),
+      { status: 403 }
+    );
+  }
+
+  if (!fs.existsSync(HALL_RANKING_FILE)) {
+    throw Object.assign(
+      new Error('O histórico de vitórias ainda não está disponível.'),
+      { status: 503 }
+    );
+  }
+
+  const rankings = loadHallRankings();
+
+  const playerId = String(member.displayName || '')
+    .match(/\|\s*(\d{1,25})\s*$/)?.[1] || '';
+
+  const normalize = value => String(value || '')
+    .split('|')
+    .at(-1)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]/gi, '')
+    .toLowerCase();
+
+  const orgKeys = new Set(
+    organizations
+      .filter(org =>
+        member.roles.cache.has(org.roleId)
+      )
+      .map(org =>
+        normalize(org.roleName)
+      )
+  );
+
+  const personalEntries = playerId
+    ? getLifetimeHallPlayers(rankings).filter(entry =>
+        String(entry.playerId || '') === playerId
+      )
+    : [];
+
+  const organizationEntries =
+    member.roles.cache.has('1353858422063239310')
+      ? [
+          ...getLifetimeHallOrgs(rankings),
+
+          ...getHallOrgSeasons(rankings).flatMap(
+            season => season.ranking
+          ),
+        ].filter(entry =>
+          orgKeys.has(normalize(entry.name))
+        )
+      : [];
+
+  const collect = (entries, mode) => {
+    const records = new Map();
+
+    for (const entry of entries) {
+      for (const hall of entry.halls || []) {
+        const channelId =
+          String(hall.channelId || '');
+
+        const messageId =
+          String(hall.messageId || '');
+
+        if (
+          !/^\d{17,20}$/.test(channelId) ||
+          !/^\d{17,20}$/.test(messageId) ||
+          (
+            hall.guildId &&
+            hall.guildId !== guild.id
+          )
+        ) {
+          continue;
+        }
+
+        const id = createHash('sha256')
+          .update(
+            JSON.stringify([
+              mode,
+              normalize(entry.name),
+              entry.playerId || '',
+              hall.cityKey || entry.cityKey || '',
+              hall.eventName || '',
+              channelId,
+              messageId,
+            ])
+          )
+          .digest('hex');
+
+        records.set(id, {
+          id,
+          owner: entry.name,
+          eventName: hall.eventName || 'Evento',
+          cityName: hall.cityName || entry.cityName || '',
+
+          at:
+            Number(hallVictoryTimestamp(hall)) || 0,
+
+          url:
+            `https://discord.com/channels/${guild.id}/${channelId}/${messageId}`,
+
+          source: {
+            channelId,
+            messageId,
+          },
+        });
+      }
+    }
+
+    return [...records.values()].sort(
+      (a, b) =>
+        b.at - a.at ||
+        a.id.localeCompare(b.id)
+    );
+  };
+
+  return {
+    playerId,
+    personal: collect(personalEntries, 'personal'),
+    organization: collect(organizationEntries, 'organization'),
+  };
+}
+
 export async function getHallSiteSnapshot({
   guild,
   actorId,

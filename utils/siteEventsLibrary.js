@@ -612,6 +612,13 @@ export function createSiteEventsLibrary({ client }) {
       events: events.map(event => ({
         ...event,
 
+        publicationEventId:
+          (event.aliasIds || [event.id]).find(id =>
+            state.publications?.[
+              guild.id + ':' + id
+            ]?.online === true
+          ) || null,
+
                publicationOnline:
           (event.aliasIds || [event.id]).some(id =>
             Boolean(
@@ -878,7 +885,26 @@ export function createSiteEventsLibrary({ client }) {
             value.name,
 
           cover:
-            value.cover || '',
+            Object.hasOwn(
+              state.covers,
+              guild.id + ':' + value.eventId
+            )
+              ? state.covers[guild.id + ':' + value.eventId]
+              : value.cover ||
+                (
+                  Array.isArray(value.rules)
+                    ? value.rules
+                    : []
+                )
+                  .flatMap(rule =>
+                    Array.isArray(rule?.media)
+                      ? rule.media
+                      : []
+                  )
+                  .find(media =>
+                    media?.kind === 'image'
+                  )?.url ||
+                '',
 
           publicationOnline:
             true,

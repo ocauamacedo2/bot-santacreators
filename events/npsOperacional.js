@@ -8805,7 +8805,16 @@ async function ensureCoreOperationalMetrics(
     if (
       existingMetric &&
       existingMetric.available !==
-        false
+        false &&
+      (
+        requiredProvider.id !== "participacao_equipe" ||
+        (
+          existingMetric.details?.operationalSources?.weekKey ===
+            context.currentWeek?.key &&
+          existingMetric.details?.operationalSources?.previousWeekKey ===
+            context.previousWeek?.key
+        )
+      )
     ) {
       console.log(
         `[NPS Operacional] Métrica "${requiredProvider.id}" já disponível no Hub. Reutilizando sem nova coleta.`
@@ -9568,10 +9577,24 @@ async function generateResults(
     },
   };
 
-  const providerCollection =
+  const collectedProviderMetrics =
     await collectOperationalMetrics(
       providerContext
     );
+
+  const providerCollection = {
+    ...collectedProviderMetrics,
+
+    results: structuredClone(
+      collectedProviderMetrics.results || []
+    ),
+
+    errors: (collectedProviderMetrics.errors || []).map(
+      error => ({
+        ...error,
+      })
+    ),
+  };
 
   /*
    * Garante que as duas métricas gerais mais importantes
@@ -14716,6 +14739,10 @@ function saveNpsSiteSnapshot(results) {
     return {
       id: category.categoryId,
       label: category.label,
+
+      scoreBasis:
+        category.raw?.providerMetric?.scoreBasis || '',
+
       score,
       previousScore,
       difference:

@@ -1,3 +1,79 @@
+export function parsePrizeComponents(value) {
+  const text = String(value || '')
+    .normalize('NFKC')
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/https?:\/\/\S+/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/[*_`~]/g, '')
+    .replace(/^\s*gg\s*[-:]\s*/i, '')
+    .trim();
+
+  if (!text) return null;
+
+  const result = {};
+  const pieces = text.split(/\s*\+\s*|[;\n]+/);
+
+  const expression = /^(?:(-?\d+(?:[.,]\d+)?)\s*(?:x\s*)?)?(vip\s*(?:evento|gente\s*boa|platinum|ouro|prata|bronze|black|staff)|role\s*pass|rolepass|battle\s*pass|battlepass|pass)(?:\s*(?:x\s*)?(-?\d+(?:[.,]\d+)?))?$/i;
+
+  for (const piece of pieces) {
+    const match = piece.trim().match(expression);
+
+    if (!match) return null;
+
+    const before = match[1] == null
+      ? null
+      : Number(match[1].replace(',', '.'));
+
+    const after = match[3] == null
+      ? null
+      : Number(match[3].replace(',', '.'));
+
+    if (
+      before !== null &&
+      after !== null &&
+      before !== after
+    ) {
+      return null;
+    }
+
+    const quantity = before ?? after ?? 1;
+
+    if (
+      !Number.isSafeInteger(quantity) ||
+      quantity <= 0
+    ) {
+      return null;
+    }
+
+    const label = match[2]
+      .toLowerCase()
+      .replace(/\s+/g, '');
+
+    const key = label.includes('pass')
+      ? 'Pass'
+      : {
+          vipevento: 'VIP Evento',
+          vipgenteboa: 'VIP Gente Boa',
+          vipplatinum: 'VIP Platinum',
+          vipouro: 'VIP Ouro',
+          vipprata: 'VIP Prata',
+          vipbronze: 'VIP Bronze',
+          vipblack: 'VIP Black',
+          vipstaff: 'VIP Staff',
+        }[label];
+
+    if (!key) return null;
+
+    result[key] = (result[key] || 0) + quantity;
+
+    if (!Number.isSafeInteger(result[key])) {
+      return null;
+    }
+  }
+
+  return result;
+}
+
 export function validatePrizeInput({
   prize,
   type = '',
@@ -12,6 +88,38 @@ export function validatePrizeInput({
     String(
       type || ''
     ).trim();
+
+  const quantitySource = text
+    .normalize('NFKC')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/https?:\/\/\S+/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/[*_`~]/g, '');
+
+  const beforeQuantity =
+    /(-?\d+(?:[.,]\d+)?)\s*(?:x\s*)?\b(?:vip\s*(?:evento|gente\s*boa|platinum|ouro|prata|bronze|black|staff)|role\s*pass|rolepass|battle\s*pass|battlepass|pass)\b/gi;
+
+  const afterQuantity =
+    /\b(?:vip\s*(?:evento|gente\s*boa|platinum|ouro|prata|bronze|black|staff)|role\s*pass|rolepass|battle\s*pass|battlepass|pass)\b\s*(?:x\s*)?(-?\d+(?:[.,]\d+)?)/gi;
+
+  const invalidQuantity = [
+    ...quantitySource.matchAll(beforeQuantity),
+    ...quantitySource.matchAll(afterQuantity),
+  ].some(match => {
+    const amount = Number(
+      match[1].replace(',', '.')
+    );
+
+    return (
+      !Number.isSafeInteger(amount) ||
+      amount <= 0
+    );
+  });
+
+  if (invalidQuantity) {
+    return 'Quantidade de premiação inválida. Use um número inteiro maior que zero.';
+  }
 
   const kind =
     classify(
@@ -41,11 +149,23 @@ export function validatePrizeInput({
     ? classify(prizeTextWithoutLinks)
     : null;
 
+  const prizeComponents =
+    parsePrizeComponents(prizeTextWithoutLinks);
+
+  const typeBelongsToPackage = Boolean(
+    prizeComponents &&
+    Object.keys(prizeComponents).length > 1 &&
+    Object.keys(prizeComponents).some(component =>
+      classify(component) === kind
+    )
+  );
+
   if (
     explicitType &&
     kindFromPrize &&
     kindFromPrize !== 'Não identificado' &&
-    kindFromPrize !== kind
+    kindFromPrize !== kind &&
+    !typeBelongsToPackage
   ) {
     return (
       'O campo Tipo e o campo Premiação indicam categorias diferentes. ' +

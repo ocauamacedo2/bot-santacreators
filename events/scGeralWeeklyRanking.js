@@ -5130,16 +5130,27 @@ if (
       : [];
 }
 
+  const requestedCurrentWeek =
+    String(context.currentWeek?.key || "");
+
+  const requestedPreviousWeek =
+    String(context.previousWeek?.key || "");
+
   const currentWeekKey =
-    weekKeyFromDateSP(
-      nowSP()
-    );
+    /^\d{4}-\d{2}-\d{2}$/.test(requestedCurrentWeek)
+      ? requestedCurrentWeek
+      : weekKeyFromDateSP(
+          nowSP()
+        );
 
   const previousWeekKey =
-    addDaysToWeekKey(
-      currentWeekKey,
-      -7
-    );
+    /^\d{4}-\d{2}-\d{2}$/.test(requestedPreviousWeek) &&
+    requestedPreviousWeek !== currentWeekKey
+      ? requestedPreviousWeek
+      : addDaysToWeekKey(
+          currentWeekKey,
+          -7
+        );
 
   const current =
     aggregateWeekDetailed(
