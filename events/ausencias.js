@@ -15,7 +15,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 
-import { findFormsCreatorThreadIdByUserId } from "./formscreator.js";
+import {
+  findFormsCreatorThreadIdByUserId,
+  getSavedFormsCreatorName,
+} from "./formscreator.js";
 
 // Guard to prevent multiple initializations if imported multiple times
 if (globalThis.__AUSENCIAS_MINI_V3__) {
@@ -519,11 +522,25 @@ async function resolverNomeDashboardAusencias(client, guild, userId) {
     );
   }
 
-  const nomeForms =
-    await buscarNomePorFormsCreator(
-      client,
-      userId
-    ).catch(() => null);
+  let nomeForms = null;
+
+  try {
+    nomeForms =
+      getSavedFormsCreatorName(
+        userId
+      );
+  } catch (error) {
+    console.warn(
+      "[AUSÊNCIAS] Falha ao consultar nome salvo no FormsCreator:",
+      {
+        userId,
+        message:
+          String(
+            error?.message || error
+          ).slice(0, 500),
+      }
+    );
+  }
 
   if (nomeForms) {
     return limparNomeRanking(
