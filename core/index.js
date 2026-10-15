@@ -1056,6 +1056,50 @@ const isCommand = content.startsWith(prefix);
 if (isCommand) {
   const args = content.slice(prefix.length).trim().split(/\s+/);
   const cmd = args.shift().toLowerCase();
+
+  if (cmd === "menuvip") {
+    if (
+      message.author.bot ||
+      !message.guild
+    ) {
+      return;
+    }
+
+    console.log(
+      "[VIP MENU] Comando recebido:",
+      message.id
+    );
+
+    await message.reply({
+      content:
+        "⏳ Comando recebido. Vou tentar recriar o menu VIP.",
+
+      allowedMentions: {
+        repliedUser: false,
+        parse: [],
+      },
+    }).catch(() => {});
+
+    const handled =
+      await vipEventoHandleMessage(
+        message,
+        client
+      );
+
+    if (!handled) {
+      await message.reply({
+        content:
+          "⚠️ O roteador recebeu !menuvip, mas o módulo VIP carregado não reconheceu o comando. Publique a versão atualizada de events/vipEvento.js e reinicie o bot.",
+
+        allowedMentions: {
+          repliedUser: false,
+          parse: [],
+        },
+      }).catch(() => {});
+    }
+
+    return;
+  }
 // =====================================================
 // 🚀 FAST PATH - !PERGUNTAS
 // =====================================================
