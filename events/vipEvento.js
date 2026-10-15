@@ -3972,12 +3972,36 @@ export async function corrigirCidadeVipPorCargo(
     );
 
   if (keys.length !== 1) {
-    console.warn(
-      '[VIP CIDADE] Cidade ausente ou ambígua:',
-      message.id,
-      actorId,
-      keys
-    );
+    const warningKey =
+      `city-warning:${actorId}`;
+
+    if (!members.has(warningKey)) {
+      members.set(warningKey, true);
+
+      const countKey =
+        'city-warning-count';
+
+      const count =
+        Number(members.get(countKey) || 0);
+
+      members.set(countKey, count + 1);
+
+      if (count < 10) {
+        console.warn(
+          '[VIP CIDADE] Registrante sem cidade única:',
+          {
+            registranteId: actorId,
+            exemploRegistroId: message.id,
+            cidadesEncontradas: keys,
+            cidadeDoRegistroPreservada: true,
+          }
+        );
+      } else if (count === 10) {
+        console.warn(
+          '[VIP CIDADE] Demais avisos de cidade omitidos nesta varredura. Registros sem cidade única serão preservados.'
+        );
+      }
+    }
 
     return message;
   }
