@@ -106,6 +106,7 @@ async function siteProvider(modulePath, exportName) {
 import {
   getRegistroManagerSiteSnapshot,
   registroManagerSiteDecision,
+  registroManagerSiteRegistration,
 } from "./registroManager.js";
 
 import {
@@ -638,9 +639,36 @@ async function workflowCatalog(
     }
   }
 
+  try {
+    modules.push(
+      await registroManagerSiteRegistration({
+        client,
+        guild,
+        member,
+        action: 'catalog',
+      })
+    );
+  } catch (error) {
+    if (error.status !== 403) {
+      console.error(
+        '[SITE HUB] Catálogo de organizações:',
+        error
+      );
+
+      warnings.push(
+        'Não foi possível consultar o Registro Manager.'
+      );
+    }
+  }
+
+  const organizationAccess =
+    await community.access(member);
+
   return {
     modules,
     warnings,
+    confirmOrganization:
+      organizationAccess.orgpresence === true,
   };
 }
 
@@ -2010,6 +2038,18 @@ const experience = createSiteHubExperience({
     String(
       payload.module || ''
     );
+
+  if (module === 'managerRegistration') {
+    return res.json(
+      await registroManagerSiteRegistration({
+        client,
+        guild,
+        member,
+        action: workflowAction,
+        payload,
+      })
+    );
+  }
 
   const provider =
     workflowProviders[module];

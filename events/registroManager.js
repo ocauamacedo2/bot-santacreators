@@ -35,6 +35,7 @@ import {
   TextInputBuilder,
   TextInputStyle,
   MessageFlags,
+  PermissionFlagsBits,
 } from "discord.js";
 
 import { dashEmit } from "../utils/dashHub.js";
@@ -3219,6 +3220,8 @@ if (
   const displayCache = `${famIdForList} | ${org}`.trim();
   RM_DISPLAY.set(msg.id, displayCache);
 
+  interaction.__scRmSiteCreated?.(msg);
+
   await upsertLogForRMMessage(client, msg);
 
   bumpWeekly(getWeekKeyNow(), "createdBy", registrantId, +1);
@@ -4176,6 +4179,245 @@ function resolveRmSiteStatus(
   return "pending";
 }
 
+
+export async function registroManagerSiteRegistration({
+  client,
+  guild,
+  member,
+  action,
+  payload = {},
+}) {
+  const actor = await guild.members.fetch({
+    user: member.id,
+    force: true,
+  });
+
+  const channel = await client.channels.fetch(
+    CANAL_REGISTRO_MANAGER
+  );
+
+  const permissions = channel?.permissionsFor(actor);
+
+  if (
+    channel?.guildId !== guild.id ||
+    !permissions?.has([
+      PermissionFlagsBits.ViewChannel,
+      PermissionFlagsBits.ReadMessageHistory,
+    ])
+  ) {
+    throw Object.assign(
+      new Error('Sem acesso ao canal de Registro Manager.'),
+      { status: 403 }
+    );
+  }
+
+  const allowed = canUseRmPermissionList(
+    actor,
+    actor.id,
+    CARGOS_PODE_REGISTRAR
+  );
+
+  if (action === 'catalog') {
+    return {
+      key: 'managerRegistration',
+      label: 'Registrar organização',
+      rights: {
+        create: allowed,
+      },
+    };
+  }
+
+  if (!allowed) {
+    throw Object.assign(
+      new Error(
+        'Você não tem os cargos necessários para registrar organizações.'
+      ),
+      { status: 403 }
+    );
+  }
+
+  const fields = [
+    {
+      id: 'org_familia',
+      label: 'Família ativa | Organização',
+      required: true,
+      maxLength: 200,
+      value: '',
+      paragraph: false,
+    },
+    {
+      id: 'manager_id_v3',
+      label: 'Outro Manager responsável — opcional',
+      required: false,
+      maxLength: 22,
+      value: '',
+      paragraph: false,
+    },
+    {
+      id: 'lider',
+      label: 'Líder convidado — nome, @ ou ID',
+      required: true,
+      maxLength: 200,
+      value: '',
+      paragraph: false,
+    },
+    {
+      id: 'obs',
+      label: 'Observações',
+      required: false,
+      maxLength: 1000,
+      value: '',
+      paragraph: true,
+    },
+  ];
+
+  if (action === 'schema') {
+    return { fields };
+  }
+
+  if (action !== 'create') {
+    throw Object.assign(
+      new Error('Ação de registro inválida.'),
+      { status: 400 }
+    );
+  }
+
+  const values = {};
+
+  for (const field of fields) {
+    const value = payload.values?.[field.id];
+
+    if (
+      value != null &&
+      typeof value !== 'string'
+    ) {
+      throw Object.assign(
+        new Error(`Campo inválido: ${field.label}.`),
+        { status: 400 }
+      );
+    }
+
+    values[field.id] = String(value || '').trim();
+
+    if (
+      (
+        field.required &&
+        !values[field.id]
+      ) ||
+      values[field.id].length > field.maxLength
+    ) {
+      throw Object.assign(
+        new Error(`Confira o campo: ${field.label}.`),
+        { status: 400 }
+      );
+    }
+  }
+
+  if (
+    values.manager_id_v3 &&
+    !/^(?:\d{17,20}|<@!?\d{17,20}>)$/.test(
+      values.manager_id_v3
+    )
+  ) {
+    throw Object.assign(
+      new Error(
+        'Informe um ID Discord válido para o Manager ou deixe vazio.'
+      ),
+      { status: 400 }
+    );
+  }
+
+  let committed;
+
+  const fake = {
+    customId: 'sc_rm_modal_v3',
+
+    guild,
+    guildId: guild.id,
+
+    channel,
+    channelId: channel.id,
+
+    member: actor,
+    user: actor.user,
+
+    deferred: false,
+    replied: false,
+
+    fields: {
+      getTextInputValue(id) {
+        return values[id] || '';
+      },
+    },
+
+    isButton() {
+      return false;
+    },
+
+    isModalSubmit() {
+      return true;
+    },
+
+    isRepliable() {
+      return true;
+    },
+
+    async reply(value) {
+      this.replied = true;
+      this.lastReply = value;
+      return value;
+    },
+
+    async editReply(value) {
+      this.lastReply = value;
+      return value;
+    },
+
+    async followUp(value) {
+      this.lastReply = value;
+      return value;
+    },
+
+    async deferReply() {
+      this.deferred = true;
+    },
+
+    __scRmSiteCreated(message) {
+      committed = message;
+    },
+  };
+
+  try {
+    await registroManagerHandleInteraction(
+      fake,
+      client
+    );
+  } catch (error) {
+    if (!committed) {
+      throw error;
+    }
+
+    console.error(
+      '[SC_RM] Registro criado; falha na etapa complementar:',
+      error
+    );
+  }
+
+  if (!committed) {
+    throw Object.assign(
+      new Error(
+        'Não foi possível confirmar a criação. Confira o canal no Discord antes de enviar novamente.'
+      ),
+      { status: 502 }
+    );
+  }
+
+  return {
+    ok: true,
+    messageId: committed.id,
+    url: committed.url,
+  };
+}
 
 export async function resolvePresenceManagerCredit({
   client,
