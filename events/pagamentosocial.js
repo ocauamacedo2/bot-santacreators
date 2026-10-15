@@ -4622,6 +4622,29 @@ function limparValorEmbedVip(texto) {
     .trim();
 }
 
+function normalizarPremiacaoVipParaVinculo(value) {
+  const lines = String(value || '')
+    .replace(/[`*_~]/g, '')
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(Boolean);
+
+  const typeLine =
+    /^[^\p{L}\p{N}]*tipo\s*:\s*/iu;
+
+  const prizeLines = lines.filter(
+    line => !typeLine.test(line)
+  );
+
+  if (prizeLines.length) {
+    return prizeLines.join('\n');
+  }
+
+  return lines
+    .map(line => line.replace(typeLine, ''))
+    .join('\n');
+}
+
 function extrairInfoDoEmbedVipEvento(embedLike) {
   const desc = String(embedLike?.description || embedLike?.data?.description || "");
 
@@ -4660,7 +4683,7 @@ return {
   ganhadorNome: nomeFinal,
   ganhadorId: idMatch?.[1] || "",
   tipo: normalizarTipoPremiacao(tipoTexto),
-  premiacao: limparValorEmbedVip(premiacaoRaw),
+  premiacao: normalizarPremiacaoVipParaVinculo(premiacaoRaw),
   cidade: limparValorEmbedVip(cidadeRaw),
   organizacao: orgLimpa,
 };
@@ -4881,6 +4904,7 @@ async function buscarVipEventoPorDados(client, dados = {}) {
     .sort((a, b) => b.createdTimestamp - a.createdTimestamp);
 
   const encontrados = [];
+  const cidadesDivergentes = [];
 
   for (const msg of candidatos) {
     const embed = msg.embeds[0];
@@ -4968,6 +4992,20 @@ async function buscarVipEventoPorDados(client, dados = {}) {
       horarioProximo
     );
 
+    if (
+      mesmoEvento &&
+      mesmaData &&
+      mesmoTipo &&
+      mesmaQuantidade &&
+      mesmoGanhador &&
+      horarioProximo &&
+      !mesmaCidade
+    ) {
+      cidadesDivergentes.push(
+        infoVip.cidade || 'Não informada'
+      );
+    }
+
     if (!vinculoSeguro) continue;
 
     encontrados.push({
@@ -4998,11 +5036,21 @@ async function buscarVipEventoPorDados(client, dados = {}) {
     return {
       ok: false,
       erro:
-        "Nenhum Registro VIP passou por todas as conferências automáticas: " +
-        "evento, data, cidade, tipo, quantidade, ID do ganhador e horário próximo. " +
-        "A quantidade precisa estar identificada nos dois registros. " +
-        "Confira os campos e informe o link exato do Registro VIP quando necessário. " +
-        "Nenhum vínculo automático foi aplicado.",
+        cidadesDivergentes.length
+          ? (
+              `Cidade divergente: pagamento em ${dados.cidade}; ` +
+              `Registro VIP em ${
+                [...new Set(cidadesDivergentes)].join(', ')
+              }. ` +
+              "Confira a cidade correta nos dois registros antes de vincular."
+            )
+          : (
+              "Nenhum Registro VIP passou por todas as conferências automáticas: " +
+              "evento, data, cidade, tipo, quantidade, ID do ganhador e horário próximo. " +
+              "A quantidade precisa estar identificada nos dois registros. " +
+              "Confira os campos e informe o link exato do Registro VIP quando necessário. " +
+              "Nenhum vínculo automático foi aplicado."
+            ),
     };
   }
 
@@ -5507,7 +5555,10 @@ async function marcarVipEventoComoPagoPorPagamentoSocial(client, vipEventoResolv
   ) {
     return {
       ok: false,
-      motivo: "Pagamento registrado; falta um vínculo VIP seguro e validado.",
+      motivo: String(
+        vipEventoResolvido?.erro ||
+        "Pagamento registrado; falta um vínculo VIP seguro e validado."
+      ).slice(0, 900),
     };
   }
 
