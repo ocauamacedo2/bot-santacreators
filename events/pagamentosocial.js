@@ -4825,8 +4825,11 @@ function calcularDiferencaMinutosVip(a, b) {
 
   return Math.abs(n1 - n2) / 60000;
 }
-
-async function buscarVipEventoPorDados(client, dados = {}) {
+async function buscarVipEventoPorDados(
+  client,
+  dados = {},
+  mensagensPreCarregadas = null
+) {
   const canal = await client.channels.fetch(CANAL_VIP_EVENTO).catch(() => null);
 
   if (!canal?.isTextBased()) {
@@ -4836,7 +4839,12 @@ async function buscarVipEventoPorDados(client, dados = {}) {
     };
   }
 
-  const mensagens = await fetchMensagensRecentesCanal(canal, 800).catch(() => null);
+  const mensagens =
+    mensagensPreCarregadas ||
+    await fetchMensagensRecentesCanal(
+      canal,
+      800
+    ).catch(() => null);
 
   if (!mensagens || mensagens.length === 0) {
     return {
@@ -5094,6 +5102,371 @@ async function buscarVipEventoPorDados(client, dados = {}) {
     vinculoAutomatico: true,
     criterios: melhor.criterios,
   };
+}
+
+const VIP_RECONCILIATIONS = new WeakMap();
+
+async function lerHistoricoParaVinculo(channel) {
+  const result = [];
+  let before;
+
+  while (true) {
+    const batch = await channel.messages.fetch({
+      limit: 100,
+      ...(before ? { before } : {}),
+    });
+
+    if (!batch.size) {
+      return result;
+    }
+
+    result.push(
+      ...batch.values()
+    );
+
+    const oldest = [
+      ...batch.values(),
+    ].reduce(
+      (previous, message) => {
+        if (
+          !previous ||
+          BigInt(message.id) <
+            BigInt(previous.id)
+        ) {
+          return message;
+        }
+
+        return previous;
+      },
+      null
+    );
+
+    if (
+      !oldest ||
+      oldest.id === before
+    ) {
+      throw new Error(
+        'Não foi possível avançar na varredura de vínculos.'
+      );
+    }
+
+    before = oldest.id;
+
+    if (batch.size < 100) {
+      return result;
+    }
+  }
+}
+
+export function reconciliarVinculosVipPagamento(client) {
+  const previous =
+    VIP_RECONCILIATIONS.get(client);
+
+  if (previous) {
+    return previous;
+  }
+
+  const operation =
+    executarReconciliacaoVipPagamento(
+      client
+    ).finally(() => {
+      if (
+        VIP_RECONCILIATIONS.get(client) ===
+        operation
+      ) {
+        VIP_RECONCILIATIONS.delete(
+          client
+        );
+      }
+    });
+
+  VIP_RECONCILIATIONS.set(
+    client,
+    operation
+  );
+
+  return operation;
+}
+
+async function executarReconciliacaoVipPagamento(client) {
+  const paymentChannel =
+    await client.channels.fetch(
+      CANAL_PAGAMENTO
+    );
+
+  const vipChannel =
+    await client.channels.fetch(
+      CANAL_VIP_EVENTO
+    );
+
+  if (
+    !paymentChannel?.isTextBased() ||
+    !vipChannel?.isTextBased() ||
+    paymentChannel.guildId !==
+      vipChannel.guildId
+  ) {
+    throw new Error(
+      'Canais de pagamento e VIP indisponíveis ou de servidores diferentes.'
+    );
+  }
+
+  const payments =
+    await lerHistoricoParaVinculo(
+      paymentChannel
+    );
+
+  const vips =
+    await lerHistoricoParaVinculo(
+      vipChannel
+    );
+
+  const proposals = [];
+
+  const result = {
+    examinados: 0,
+    vinculados: 0,
+    semCorrespondencia: 0,
+    ambiguos: 0,
+    conflitos: 0,
+    falhas: 0,
+  };
+
+  for (const payment of payments) {
+    if (
+      payment.author?.id !==
+        client.user.id ||
+      !payment.embeds?.[0]
+    ) {
+      continue;
+    }
+
+    const data =
+      getDadosPagamentoParaBuscarVip(
+        payment.embeds[0]
+      );
+
+    if (
+      !categoriaEhVipOuPass(
+        data.tipo
+      )
+    ) {
+      continue;
+    }
+
+    result.examinados++;
+
+    data.registroTimestamp =
+      resolvePaymentOperationMessage(
+        payment.id,
+        payment.createdTimestamp
+      ).createdAt;
+
+    const match =
+      await buscarVipEventoPorDados(
+        client,
+        data,
+        vips
+      );
+
+    if (!match.ok) {
+      result.semCorrespondencia++;
+
+      console.warn(
+        '[VIP RECONCILIACAO] Sem vínculo:',
+        payment.id,
+        match.erro
+      );
+
+      continue;
+    }
+
+    proposals.push({
+      payment,
+      match,
+    });
+  }
+
+  const counts = new Map();
+
+  for (const { match } of proposals) {
+    counts.set(
+      match.message.id,
+      (
+        counts.get(
+          match.message.id
+        ) || 0
+      ) + 1
+    );
+  }
+
+  for (const proposal of proposals) {
+    const {
+      payment,
+      match,
+    } = proposal;
+
+    if (
+      counts.get(
+        match.message.id
+      ) !== 1
+    ) {
+      result.ambiguos++;
+      continue;
+    }
+
+    try {
+      const currentPayment =
+        await paymentChannel.messages.fetch({
+          message: payment.id,
+          force: true,
+        });
+
+      const currentVip =
+        await vipChannel.messages.fetch({
+          message: match.message.id,
+          force: true,
+        });
+
+      if (
+        currentPayment.editedTimestamp !==
+          payment.editedTimestamp ||
+        currentVip.editedTimestamp !==
+          match.message.editedTimestamp
+      ) {
+        result.conflitos++;
+        continue;
+      }
+
+      const existingVip =
+        extrairLinkMensagemDiscord(
+          getFieldValue(
+            currentPayment.embeds[0],
+            '📎 Registro VIP vinculado'
+          )
+        );
+
+      if (
+        existingVip &&
+        (
+          existingVip.channelId !==
+            vipChannel.id ||
+          vipCurrentId(
+            existingVip.channelId,
+            existingVip.messageId
+          ) !== currentVip.id
+        )
+      ) {
+        result.conflitos++;
+        continue;
+      }
+
+      const source =
+        extrairLinkMensagemDiscord(
+          getFieldValueStarts(
+            currentVip.embeds[0],
+            '🔎 Fonte automática'
+          )
+        );
+
+      let previousUrl = null;
+
+      if (source) {
+        if (
+          source.channelId !==
+            paymentChannel.id ||
+          resolvePaymentOperationMessage(
+            source.messageId
+          ).operationId !==
+            resolvePaymentOperationMessage(
+              currentPayment.id
+            ).operationId
+        ) {
+          result.conflitos++;
+          continue;
+        }
+
+        previousUrl = source.url;
+      }
+
+      const reciprocal =
+        await vincularPagamentoSocialNoVipEvento(
+          client,
+
+          {
+            ...match,
+            message: currentVip,
+          },
+
+          currentPayment,
+          previousUrl
+        );
+
+      if (!reciprocal.ok) {
+        result.conflitos++;
+
+        console.warn(
+          '[VIP RECONCILIACAO]',
+          payment.id,
+          reciprocal.motivo
+        );
+
+        continue;
+      }
+
+      const existingText =
+        getFieldValue(
+          currentPayment.embeds[0],
+          '📎 Registro VIP vinculado'
+        );
+
+      if (
+        !existingText.includes(
+          currentVip.url
+        )
+      ) {
+        const embed =
+          EmbedBuilder.from(
+            currentPayment.embeds[0]
+          );
+
+        const fields = [
+          ...(embed.data.fields || []),
+        ];
+
+        setCampoPagamento(
+          fields,
+          '📎 Registro VIP vinculado',
+          currentVip.url,
+          false
+        );
+
+        embed.setFields(
+          fields
+        );
+
+        await currentPayment.edit({
+          embeds: [embed],
+        });
+      }
+
+      result.vinculados++;
+    } catch (error) {
+      result.falhas++;
+
+      console.error(
+        '[VIP RECONCILIACAO]',
+        payment.id,
+        error
+      );
+    }
+  }
+
+  console.log(
+    '[VIP RECONCILIACAO] Concluída:',
+    result
+  );
+
+  return result;
 }
 
 async function resolverVipEventoProfissional(client, texto, dados = {}) {
@@ -7286,6 +7659,28 @@ if (id.startsWith("pagamento_filtro_")) {
         qual
       );
 
+    let resumoVinculos =
+      'Varredura de vínculos não concluída.';
+
+    try {
+      const vinculos =
+        await reconciliarVinculosVipPagamento(
+          client
+        );
+
+      resumoVinculos =
+        `Vínculos conferidos: ${vinculos.vinculados}; ` +
+        `conflitos: ${vinculos.conflitos}; ` +
+        `ambiguidades: ${vinculos.ambiguos}; ` +
+        `sem correspondência: ${vinculos.semCorrespondencia}; ` +
+        `falhas: ${vinculos.falhas}.`;
+    } catch (error) {
+      console.error(
+        '[VIP RECONCILIACAO] Varredura interrompida:',
+        error
+      );
+    }
+
     const {
       movidos,
       relidos,
@@ -7306,6 +7701,7 @@ if (id.startsWith("pagamento_filtro_")) {
         `📦 Registros movidos: **${movidos || 0}**`,
         `⚠️ Falhas: **${falhasMovimento || 0}**`,
         `↩️ Cópias desfeitas por segurança: **${rollbacks || 0}**`,
+        `🔗 ${resumoVinculos}`,
         "",
         movidos > 0
           ? "Os registros foram colocados no final do canal mantendo a ordem."

@@ -1670,6 +1670,23 @@ async function VIP_reordenarRegistros(
       movidos++;
     }
 
+    try {
+      const {
+        reconciliarVinculosVipPagamento,
+      } = await import(
+        './pagamentosocial.js'
+      );
+
+      await reconciliarVinculosVipPagamento(
+        client
+      );
+    } catch (error) {
+      console.error(
+        '[VIP RECONCILIACAO] Varredura interrompida após movimentação:',
+        error
+      );
+    }
+
     return {
       movidos,
       examinadas:
