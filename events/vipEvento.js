@@ -1539,66 +1539,105 @@ async function VIP_sendAuditLog(client, guild, payload = {}) {
 }
 // ── MOVER REGISTROS POR FILTRO ──────────────────────────────────
 async function VIP_moverRegistrosPorFiltro(channel, filtro, client) {
-  const msgs = await channel.messages.fetch({ limit: 100 }).catch(() => null);
-  if (!msgs) return { movidos: 0 };
-
-  const registros = [...msgs.values()]
-    .filter((m) => m.author?.id === client.user.id)
-    .filter((m) => m.embeds?.length > 0)
-    .filter((m) => (m.embeds?.[0]?.title || "").includes("Registro de VIP por Evento"))
-    .filter((m) => VIP_messageHasVipButtons(m));
-
-  let movidos = 0;
-
-  for (const msg of registros) {
-    const raw = msg.embeds?.[0];
-    if (!raw) continue;
-
-    const emb = EmbedBuilder.from(raw);
-
-    const ehPago = VIP_isPago(emb);
-    const ehReprovado = VIP_isReprovado(emb);
-    const ehSolicitado = VIP_hasSolicitado(emb);
-
-    const entra =
-      (filtro === "solicitados" && ehSolicitado && !ehPago && !ehReprovado) ||
-      (filtro === "naoclicados" && !ehSolicitado && !ehPago && !ehReprovado);
-
-    if (!entra) continue;
-
-const resultadoCorrecao = await VIP_corrigirRegistroVipMensagem(msg, client).catch(() => null);
-
-const rawCorrigido = msg.embeds?.[0];
-if (!rawCorrigido) continue;
-
-const embCorrigido = EmbedBuilder.from(rawCorrigido);
-
-let analiseFinal = {
-  tipoFinal: resultadoCorrecao?.tipoFinal || VIP_normalizarTipoPremiacao(VIP_getTextoCompletoEmbed(embCorrigido)),
-  premiacaoFinal: null,
-};
-
-emb.setDescription(embCorrigido.data.description || emb.data.description || "");
-emb.setFields(embCorrigido.data.fields || emb.data.fields || []);
-
-const descAtual = String(emb.data.description || "");
-const descSemFiltro = descAtual.replace(/\n\n\*\*Filtro automático:\*\* `[^`]+`/gi, "");
-
-emb.setDescription(
-  `${descSemFiltro}\n\n**Filtro automático:** \`${analiseFinal.tipoFinal}\``
-);
-
-const comps = ehReprovado
-  ? VIP_buildRegistroButtons(true, false, true)
-  : ehPago
-  ? VIP_buildRegistroButtons(true, true, false)
-  : VIP_buildRegistroButtons(false, false, false);
-
-await msg.edit({ embeds: [emb], components: comps });
-movidos++;
+  if (!['solicitados', 'naoclicados'].includes(filtro)) {
+    throw new Error('Filtro VIP inválido.');
   }
 
-  return { movidos };
+  const encontrados = [];
+
+  let before;
+  let examinadas = 0;
+  let completo = false;
+
+  for (let pagina = 0; pagina < 10; pagina++) {
+    const lote = await channel.messages.fetch({
+      limit: 100,
+      ...(before ? { before } : {}),
+    });
+
+    if (!lote.size) {
+      completo = true;
+      break;
+    }
+
+    examinadas += lote.size;
+
+    for (const msg of lote.values()) {
+      if (msg.author?.id !== client.user.id) {
+        continue;
+      }
+
+      const raw = msg.embeds?.[0];
+
+      if (!raw) {
+        continue;
+      }
+
+      if (
+        !String(raw.title || '').includes(
+          'Registro de VIP por Evento'
+        )
+      ) {
+        continue;
+      }
+
+      if (!VIP_messageHasVipButtons(msg)) {
+        continue;
+      }
+
+      const embed = EmbedBuilder.from(raw);
+
+      const pago = VIP_isPago(embed);
+      const reprovado = VIP_isReprovado(embed);
+      const solicitado = VIP_hasSolicitado(embed);
+
+      const entra = filtro === 'solicitados'
+        ? solicitado && !pago && !reprovado
+        : !solicitado && !pago && !reprovado;
+
+      if (entra) {
+        encontrados.push(msg);
+      }
+    }
+
+    const oldest = [...lote.values()].reduce(
+      (previous, message) => {
+        if (
+          !previous ||
+          BigInt(message.id) < BigInt(previous.id)
+        ) {
+          return message;
+        }
+
+        return previous;
+      },
+      null
+    );
+
+    if (!oldest || oldest.id === before) {
+      throw new Error(
+        'Não foi possível avançar na leitura do canal VIP.'
+      );
+    }
+
+    before = oldest.id;
+
+    if (lote.size < 100) {
+      completo = true;
+      break;
+    }
+  }
+
+  encontrados.sort(
+    (a, b) =>
+      b.createdTimestamp - a.createdTimestamp
+  );
+
+  return {
+    registros: encontrados,
+    examinadas,
+    completo,
+  };
 }
 
 // =====================================================
@@ -2590,15 +2629,88 @@ const isVipModalCriar =
         return true;
       }
 
-      const qual = i.customId === VIP_FILTER_SOLICITADOS_ID ? "solicitados" : "naoclicados";
-      const { movidos } = await VIP_moverRegistrosPorFiltro(ch, qual, client);
-
-      await VIP_ensureFreshMenu(guild, client);
+      const qual = i.customId === VIP_FILTER_SOLICITADOS_ID
+        ? 'solicitados'
+        : 'naoclicados';
 
       await safeReply(i, {
-        content: `✅ Filtro aplicado: **${qual}**\n📦 Registros movidos: **${movidos}**`,
+        content:
+          '🔎 Consultando os registros VIP. Aguarde a conclusão.',
         ephemeral: true,
       });
+
+      try {
+        const resultado =
+          await VIP_moverRegistrosPorFiltro(
+            ch,
+            qual,
+            client
+          );
+
+        const titulo = qual === 'solicitados'
+          ? 'Solicitados e ainda não pagos'
+          : 'Não clicados';
+
+        const links = resultado.registros
+          .slice(0, 10)
+          .map(
+            (message, index) =>
+              `${index + 1}. [Abrir registro](https://discord.com/channels/${guild.id}/${ch.id}/${message.id})`
+          );
+
+        const linhas = [
+          `📋 **${titulo}**`,
+          '',
+          `**Encontrados:** ${resultado.registros.length}`,
+          `**Mensagens examinadas:** ${resultado.examinadas}`,
+          '',
+          ...(
+            links.length
+              ? links
+              : ['Nenhum registro correspondente na parte consultada do canal.']
+          ),
+        ];
+
+        if (resultado.registros.length > 10) {
+          linhas.push(
+            '',
+            'Exibindo os 10 registros mais recentes encontrados.'
+          );
+        }
+
+        if (!resultado.completo) {
+          linhas.push(
+            '',
+            '⚠️ A consulta atingiu o limite de 1.000 mensagens. Pode haver registros mais antigos.'
+          );
+        }
+
+        await i.editReply({
+          content: linhas.join('\n'),
+          allowedMentions: {
+            parse: [],
+          },
+        });
+      } catch (error) {
+        console.error(
+          '[VIP FILTRO] Falha na consulta:',
+          {
+            filtro: qual,
+            channelId: ch.id,
+            code: error?.code,
+            message: error?.message,
+          }
+        );
+
+        await i.editReply({
+          content:
+            '❌ Não consegui concluir a leitura do canal VIP. Confira os logs do bot e as permissões de Ver canal e Ler histórico de mensagens.',
+          allowedMentions: {
+            parse: [],
+          },
+        });
+      }
+
       return true;
     }
 
