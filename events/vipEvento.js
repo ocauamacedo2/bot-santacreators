@@ -3742,5 +3742,74 @@ extra: [
 }
 
 export async function vipEventoHandleMessage(message, client) {
-  return false;
+  if (
+    message.author?.bot ||
+    !message.guild
+  ) {
+    return false;
+  }
+
+  const command = String(
+    message.content || ''
+  ).trim().toLowerCase();
+
+  if (command !== '!menuvip') {
+    return false;
+  }
+
+  try {
+    const member =
+      await message.guild.members.fetch({
+        user: message.author.id,
+        force: true,
+      });
+
+    if (!canAction(member)) {
+      await message.reply({
+        content:
+          '🚫 Você não tem permissão para recriar o menu VIP.',
+
+        allowedMentions: {
+          repliedUser: false,
+          parse: [],
+        },
+      });
+
+      return true;
+    }
+
+    const menu = await VIP_ensureFreshMenu(
+      message.guild,
+      client,
+      true
+    );
+
+    await message.reply({
+      content: menu
+        ? `✅ Menu VIP recriado!\n${menu.url}`
+        : '⚠️ O canal VIP não foi encontrado neste servidor.',
+
+      allowedMentions: {
+        repliedUser: false,
+        parse: [],
+      },
+    });
+  } catch (error) {
+    console.error(
+      '[VIP MENU] Falha no comando !menuvip:',
+      error
+    );
+
+    await message.reply({
+      content:
+        '❌ Não consegui recriar o menu. Confira o erro [VIP MENU] no console do bot.',
+
+      allowedMentions: {
+        repliedUser: false,
+        parse: [],
+      },
+    }).catch(() => {});
+  }
+
+  return true;
 }
