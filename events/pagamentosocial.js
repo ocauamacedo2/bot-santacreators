@@ -4927,6 +4927,7 @@ async function buscarVipEventoPorDados(
 
   const encontrados = [];
   const cidadesDivergentes = [];
+  const premiosDivergentes = [];
 
   for (const msg of candidatos) {
     const embed = msg.embeds[0];
@@ -4997,7 +4998,9 @@ async function buscarVipEventoPorDados(
     const diferencaMinutos =
       calcularDiferencaMinutosVip(
         registroTimestamp,
-        vipOriginalTime(msg)
+        horarioOriginalVipParaVinculo(
+          msg
+        )
       );
 
     const horarioProximo =
@@ -5010,8 +5013,7 @@ async function buscarVipEventoPorDados(
       mesmaCidade &&
       mesmoTipo &&
       mesmaQuantidade &&
-      mesmoGanhador &&
-      horarioProximo
+      mesmoGanhador
     );
 
     if (
@@ -5020,11 +5022,28 @@ async function buscarVipEventoPorDados(
       mesmoTipo &&
       mesmaQuantidade &&
       mesmoGanhador &&
-      horarioProximo &&
       !mesmaCidade
     ) {
       cidadesDivergentes.push(
         infoVip.cidade || 'Não informada'
+      );
+    }
+
+    if (
+      mesmoEvento &&
+      mesmaData &&
+      mesmaCidade &&
+      mesmoGanhador &&
+      (
+        !mesmoTipo ||
+        !mesmaQuantidade
+      )
+    ) {
+      premiosDivergentes.push(
+        `VIP ${msg.id}: ` +
+        `tipo declarado "${infoVip.tipo}"; ` +
+        `prêmio "${infoVip.premiacao}". ` +
+        `Pagamento: "${tipoPagamentoRaw}".`
       );
     }
 
@@ -5054,6 +5073,21 @@ async function buscarVipEventoPorDados(
       a.msg.createdTimestamp
   );
 
+  if (
+    encontrados.length === 0 &&
+    premiosDivergentes.length
+  ) {
+    return {
+      ok: false,
+
+      erro:
+        'ID, evento, data e cidade coincidem, mas a premiação ou quantidade diverge. ' +
+        premiosDivergentes
+          .slice(0, 3)
+          .join(' '),
+    };
+  }
+
   if (encontrados.length === 0) {
     return {
       ok: false,
@@ -5068,7 +5102,7 @@ async function buscarVipEventoPorDados(
             )
           : (
               "Nenhum Registro VIP passou por todas as conferências automáticas: " +
-              "evento, data, cidade, tipo, quantidade, ID do ganhador e horário próximo. " +
+              "evento, data do evento, cidade, tipo, quantidade e ID do ganhador. " +
               "A quantidade precisa estar identificada nos dois registros. " +
               "Confira os campos e informe o link exato do Registro VIP quando necessário. " +
               "Nenhum vínculo automático foi aplicado."
@@ -5101,6 +5135,304 @@ async function buscarVipEventoPorDados(
     vinculoValidado: true,
     vinculoAutomatico: true,
     criterios: melhor.criterios,
+  };
+}
+
+function horarioOriginalVipParaVinculo(message) {
+  const embed = message.embeds?.[0];
+
+  const description = String(
+    embed?.description ||
+    embed?.data?.description ||
+    ''
+  );
+
+  const registered = description.match(
+    /Data\/Hora[^\n]*?<t:(\d{9,12})(?::[a-zA-Z])?>/i
+  );
+
+  if (registered) {
+    return Number(registered[1]) * 1000;
+  }
+
+  const timestamp = Date.parse(
+    embed?.timestamp ||
+    embed?.data?.timestamp ||
+    ''
+  );
+
+  return Number.isFinite(timestamp)
+    ? timestamp
+    : vipOriginalTime(message);
+}
+
+function horarioOriginalPagamentoParaVinculo(message) {
+  const embed = message.embeds?.[0];
+
+  const dateText = getFieldValue(
+    embed,
+    '📅 Data'
+  );
+
+  const hourText = getFieldValue(
+    embed,
+    '🕒 Horário'
+  );
+
+  if (
+    /\(registro\)/i.test(dateText) &&
+    /\(registro\)/i.test(hourText)
+  ) {
+    const date = dateText.match(
+      /\b(\d{2})\/(\d{2})\/(\d{4})\b/
+    );
+
+    const hour = hourText.match(
+      /\b([01]\d|2[0-3]):([0-5]\d)\b/
+    );
+
+    if (date && hour) {
+      const value = Date.parse(
+        `${date[3]}-${date[2]}-${date[1]}T${hour[1]}:${hour[2]}:00-03:00`
+      );
+
+      if (Number.isFinite(value)) {
+        return value;
+      }
+    }
+  }
+
+  const timestamp = Date.parse(
+    embed?.timestamp ||
+    embed?.data?.timestamp ||
+    ''
+  );
+
+  if (Number.isFinite(timestamp)) {
+    return timestamp;
+  }
+
+  return resolvePaymentOperationMessage(
+    message.id,
+    message.createdTimestamp
+  ).createdAt;
+}
+
+function desabilitarAcoesPagas(
+  rows,
+  prefixPattern
+) {
+  return rows.map(row => {
+    const data = row.toJSON();
+
+    data.components = data.components.map(
+      component => {
+        if (
+          component.type === 2 &&
+          prefixPattern.test(
+            component.custom_id || ''
+          )
+        ) {
+          return {
+            ...component,
+            disabled: true,
+          };
+        }
+
+        return component;
+      }
+    );
+
+    return data;
+  });
+}
+
+async function sincronizarPagoDoPar(
+  paymentMessage,
+  vipMessage
+) {
+  const payment =
+    await paymentMessage.channel.messages.fetch({
+      message: paymentMessage.id,
+      force: true,
+    });
+
+  const vip =
+    await vipMessage.channel.messages.fetch({
+      message: vipMessage.id,
+      force: true,
+    });
+
+  const paymentState =
+    getAcaoFinalFromEmbed(
+      payment.embeds[0]
+    );
+
+  const vipPaidText =
+    getFieldValueStarts(
+      vip.embeds[0],
+      '💸 Pagamento'
+    );
+
+  const vipRejection =
+    getFieldValueStarts(
+      vip.embeds[0],
+      '⛔ Reprovação'
+    );
+
+  const vipPaid =
+    /\bPAGO\b/i.test(vipPaidText) &&
+    !/\b(?:NÃO|NAO)\s+(?:FOI\s+)?PAGO\b/i.test(
+      vipPaidText
+    );
+
+  const paymentPaid =
+    paymentState === 'pago';
+
+  if (
+    paymentState === 'reprovado' ||
+    /REPROVADO/i.test(vipRejection)
+  ) {
+    return {
+      ok: false,
+      motivo:
+        'Há uma reprovação no par. Status preservados para conferência.',
+    };
+  }
+
+  if (!paymentPaid && !vipPaid) {
+    return {
+      ok: true,
+      pago: false,
+    };
+  }
+
+  const vipEmbed =
+    EmbedBuilder.from(
+      vip.embeds[0]
+    );
+
+  const vipFields = [
+    ...(vipEmbed.data.fields || []),
+  ];
+
+  if (!vipPaid) {
+    setCampoPagamento(
+      vipFields,
+      '💸 Pagamento',
+
+      '✅ PAGO — sincronizado do Pagamento Social.\n' +
+      `🔗 ${payment.url}`,
+
+      false
+    );
+  }
+
+  vipEmbed.setFields(
+    vipFields
+  );
+
+  const vipComponents =
+    desabilitarAcoesPagas(
+      vip.components,
+      /^vip_mark_(?:solicitado|pago|reprovado)$/
+    );
+
+  if (
+    JSON.stringify(
+      vipEmbed.toJSON()
+    ) !==
+      JSON.stringify(
+        vip.embeds[0].toJSON()
+      ) ||
+    JSON.stringify(
+      vipComponents
+    ) !==
+      JSON.stringify(
+        vip.components.map(
+          row => row.toJSON()
+        )
+      )
+  ) {
+    await vip.edit({
+      embeds: [vipEmbed],
+      components: vipComponents,
+    });
+  }
+
+  const embed =
+    EmbedBuilder.from(
+      payment.embeds[0]
+    );
+
+  const fields = [
+    ...(embed.data.fields || []),
+  ];
+
+  if (!paymentPaid) {
+    setCampoPagamento(
+      fields,
+      '📌 Status',
+
+      '✅ PAGO\n' +
+      'Sincronizado do Registro VIP vinculado.',
+
+      false
+    );
+
+    setCampoPagamento(
+      fields,
+      '🔗 Origem da sincronização',
+      vip.url,
+      false
+    );
+  }
+
+  setCampoPagamento(
+    fields,
+    '💎 VIP Evento',
+
+    '✅ Vínculo conferido; pagamento confirmado no par.\n' +
+    `🔗 ${vip.url}`,
+
+    false
+  );
+
+  embed.setFields(
+    fields
+  );
+
+  const components =
+    desabilitarAcoesPagas(
+      payment.components,
+      /^(?:pago|solicitado|reprovado)__/
+    );
+
+  if (
+    JSON.stringify(
+      embed.toJSON()
+    ) !==
+      JSON.stringify(
+        payment.embeds[0].toJSON()
+      ) ||
+    JSON.stringify(
+      components
+    ) !==
+      JSON.stringify(
+        payment.components.map(
+          row => row.toJSON()
+        )
+      )
+  ) {
+    await payment.edit({
+      embeds: [embed],
+      components,
+    });
+  }
+
+  return {
+    ok: true,
+    pago: true,
   };
 }
 
@@ -5229,6 +5561,7 @@ async function executarReconciliacaoVipPagamento(client) {
     ambiguos: 0,
     conflitos: 0,
     falhas: 0,
+    diagnosticos: [],
   };
 
   for (const payment of payments) {
@@ -5256,10 +5589,9 @@ async function executarReconciliacaoVipPagamento(client) {
     result.examinados++;
 
     data.registroTimestamp =
-      resolvePaymentOperationMessage(
-        payment.id,
-        payment.createdTimestamp
-      ).createdAt;
+      horarioOriginalPagamentoParaVinculo(
+        payment
+      );
 
     const match =
       await buscarVipEventoPorDados(
@@ -5271,11 +5603,17 @@ async function executarReconciliacaoVipPagamento(client) {
     if (!match.ok) {
       result.semCorrespondencia++;
 
-      console.warn(
-        '[VIP RECONCILIACAO] Sem vínculo:',
-        payment.id,
-        match.erro
-      );
+      if (
+        result.diagnosticos.length < 10
+      ) {
+        result.diagnosticos.push({
+          pagamentoId:
+            payment.id,
+
+          motivo:
+            match.erro,
+        });
+      }
 
       continue;
     }
@@ -5447,6 +5785,22 @@ async function executarReconciliacaoVipPagamento(client) {
         await currentPayment.edit({
           embeds: [embed],
         });
+      }
+
+      const sync =
+        await sincronizarPagoDoPar(
+          currentPayment,
+          currentVip
+        );
+
+      if (!sync.ok) {
+        result.conflitos++;
+
+        console.warn(
+          '[VIP RECONCILIACAO] Status não sincronizado:',
+          payment.id,
+          sync.motivo
+        );
       }
 
       result.vinculados++;
