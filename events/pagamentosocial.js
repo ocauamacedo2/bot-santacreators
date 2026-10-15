@@ -19,6 +19,11 @@ import {
   MessageFlags,
 } from "discord.js";
 import { dashEmit } from "../utils/dashHub.js";
+
+import {
+  vipCurrentId,
+  vipOriginalTime,
+} from '../utils/vipMessageMoves.js';
 import {
   recordApprovalCreated,
   recordApprovalDecision,
@@ -4702,6 +4707,15 @@ async function resolverVipEventoPorLink(client, texto) {
     };
   }
 
+  link.messageId =
+    vipCurrentId(
+      link.channelId,
+      link.messageId
+    );
+
+  link.url =
+    `https://discord.com/channels/${link.guildId}/${link.channelId}/${link.messageId}`;
+
   const msg = await canal.messages.fetch(link.messageId).catch(() => null);
   if (!msg?.embeds?.[0]) {
     return {
@@ -4975,7 +4989,7 @@ async function buscarVipEventoPorDados(client, dados = {}) {
     const diferencaMinutos =
       calcularDiferencaMinutosVip(
         registroTimestamp,
-        msg.createdTimestamp
+        vipOriginalTime(msg)
       );
 
     const horarioProximo =

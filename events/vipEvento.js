@@ -18,6 +18,13 @@ import {
 } from "discord.js";
 // ✅ HUB do dashboard
 import { dashEmit } from "../utils/dashHub.js";
+
+import {
+  moveVipMessage,
+  vipCurrentId,
+  vipOriginalTime,
+  vipCurrentUrl,
+} from '../utils/vipMessageMoves.js';
 import { getMemberOrgTicketContext } from "./orgTicketAccessSync.js";
 
 import {
@@ -770,17 +777,97 @@ function VIP_buildRegistroButtons(disableAll = false, pago = false, reprovado = 
 }
 
 // ── FUNÇÕES DE MENU (limpar/recriar) ────────────────────────────
-async function VIP_deleteOldMenus(channel, client) {
-  const msgs = await channel.messages.fetch({ limit: 100 }).catch(() => null);
-  if (!msgs) return;
-  for (const msg of msgs.values()) {
-    if (msg.author.id !== client.user.id) continue;
-    const hasOurButton = msg.components?.some((row) => row.components?.some((c) => c.customId === VIP_MENU_BUTTON_ID));
-    if (hasOurButton) await msg.delete().catch(() => {});
+async function VIP_deleteOldMenus(
+  channel,
+  client
+) {
+  let before;
+
+  while (true) {
+    const messages =
+      await channel.messages.fetch({
+        limit: 100,
+        ...(before ? { before } : {}),
+      });
+
+    if (!messages.size) {
+      return;
+    }
+
+    const oldest = [
+      ...messages.values(),
+    ].reduce(
+      (previous, message) => {
+        if (
+          !previous ||
+          BigInt(message.id) <
+            BigInt(previous.id)
+        ) {
+          return message;
+        }
+
+        return previous;
+      },
+      null
+    );
+
+    for (
+      const message of
+      messages.values()
+    ) {
+      if (
+        message.author.id !==
+        client.user.id
+      ) {
+        continue;
+      }
+
+      const isMenu =
+        message.components?.some(
+          row =>
+            row.components?.some(
+              component =>
+                component.customId ===
+                VIP_MENU_BUTTON_ID
+            )
+        );
+
+      if (isMenu) {
+        await message.delete();
+      }
+    }
+
+    if (
+      messages.size < 100 ||
+      !oldest
+    ) {
+      return;
+    }
+
+    if (oldest.id === before) {
+      throw new Error(
+        'Não foi possível avançar na limpeza dos menus VIP.'
+      );
+    }
+
+    before = oldest.id;
   }
 }
 
-async function VIP_ensureFreshMenu(guild, client) {
+async function VIP_ensureFreshMenu(
+  guild,
+  client,
+  force = false
+) {
+  if (
+    !force &&
+    VIP_REORDER_LOCKS.has(
+      VIP_MENU_CHANNEL_ID
+    )
+  ) {
+    return;
+  }
+
   const ch = await guild.channels.fetch(VIP_MENU_CHANNEL_ID).catch(() => null);
   if (!ch || !ch.isTextBased()) return;
 
@@ -1538,6 +1625,82 @@ async function VIP_sendAuditLog(client, guild, payload = {}) {
   }
 }
 // ── MOVER REGISTROS POR FILTRO ──────────────────────────────────
+const VIP_REORDER_LOCKS = new Set();
+
+async function VIP_reordenarRegistros(
+  channel,
+  filtro,
+  client
+) {
+  if (
+    VIP_REORDER_LOCKS.has(channel.id)
+  ) {
+    throw new Error(
+      'Já existe uma reorganização neste canal.'
+    );
+  }
+
+  VIP_REORDER_LOCKS.add(channel.id);
+
+  let movidos = 0;
+
+  try {
+    const resultado =
+      await VIP_moverRegistrosPorFiltro(
+        channel,
+        filtro,
+        client
+      );
+
+    await VIP_deleteOldMenus(
+      channel,
+      client
+    );
+
+    const registros =
+      resultado.registros.sort(
+        (a, b) =>
+          vipOriginalTime(a) -
+          vipOriginalTime(b)
+      );
+
+    for (const message of registros) {
+      await moveVipMessage(message);
+
+      movidos++;
+    }
+
+    return {
+      movidos,
+      examinadas:
+        resultado.examinadas,
+    };
+  } catch (error) {
+    error.message =
+      `${movidos} registro(s) movido(s). ` +
+      error.message;
+
+    throw error;
+  } finally {
+    try {
+      await VIP_ensureFreshMenu(
+        channel.guild,
+        client,
+        true
+      );
+    } catch (error) {
+      console.error(
+        '[VIP FILTRO] Falha ao restaurar o menu:',
+        error
+      );
+    }
+
+    VIP_REORDER_LOCKS.delete(
+      channel.id
+    );
+  }
+}
+
 async function VIP_moverRegistrosPorFiltro(channel, filtro, client) {
   if (!['solicitados', 'naoclicados'].includes(filtro)) {
     throw new Error('Filtro VIP inválido.');
@@ -1549,7 +1712,7 @@ async function VIP_moverRegistrosPorFiltro(channel, filtro, client) {
   let examinadas = 0;
   let completo = false;
 
-  for (let pagina = 0; pagina < 10; pagina++) {
+  while (true) {
     const lote = await channel.messages.fetch({
       limit: 100,
       ...(before ? { before } : {}),
@@ -1954,11 +2117,24 @@ function VIP_siteSave(file, record) {
   );
 }
 
-function VIP_siteResult(record, reused = false) {
+function VIP_siteResult(
+  record,
+  reused = false
+) {
   return {
     ok: true,
-    messageId: record.messageId,
-    url: record.url,
+
+    messageId:
+      vipCurrentId(
+        VIP_MENU_CHANNEL_ID,
+        record.messageId
+      ),
+
+    url:
+      vipCurrentUrl(
+        record.url
+      ),
+
     reused,
   };
 }
@@ -2430,6 +2606,24 @@ const isVipModalCriar =
 
     if (VIP_hasHandled(i)) return true;
 
+    if (
+      VIP_REORDER_LOCKS.has(
+        i.channelId
+      ) &&
+      (
+        isVipRegistroButtons ||
+        isVipModalReprovar
+      )
+    ) {
+      await safeReply(i, {
+        content:
+          '⏳ Os registros estão sendo reorganizados. Aguarde a conclusão e use os botões na mensagem reposicionada.',
+        ephemeral: true,
+      });
+
+      return true;
+    }
+
     if (isVipPreparedModalButton) {
       if (!canRegister(i.member)) {
         await safeReply(i, {
@@ -2629,71 +2823,38 @@ const isVipModalCriar =
         return true;
       }
 
-      const qual = i.customId === VIP_FILTER_SOLICITADOS_ID
-        ? 'solicitados'
-        : 'naoclicados';
+      const qual =
+        i.customId === VIP_FILTER_SOLICITADOS_ID
+          ? 'solicitados'
+          : 'naoclicados';
 
       await safeReply(i, {
         content:
-          '🔎 Consultando os registros VIP. Aguarde a conclusão.',
+          '⏳ Reorganizando os registros no canal. O menu será colocado abaixo deles ao terminar.',
         ephemeral: true,
       });
 
       try {
         const resultado =
-          await VIP_moverRegistrosPorFiltro(
+          await VIP_reordenarRegistros(
             ch,
             qual,
             client
           );
 
-        const titulo = qual === 'solicitados'
-          ? 'Solicitados e ainda não pagos'
-          : 'Não clicados';
-
-        const links = resultado.registros
-          .slice(0, 10)
-          .map(
-            (message, index) =>
-              `${index + 1}. [Abrir registro](https://discord.com/channels/${guild.id}/${ch.id}/${message.id})`
-          );
-
-        const linhas = [
-          `📋 **${titulo}**`,
-          '',
-          `**Encontrados:** ${resultado.registros.length}`,
-          `**Mensagens examinadas:** ${resultado.examinadas}`,
-          '',
-          ...(
-            links.length
-              ? links
-              : ['Nenhum registro correspondente na parte consultada do canal.']
-          ),
-        ];
-
-        if (resultado.registros.length > 10) {
-          linhas.push(
-            '',
-            'Exibindo os 10 registros mais recentes encontrados.'
-          );
-        }
-
-        if (!resultado.completo) {
-          linhas.push(
-            '',
-            '⚠️ A consulta atingiu o limite de 1.000 mensagens. Pode haver registros mais antigos.'
-          );
-        }
-
         await i.editReply({
-          content: linhas.join('\n'),
+          content:
+            `✅ Reorganização concluída.\n` +
+            `📦 Registros movidos: **${resultado.movidos}**.\n` +
+            'O menu de solicitação foi recriado no fim do canal.',
+
           allowedMentions: {
             parse: [],
           },
         });
       } catch (error) {
         console.error(
-          '[VIP FILTRO] Falha na consulta:',
+          '[VIP FILTRO] Falha na reorganização:',
           {
             filtro: qual,
             channelId: ch.id,
@@ -2704,7 +2865,12 @@ const isVipModalCriar =
 
         await i.editReply({
           content:
-            '❌ Não consegui concluir a leitura do canal VIP. Confira os logs do bot e as permissões de Ver canal e Ler histórico de mensagens.',
+            '⚠️ A reorganização foi interrompida.\n' +
+            String(
+              error?.message ||
+              'Confira os logs do bot.'
+            ).slice(0, 1200),
+
           allowedMentions: {
             parse: [],
           },
@@ -2823,7 +2989,12 @@ const isVipModalCriar =
         return true;
       }
 
-      const msg = await menuCh.messages.fetch(messageId).catch(() => null);
+      const msg = await menuCh.messages.fetch(
+        vipCurrentId(
+          menuCh.id,
+          messageId
+        )
+      ).catch(() => null);
       if (!msg?.embeds?.[0]) {
         await safeReply(i, { content: "⚠️ Não achei a mensagem do registro (ou embed inválido).", ephemeral: true });
         return true;

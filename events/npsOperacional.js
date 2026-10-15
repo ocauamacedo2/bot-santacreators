@@ -8850,6 +8850,39 @@ async function ensureCoreOperationalMetrics(
       continue;
     }
 
+    const hubTimeout = providerCollection.errors.find(
+      error =>
+        error.providerId === requiredProvider.id &&
+        error.code === 'SC_OPERATIONAL_PROVIDER_TIMEOUT'
+    );
+
+    if (hubTimeout) {
+      if (existingMetricIndex >= 0) {
+        providerCollection.results[
+          existingMetricIndex
+        ] = {
+          ...existingMetric,
+
+          available: false,
+          score: null,
+          confidence: 0,
+
+          details: {
+            ...existingMetric?.details,
+
+            sourceUnavailable: true,
+            reason: 'provider_timeout',
+          },
+        };
+      }
+
+      console.warn(
+        `[NPS Operacional] Sem nova tentativa nesta atualização: ${requiredProvider.id} já excedeu o limite no Hub.`
+      );
+
+      continue;
+    }
+
     try {
       /*
        * A consulta direta somente acontece quando
