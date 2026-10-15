@@ -2584,6 +2584,17 @@ function venda_getSellerId(emb) {
 const weeklyCollectionsInFlight = new WeakMap();
 
 async function collectAllPoints(client, mode = "light") {
+  const cacheNow = Date.now();
+
+  if (
+    mode === "light" &&
+    CACHE.payload &&
+    cacheNow >= CACHE.at &&
+    cacheNow - CACHE.at < SCAN_TTL_MS
+  ) {
+    return CACHE.payload;
+  }
+
   let requests = weeklyCollectionsInFlight.get(client);
 
   if (!requests) {

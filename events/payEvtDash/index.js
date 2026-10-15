@@ -1497,7 +1497,78 @@ async function scanLideresUnique(client, stats, seen) {
     }
   }
 }
-async function collectDashboardData(client, force = false) {
+const payEvtCollectionsInFlight = new WeakMap();
+
+async function collectDashboardData(
+  client,
+  force = false
+) {
+  const now = Date.now();
+
+  if (
+    !force &&
+    CACHE.payload &&
+    now >= CACHE.at &&
+    now - CACHE.at < CACHE_TTL_MS
+  ) {
+    return CACHE.payload;
+  }
+
+  const pending =
+    payEvtCollectionsInFlight.get(client);
+
+  if (pending) {
+    if (
+      force &&
+      !pending.force
+    ) {
+      await pending.promise.catch(
+        () => {}
+      );
+
+      return collectDashboardData(
+        client,
+        true
+      );
+    }
+
+    return pending.promise;
+  }
+
+  const run = {
+    force: Boolean(force),
+    promise: null,
+  };
+
+  run.promise = Promise.resolve()
+    .then(
+      () =>
+        collectDashboardDataInternal(
+          client,
+          force
+        )
+    )
+    .finally(() => {
+      if (
+        payEvtCollectionsInFlight.get(
+          client
+        ) === run
+      ) {
+        payEvtCollectionsInFlight.delete(
+          client
+        );
+      }
+    });
+
+  payEvtCollectionsInFlight.set(
+    client,
+    run
+  );
+
+  return run.promise;
+}
+
+async function collectDashboardDataInternal(client, force = false) {
   if (!force && CACHE.payload && Date.now() - CACHE.at < CACHE_TTL_MS) {
     return CACHE.payload;
   }

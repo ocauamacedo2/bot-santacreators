@@ -2697,6 +2697,19 @@ async function resolveDashboardMessage(dashChannel, st) {
 let generalCollectionPromise = null;
 
 function collectAllGeneral(client, mode = "light") {
+  const cacheNow = Date.now();
+
+  if (
+    mode === "light" &&
+    CACHE.payload &&
+    cacheNow >= CACHE.at &&
+    cacheNow - CACHE.at < SCAN_TTL_MS
+  ) {
+    return Promise.resolve(
+      CACHE.payload
+    );
+  }
+
   if (generalCollectionPromise) {
     return generalCollectionPromise;
   }
