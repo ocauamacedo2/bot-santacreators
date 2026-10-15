@@ -3993,6 +3993,18 @@ export async function corrigirCidadeVipPorCargo(
             registranteId: actorId,
             exemploRegistroId: message.id,
             cidadesEncontradas: keys,
+
+            cargosAtuais: [
+              ...member.roles.cache.values(),
+            ]
+              .filter(role =>
+                role.id !== member.guild.id
+              )
+              .map(role => ({
+                nome: role.name,
+                id: role.id,
+              })),
+
             cidadeDoRegistroPreservada: true,
           }
         );
