@@ -779,7 +779,8 @@ function VIP_buildRegistroButtons(disableAll = false, pago = false, reprovado = 
 // ── FUNÇÕES DE MENU (limpar/recriar) ────────────────────────────
 async function VIP_deleteOldMenus(
   channel,
-  client
+  client,
+  keepId = null
 ) {
   let before;
 
@@ -832,7 +833,13 @@ async function VIP_deleteOldMenus(
             )
         );
 
-      if (isMenu) {
+      if (
+        isMenu &&
+        (
+          !keepId ||
+          BigInt(message.id) < BigInt(keepId)
+        )
+      ) {
         await message.delete();
       }
     }
@@ -854,6 +861,8 @@ async function VIP_deleteOldMenus(
   }
 }
 
+const VIP_MENU_CREATIONS = new WeakMap();
+
 async function VIP_ensureFreshMenu(
   guild,
   client,
@@ -865,24 +874,79 @@ async function VIP_ensureFreshMenu(
       VIP_MENU_CHANNEL_ID
     )
   ) {
-    return;
+    return null;
   }
 
-  const ch = await guild.channels.fetch(VIP_MENU_CHANNEL_ID).catch(() => null);
-  if (!ch || !ch.isTextBased()) return;
+  const ch =
+    await guild.channels.fetch(
+      VIP_MENU_CHANNEL_ID
+    );
 
-  await VIP_deleteOldMenus(ch, client);
-  await ch.send({ embeds: [VIP_buildMenuEmbed(guild)], components: VIP_buildMenuComponents() });
-
-  const lg = await guild.channels.fetch(VIP_LOGS_CHANNEL_ID).catch(() => null);
-  if (lg?.isTextBased()) {
-    const e = new EmbedBuilder()
-      .setColor(MENU_COLOR)
-      .setTitle("📌 Menu VIP recriado")
-      .setDescription(`Canal: <#${VIP_MENU_CHANNEL_ID}>`)
-      .setTimestamp();
-    lg.send({ embeds: [e] }).catch(() => {});
+  if (
+    !ch?.isTextBased() ||
+    ch.guildId !== guild.id
+  ) {
+    return null;
   }
+
+  let jobs =
+    VIP_MENU_CREATIONS.get(client);
+
+  if (!jobs) {
+    jobs = new Map();
+
+    VIP_MENU_CREATIONS.set(
+      client,
+      jobs
+    );
+  }
+
+  if (jobs.has(ch.id)) {
+    return jobs.get(ch.id);
+  }
+
+  const operation = Promise.resolve()
+    .then(async () => {
+      const menu = await ch.send({
+        embeds: [
+          VIP_buildMenuEmbed(guild),
+        ],
+
+        components:
+          VIP_buildMenuComponents(),
+
+        allowedMentions: {
+          parse: [],
+        },
+      });
+
+      void VIP_deleteOldMenus(
+        ch,
+        client,
+        menu.id
+      ).catch(error => {
+        console.error(
+          '[VIP MENU] Menu criado; falha ao limpar menus anteriores:',
+          error
+        );
+      });
+
+      return menu;
+    })
+    .finally(() => {
+      if (
+        jobs.get(ch.id) === operation
+      ) {
+        jobs.delete(ch.id);
+      }
+    });
+
+  jobs.set(
+    ch.id,
+    operation
+  );
+
+  return operation;
 }
 
 async function VIP_sendDM_VIP(client, userId, content, guild) {
@@ -1652,11 +1716,6 @@ async function VIP_reordenarRegistros(
         client
       );
 
-    await VIP_deleteOldMenus(
-      channel,
-      client
-    );
-
     const registros =
       resultado.registros.sort(
         (a, b) =>
@@ -1669,6 +1728,12 @@ async function VIP_reordenarRegistros(
 
       movidos++;
     }
+
+    await VIP_ensureFreshMenu(
+      channel.guild,
+      client,
+      true
+    );
 
     try {
       const {
@@ -2589,7 +2654,138 @@ export async function submitVipEventoFromSite({
   return promise;
 }
 
+function VIP_instalarRecuperacaoMenu(client) {
+  if (
+    client.__SC_VIP_MENU_RECOVERY__
+  ) {
+    return;
+  }
+
+  client.__SC_VIP_MENU_RECOVERY__ =
+    true;
+
+  let busy = false;
+  let scheduled = null;
+
+  const check = async () => {
+    if (
+      busy ||
+      !client.isReady()
+    ) {
+      return;
+    }
+
+    busy = true;
+
+    try {
+      const channel =
+        await client.channels.fetch(
+          VIP_MENU_CHANNEL_ID
+        );
+
+      if (!channel?.isTextBased()) {
+        return;
+      }
+
+      const messages =
+        await channel.messages.fetch({
+          limit: 100,
+        });
+
+      const exists = [
+        ...messages.values(),
+      ].some(message => {
+        if (
+          message.author?.id !==
+          client.user.id
+        ) {
+          return false;
+        }
+
+        return message.components.some(
+          row =>
+            row.components.some(
+              component =>
+                component.customId ===
+                  VIP_MENU_BUTTON_ID &&
+                component.disabled !== true
+            )
+        );
+      });
+
+      if (!exists) {
+        await VIP_ensureFreshMenu(
+          channel.guild,
+          client,
+          true
+        );
+
+        console.log(
+          '[VIP MENU] Menu ausente no fim do canal: recriado.'
+        );
+      }
+    } catch (error) {
+      console.error(
+        '[VIP MENU] Falha ao verificar/restaurar o menu:',
+        error
+      );
+    } finally {
+      busy = false;
+    }
+  };
+
+  const schedule = () => {
+    clearTimeout(scheduled);
+
+    scheduled = setTimeout(
+      () => {
+        void check();
+      },
+      2000
+    );
+
+    scheduled.unref?.();
+  };
+
+  client.on(
+    'messageDelete',
+    message => {
+      if (
+        message.channelId ===
+        VIP_MENU_CHANNEL_ID
+      ) {
+        schedule();
+      }
+    }
+  );
+
+  client.on(
+    'messageDeleteBulk',
+    (messages, channel) => {
+      if (
+        channel?.id ===
+        VIP_MENU_CHANNEL_ID
+      ) {
+        schedule();
+      }
+    }
+  );
+
+  const timer = setInterval(
+    () => {
+      void check();
+    },
+    5 * 60_000
+  );
+
+  timer.unref?.();
+
+  void check();
+}
+
 export async function vipEventoOnReady(client) {
+  VIP_instalarRecuperacaoMenu(client);
+
   if (!VIP_PRESERVAR_PREMIACAO_ORIGINAL) {
     VIP_instalarProtecaoContraEdicaoIncorreta(client);
     await VIP_corrigirRegistrosRecentesAoIniciar(client);
