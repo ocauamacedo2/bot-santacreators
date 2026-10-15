@@ -3,6 +3,7 @@
 import {
   validatePrizeInput,
   parsePrizeComponents,
+  normalizePrizeAliases,
 } from '../utils/prizeValidation.js';
 import fs from "node:fs";
 import path from "node:path";
@@ -782,7 +783,8 @@ function parseNomeIdFlex(texto) {
 }
 
 function normalizarTipoPremiacao(texto) {
-  const original = String(texto || "").trim();
+  const original =
+    normalizePrizeAliases(texto).trim();
 
   const t = original
     .normalize("NFKC")

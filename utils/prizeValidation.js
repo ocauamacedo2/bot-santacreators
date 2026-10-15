@@ -1,5 +1,26 @@
+export function normalizePrizeAliases(value) {
+  return String(value || '')
+    .replace(
+      /https?:\/\/[^\s<>]+|<[^>]+>|\b(?:vip\s*(?:gente\s*bou?a|staff)|gente\s*bou?a|staff|vip\s+gente)\b/gi,
+      match => {
+        if (
+          /^https?:\/\//i.test(match) ||
+          match.startsWith('<')
+        ) {
+          return match;
+        }
+
+        return 'VIP Staff';
+      }
+    )
+    .replace(
+      /\bVIP Staff\s*(?:\/|\bou\b)\s*VIP Staff\b/gi,
+      'VIP Staff'
+    );
+}
+
 export function parsePrizeComponents(value) {
-  const text = String(value || '')
+  const text = normalizePrizeAliases(value)
     .normalize('NFKC')
     .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
     .replace(/https?:\/\/\S+/gi, ' ')
@@ -53,7 +74,7 @@ export function parsePrizeComponents(value) {
       ? 'Pass'
       : {
           vipevento: 'VIP Evento',
-          vipgenteboa: 'VIP Gente Boa',
+          vipgenteboa: 'VIP Staff',
           vipplatinum: 'VIP Platinum',
           vipouro: 'VIP Ouro',
           vipprata: 'VIP Prata',
@@ -80,13 +101,13 @@ export function validatePrizeInput({
   classify,
 }) {
   const text =
-    String(
-      prize || ''
+    normalizePrizeAliases(
+      prize
     ).trim();
 
   const explicitType =
-    String(
-      type || ''
+    normalizePrizeAliases(
+      type
     ).trim();
 
   const quantitySource = text

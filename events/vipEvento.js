@@ -29,6 +29,7 @@ import { getMemberOrgTicketContext } from "./orgTicketAccessSync.js";
 
 import {
   validatePrizeInput,
+  normalizePrizeAliases,
 } from '../utils/prizeValidation.js';
 // ── CONFIG DE CANAIS ─────────────────────────────────────────────
 const VIP_MENU_CHANNEL_ID = "1414718336826081330"; // onde fica o MENU e os REGISTROS
@@ -993,7 +994,7 @@ function VIP_formatDateSP(date = new Date()) {
 }
 
 function VIP_normalizarTipoPremiacao(texto) {
-  const t = String(texto || "")
+  const t = normalizePrizeAliases(texto)
     .normalize("NFKC")
     .replace(/https?:\/\/\S+/gi, " ")
     .replace(/<[^>]+>/g, " ")
