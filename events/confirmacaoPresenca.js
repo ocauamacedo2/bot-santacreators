@@ -14,6 +14,7 @@ import {
   PermissionsBitField,
 } from "discord.js";
 import { dashEmit } from "../utils/dashHub.js";
+import { getMemberOrgTicketContext } from "./orgTicketAccessSync.js";
 import { resolveLogChannel } from "./channelResolver.js";
 
 // ================= CONFIGURAÇÃO =================
@@ -458,6 +459,24 @@ function isPresenceBypass(member) {
   return false;
 }
 
+const sitePresenceLeaderToken = Symbol("sitePresenceLeader");
+
+function canOverwritePresence(member) {
+  if (isPresenceBypass(member)) {
+    return true;
+  }
+
+  return Boolean(
+    member?.roles?.cache?.some(role =>
+      [
+        "1352407252216184833",
+        "1262262852949905409",
+        "1352408327983861844",
+      ].includes(role.id)
+    )
+  );
+}
+
 // Sincroniza a lista do facsSemanais com o estado local
 function syncOrgs(state) {
   const now = getNowSP();
@@ -656,6 +675,91 @@ if (newMsg) {
 }
 }
 
+async function resolvePresenceCredit(
+  client,
+  interaction,
+  orgKey,
+  status,
+  previousInfo
+) {
+  if (
+    status !== "YES" ||
+    previousInfo.status === "YES"
+  ) {
+    return {
+      userId: null,
+      reason: "Esta ação não gera novo ponto.",
+    };
+  }
+
+  if (
+    interaction[sitePresenceLeaderToken] !== true
+  ) {
+    return {
+      userId: interaction.user.id,
+      reason: "",
+    };
+  }
+
+  try {
+    const {
+      resolvePresenceManagerCredit,
+    } = await import("./registroManager.js");
+
+    const {
+      isOfficialSantaCreatorsTeamMember,
+    } = await import("./hierarquiaDivisoes.js");
+
+    const source =
+      await resolvePresenceManagerCredit({
+        client,
+        guild: interaction.guild,
+        org: orgKey,
+      });
+
+    if (!source.managerId) {
+      return {
+        userId: null,
+        reason: source.reason,
+      };
+    }
+
+    const manager =
+      await interaction.guild.members.fetch({
+        user: source.managerId,
+        force: true,
+      }).catch(() => null);
+
+    if (
+      !manager ||
+      !isOfficialSantaCreatorsTeamMember(manager)
+    ) {
+      return {
+        userId: null,
+        reason:
+          "O manager responsável não está mais no servidor ou na equipe.",
+      };
+    }
+
+    return {
+      userId: manager.id,
+      sourceMessageId: source.messageId,
+      reason: "",
+    };
+  } catch (error) {
+    console.error(
+      "[PRESENCA CREDIT] Falha ao identificar o manager:",
+      error
+    );
+
+    return {
+      userId: null,
+      reason:
+        "Não foi possível verificar o manager responsável.",
+    };
+  }
+}
+
 async function logAction(client, interaction, action, orgName, extra = "", undoPayload = null) {
   const channel = LOG_CHANNEL_ID ? await client.channels.fetch(LOG_CHANNEL_ID).catch(() => null) : null;
   if (!channel) return;
@@ -675,6 +779,44 @@ async function logAction(client, interaction, action, orgName, extra = "", undoP
     .setTimestamp();
 
   if (extra) embed.setDescription(extra);
+
+  if (interaction.__scPresenceCredit) {
+    const credit =
+      interaction.__scPresenceCredit;
+
+    embed.addFields({
+      name: "🏅 Crédito de presença",
+
+      value:
+        credit.userId
+          ? `<@${credit.userId}>`
+          : "Sem crédito",
+
+      inline: false,
+    });
+
+    if (credit.reason) {
+      embed.addFields({
+        name: "ℹ️ Motivo do crédito",
+        value: credit.reason,
+        inline: false,
+      });
+    }
+
+    if (credit.sourceMessageId) {
+      embed.addFields({
+        name: "🔗 Registro de origem",
+
+        value:
+          "https://discord.com/channels/" +
+          interaction.guild.id +
+          "/1392680204517769277/" +
+          credit.sourceMessageId,
+
+        inline: false,
+      });
+    }
+  }
 
   let undoCustomId;
 
@@ -781,7 +923,10 @@ const isUserBypass = isPresenceBypass(interaction.member);
   if (interaction.isModalSubmit() && customId.startsWith("modal_presenca_")) {
     await interaction.deferReply({ ephemeral: true });
 
-    if (!checkPerms(interaction.member, "CONFIRM")) {
+    if (
+      !checkPerms(interaction.member, "CONFIRM") &&
+      interaction[sitePresenceLeaderToken] !== true
+    ) {
       await interaction.editReply("🚫 Você não tem permissão para alterar presenças.");
       return true;
     }
@@ -847,23 +992,23 @@ const alreadyConfirmedKey = Object.keys(state.statuses).find(key => {
   return normalizeOrgName(key) === orgNameKey;
 });
 
-if (alreadyConfirmedKey && alreadyConfirmedKey !== orgKey && !isPresenceBypass(interaction.member)) {
+if (alreadyConfirmedKey && alreadyConfirmedKey !== orgKey && !canOverwritePresence(interaction.member)) {
   const info = state.statuses[alreadyConfirmedKey];
   const statusTxt = info.status === "YES" ? "presença confirmada" : "ausência registrada";
 
   return interaction.editReply(
     `🚫 Essa ORG já teve ${statusTxt} hoje como **${alreadyConfirmedKey}** por <@${info.by}>.\n` +
-    `Se mudou apenas a família ativa/ID, a confirmação continua valendo e ninguém pode confirmar por cima.`
+    `Para alterar a resposta, procure o suporte da Santa Creators.`
   );
 }
 
-if (alreadyConfirmedKey && alreadyConfirmedKey === orgKey && state.statuses[orgKey]?.status !== "PENDING" && !isPresenceBypass(interaction.member)) {
+if (alreadyConfirmedKey && alreadyConfirmedKey === orgKey && state.statuses[orgKey]?.status !== "PENDING" && !canOverwritePresence(interaction.member)) {
   const info = state.statuses[orgKey];
   const statusTxt = info.status === "YES" ? "presença confirmada" : "ausência registrada";
 
   return interaction.editReply(
     `🚫 Essa ORG já teve ${statusTxt} hoje por <@${info.by}>.\n` +
-    `Apenas você ou a owner podem alterar por cima.`
+    `Somente Resp Líder, Resp Influ, Resp Creators, Owner ou Caio Macedo podem alterar por cima.`
   );
 }
 
@@ -884,33 +1029,64 @@ interaction.__scPresenceApplied = true;
 await updatePanel(client);
 
 // Log e Pontos
-const actionTxt = status === "YES" ? "CONFIRMOU" : "NEGOU";
-await logAction(client, interaction, actionTxt, orgKey, "", {
-  type: "SET_STATUS",
+const credit = await resolvePresenceCredit(
+  client,
+  interaction,
   orgKey,
+  status,
   previousInfo
-});
+);
+
+interaction.__scPresenceCredit = credit;
+
+const actionTxt =
+  status === "YES"
+    ? "CONFIRMOU"
+    : "NEGOU";
+
+await logAction(
+  client,
+  interaction,
+  actionTxt,
+  orgKey,
+  "",
+  {
+    type: "SET_STATUS",
+    orgKey,
+    previousInfo,
+  }
+);
 
     if (status === "YES") {
-      // ✅ Emite evento para pontuação (GeralDash e WeeklyRanking escutam isso)
       try {
-        if (previousInfo.status !== "YES") {
+        if (credit.userId) {
           dashEmit("presenca:confirmada", {
-            userId: interaction.user.id,
+            userId: credit.userId,
+            actorId: interaction.user.id,
             org: orgKey,
-            __at: Date.now()
+            sourceMessageId:
+              credit.sourceMessageId || null,
+            __at: Date.now(),
           });
         }
       } catch (e) {
-        console.error("Erro ao emitir dashEmit:", e);
+        console.error(
+          "Erro ao emitir dashEmit:",
+          e
+        );
       }
+
       await interaction.editReply(
         previousInfo.status === "YES"
           ? `✅ Presença de **${orgKey}** mantida. Nenhum novo ponto foi emitido.`
-          : `✅ Presença de **${orgKey}** confirmada! (+1 ponto computado)`
+          : credit.userId
+            ? `✅ Presença de **${orgKey}** confirmada! Crédito registrado para <@${credit.userId}>.`
+            : `✅ Presença de **${orgKey}** confirmada, sem ponto atribuído. ${credit.reason}`
       );
     } else {
-      await interaction.editReply(`❌ Ausência de **${orgKey}** registrada.`);
+      await interaction.editReply(
+        `❌ Ausência de **${orgKey}** registrada.`
+      );
     }
 
     return true;
@@ -1160,9 +1336,10 @@ export async function getConfirmacaoPresencaSiteSnapshot({
 }) {
   const actor =
     await guild.members
-      .fetch(
-        String(actorId)
-      )
+      .fetch({
+        user: String(actorId),
+        force: true,
+      })
       .catch(
         () => null
       );
@@ -1270,10 +1447,15 @@ export async function getConfirmacaoPresencaSiteSnapshot({
 
     rights: {
       confirm:
-        checkPerms(
-          actor,
-          "CONFIRM"
+        checkPerms(actor, "CONFIRM") ||
+        Boolean(
+          actor?.roles?.cache?.has(
+            "1353858422063239310"
+          )
         ),
+
+      overwrite:
+        canOverwritePresence(actor),
 
       admin:
         checkPerms(
@@ -1312,17 +1494,6 @@ export async function setConfirmacaoPresencaFromSite({
     );
   }
 
-  if (
-    !checkPerms(
-      actor,
-      "CONFIRM"
-    )
-  ) {
-    throw new Error(
-      "Você não possui permissão para confirmar presença."
-    );
-  }
-
   const normalizedStatus =
     String(
       status ||
@@ -1354,7 +1525,41 @@ export async function setConfirmacaoPresencaFromSite({
     );
   }
 
+  const isLeader =
+    actor.roles.cache.has(
+      "1353858422063239310"
+    );
+
+  let ownOrganization = false;
+
+  if (isLeader) {
+    const context =
+      await getMemberOrgTicketContext(actor);
+
+    ownOrganization =
+      (context.tags || []).some(tag =>
+        actor.roles.cache.has(tag.roleId) &&
+        normalizeOrgName(tag.roleName) ===
+          normalizeOrgName(orgInput)
+      );
+  }
+
+  if (
+    !checkPerms(actor, "CONFIRM") &&
+    !ownOrganization
+  ) {
+    throw Object.assign(
+      new Error(
+        "Você não possui permissão para confirmar esta organização."
+      ),
+      { status: 403 }
+    );
+  }
+
   const fakeInteraction = {
+    [sitePresenceLeaderToken]:
+      ownOrganization,
+
     id:
       `site-presenca-${Date.now()}-${actorId}`,
 

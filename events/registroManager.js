@@ -4177,6 +4177,176 @@ function resolveRmSiteStatus(
 }
 
 
+export async function resolvePresenceManagerCredit({
+  client,
+  guild,
+  org,
+}) {
+  const clean = value => String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]/gi, '')
+    .toLowerCase();
+
+  const orgName =
+    String(org || '').split('|').at(-1);
+
+  const expectedWeek =
+    clean(
+      weekBySundayToSaturdaySP().weekLabel
+    );
+
+  const candidates = new Map();
+
+  const channel =
+    await client.channels.fetch(
+      CANAL_REGISTRO_MANAGER
+    );
+
+  if (
+    !channel?.isTextBased?.() ||
+    channel.guildId !== guild.id
+  ) {
+    return {
+      managerId: null,
+      reason: 'Fonte de registros indisponível.',
+    };
+  }
+
+  let before;
+  let complete = false;
+
+  for (
+    let page = 0;
+    page < 50;
+    page += 1
+  ) {
+    const messages =
+      await channel.messages.fetch({
+        limit: 100,
+        before,
+      });
+
+    for (const message of messages.values()) {
+      if (
+        message.author?.id !== client.user.id
+      ) {
+        continue;
+      }
+
+      const embed =
+        message.embeds?.[0];
+
+      if (
+        !embed ||
+        !clean(embed.title).includes(
+          'registrodeeventomanager'
+        )
+      ) {
+        continue;
+      }
+
+      if (
+        resolveRmSiteStatus(embed) === 'rejected'
+      ) {
+        continue;
+      }
+
+      if (
+        clean(getRmSiteField(embed, 'ORG')) !==
+        clean(orgName)
+      ) {
+        continue;
+      }
+
+      if (
+        !clean(
+          getRmSiteField(embed, 'Semana')
+        ).includes(expectedWeek)
+      ) {
+        continue;
+      }
+
+      const field =
+        getRmSiteField(
+          embed,
+          'Manager responsável'
+        );
+
+      const ids = [
+        ...new Set([
+          ...[
+            ...field.matchAll(
+              /<@!?(\d{17,20})>/g
+            ),
+          ].map(match => match[1]),
+
+          ...[
+            ...field.matchAll(
+              /\b\d{17,20}\b/g
+            ),
+          ].map(match => match[0]),
+        ]),
+      ];
+
+      if (ids.length !== 1) {
+        return {
+          managerId: null,
+          reason:
+            'Manager do registro não identificado de forma única.',
+        };
+      }
+
+      candidates.set(
+        ids[0],
+        message.id
+      );
+    }
+
+    if (messages.size < 100) {
+      complete = true;
+      break;
+    }
+
+    const next =
+      messages.last()?.id;
+
+    if (
+      !next ||
+      next === before
+    ) {
+      break;
+    }
+
+    before = next;
+  }
+
+  if (
+    !complete ||
+    candidates.size !== 1
+  ) {
+    return {
+      managerId: null,
+
+      reason:
+        !complete
+          ? 'Leitura dos registros incompleta.'
+          : candidates.size === 0
+            ? 'Registro da organização nesta semana não encontrado.'
+            : 'Mais de um manager encontrado para a organização nesta semana.',
+    };
+  }
+
+  const [managerId, messageId] =
+    [...candidates.entries()][0];
+
+  return {
+    managerId,
+    messageId,
+    reason: '',
+  };
+}
+
 export async function getRegistroManagerSiteSnapshot({
   client,
   guild,

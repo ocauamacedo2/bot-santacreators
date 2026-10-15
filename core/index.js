@@ -11,6 +11,11 @@
 
 import "../utils/bridgeEnv.js";
 
+import {
+  installOrganizationImages,
+  organizationImageInteraction,
+} from "../utils/orgImages.js";
+
 import fs from "node:fs";
 import path from "node:path";
 import cron from "node-cron";
@@ -1394,6 +1399,14 @@ client.on("interactionCreate", async (interaction) => {
   if (interaction.isAutocomplete()) return;
 
   try {
+    if (
+      await organizationImageInteraction(
+        interaction,
+        client
+      )
+    ) {
+      return;
+    }
     // =====================================================
     // 🚀 ROTEAMENTO DIRETO — SLASH COMMANDS
     // =====================================================
@@ -1579,6 +1592,8 @@ client.on("interactionCreate", async (interaction) => {
 client.once("ready", async () => {
   if (client.__coreBootState.readyBootExecuted) return;
   client.__coreBootState.readyBootExecuted = true;
+
+  installOrganizationImages(client);
 
   try {
     console.log("[CORE] PRIORIDADE: retomando entrevistas preservadas.");

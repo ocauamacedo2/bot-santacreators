@@ -330,6 +330,111 @@ async function findMatchingOrgTicketChannel(guild, role) {
   };
 }
 
+export async function getOrgTicketImageContext(
+  channel,
+  actorId
+) {
+  channel =
+    await channel.guild.channels.fetch(
+      channel.id
+    );
+
+  if (
+    !channel ||
+    !ORG_TICKET_CATEGORY_IDS.includes(
+      channel.parentId
+    )
+  ) {
+    throw new Error(
+      'Este canal não está em uma categoria de organização.'
+    );
+  }
+
+  const member =
+    await channel.guild.members.fetch({
+      user: String(actorId),
+      force: true,
+    });
+
+  const permissions =
+    channel.permissionsFor(member);
+
+  if (
+    !permissions?.has(
+      PermissionsBitField.Flags.ViewChannel
+    ) ||
+    !permissions.has(
+      PermissionsBitField.Flags.ReadMessageHistory
+    )
+  ) {
+    throw new Error(
+      'Você não possui acesso a este ticket.'
+    );
+  }
+
+  const manager =
+    USERS_SEMPRE_PODEM.includes(member.id) ||
+    ALLOWED_TO_MANAGE_TICKET.includes(member.id) ||
+    member.roles.cache.some(
+      role =>
+        ALLOWED_TO_MANAGE_TICKET.includes(
+          role.id
+        )
+    );
+
+  if (
+    member.roles.cache.has(
+      ROLE_LIDERES_ID
+    )
+  ) {
+    const context =
+      await getMemberOrgTicketContext(member);
+
+    const own =
+      context.matches.filter(
+        item =>
+          item.channelId === channel.id
+      );
+
+    if (own.length === 1) {
+      return {
+        roleId: own[0].roleId,
+        name: own[0].roleName,
+      };
+    }
+  }
+
+  if (!manager) {
+    throw new Error(
+      'Somente a gestão autorizada ou o líder desta organização pode alterar a imagem.'
+    );
+  }
+
+  const roles =
+    channel.guild.roles.cache.filter(
+      role =>
+        !role.managed &&
+        !isIgnoredRoleName(role.name) &&
+        normalizeName(role.name) ===
+          normalizeName(
+            prettyChannelName(channel.name)
+          )
+    );
+
+  if (roles.size !== 1) {
+    throw new Error(
+      'O nome deste ticket não identifica um único cargo de organização.'
+    );
+  }
+
+  const role = roles.first();
+
+  return {
+    roleId: role.id,
+    name: role.name,
+  };
+}
+
 export async function getMemberOrgTicketContext(member) {
   if (!member?.guild) {
     return {

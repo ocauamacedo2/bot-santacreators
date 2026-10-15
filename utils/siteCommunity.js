@@ -32,6 +32,10 @@ import {
   submitVipEventoFromSite,
 } from '../events/vipEvento.js';
 
+import {
+  getOrganizationImage,
+} from './orgImages.js';
+
 const leaderRole = '1353858422063239310';
 const snowflake = /^\d{17,20}$/;
 
@@ -495,6 +499,10 @@ export function createSiteCommunity({ client }) {
         canConfirm:
           presence.windowOpen &&
           presence.rights.confirm &&
+          (
+            item.status === 'PENDING' ||
+            presence.rights.overwrite === true
+          ) &&
           ownKeys.has(
             norm(readable(item.name, guild))
           ),
@@ -564,6 +572,7 @@ export function createSiteCommunity({ client }) {
       'orgticket.snapshot',
       'orgpresence.snapshot',
       'orgpresence.confirm',
+      'orgpresence.image',
       'orginvites.snapshot',
       'orgblacklist.snapshot',
     ];
@@ -586,6 +595,34 @@ export function createSiteCommunity({ client }) {
         403,
         'Seu cargo atual não permite acessar esta área.'
       );
+    }
+
+    if (action === 'orgpresence.image') {
+      const name =
+        String(payload.org || '').trim();
+
+      if (
+        !name ||
+        name.length > 200
+      ) {
+        throw fail(
+          400,
+          'Informe uma organização válida.'
+        );
+      }
+
+      const image =
+        await getOrganizationImage(
+          client,
+          name,
+          true
+        );
+
+      res.json({
+        image,
+      });
+
+      return true;
     }
 
     const result =
@@ -616,6 +653,46 @@ export function createSiteCommunity({ client }) {
                   action,
                   payload
                 );
+
+    if (
+      action === 'orgpresence.snapshot' ||
+      action === 'orginvites.snapshot'
+    ) {
+      for (
+        const list of [
+          result.organizations,
+          result.missing,
+        ]
+      ) {
+        if (!Array.isArray(list)) {
+          continue;
+        }
+
+        await Promise.all(
+          list.map(async record => {
+            try {
+              const image =
+                await getOrganizationImage(
+                  client,
+                  record.name
+                );
+
+              if (image) {
+                record.image = image;
+              }
+            } catch (error) {
+              console.error(
+                '[ORG IMAGES] Consulta do site:',
+                {
+                  organization: record.name,
+                  message: error.message,
+                }
+              );
+            }
+          })
+        );
+      }
+    }
 
     res.json(result);
 

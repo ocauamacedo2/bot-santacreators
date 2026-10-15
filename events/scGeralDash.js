@@ -4456,10 +4456,43 @@ function presenca_isConfirmed(emb) {
   return t.includes("confirmou");
 }
 function presenca_getUserId(emb) {
-  const f = getFields(emb).find(x => norm(x?.name).includes("autor"));
-  if (!f) return null;
-  const v = String(f.value || "");
-  return pickFirstMentionId(v) || pickFirstIdLoose(v);
+  const fields = getFields(emb);
+
+  const credit = fields.find(field => {
+    const name = norm(field?.name);
+
+    return (
+      name.includes("credito") &&
+      name.includes("presenca")
+    );
+  });
+
+  if (credit) {
+    const value =
+      String(credit.value || "");
+
+    return (
+      pickFirstMentionId(value) ||
+      pickFirstIdLoose(value) ||
+      null
+    );
+  }
+
+  const author = fields.find(field =>
+    norm(field?.name).includes("autor")
+  );
+
+  if (!author) {
+    return null;
+  }
+
+  const value =
+    String(author.value || "");
+
+  return (
+    pickFirstMentionId(value) ||
+    pickFirstIdLoose(value)
+  );
 }
 
 // Helper para Correção (Backfill/Scan)
