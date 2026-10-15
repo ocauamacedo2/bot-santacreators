@@ -342,3 +342,172 @@ export function validatePrizeInput({
 
   return null;
 }
+
+export function parseLinkPrizeComponents(value) {
+  const text = normalizePrizeAliases(value)
+    .normalize('NFKC')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/https?:\/\/\S+/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/[*_`~]/g, '')
+    .replace(/^\s*gg\s*[-:]\s*/i, '')
+    .trim();
+
+  if (!text) return null;
+
+  const result = {};
+
+  const aliases = [
+    [
+      'VIP Evento',
+      /^(?:vip\s*(?:por\s*)?(?:eventos?|event|evnto|eventu)|evento\s*vip|por\s*evento)$/i,
+    ],
+    [
+      'VIP Staff',
+      /^(?:vip\s*)?(?:staff|gente\s*bou?a)$/i,
+    ],
+    [
+      'VIP Platinum',
+      /^(?:vip\s*)?(?:platinum|platinium|platnum|platinun|platibnum|platina|platino|platnao|platinu|platin)$/i,
+    ],
+    [
+      'VIP Black',
+      /^(?:vip\s*)?(?:black|blak|bleck|preto)$/i,
+    ],
+    [
+      'VIP Bronze',
+      /^(?:vip\s*)?(?:bronze|bronz|bronzi)$/i,
+    ],
+    [
+      'VIP Prata',
+      /^(?:vip\s*)?prataa?$/i,
+    ],
+    [
+      'VIP Ouro',
+      /^(?:vip\s*)?(?:ouro|oru)$/i,
+    ],
+    [
+      'VIP Lancamento',
+      /^(?:vip\s*)?(?:lancamento|lancamnto|lancameto|lanca)$/i,
+    ],
+    [
+      'Pass',
+      /^(?:role\s*pass|roll\s*pass|rol\s*pass|roli\s*pass|role\s*passe|rol\s*passe|role\s*p|rp|battle\s*pass|better\s*paste|passe?)$/i,
+    ],
+  ];
+
+  function moneyInCents(piece) {
+    const match = piece.trim().match(
+      /^(?:(?:dinheiro|grana|cash|valor)\s*:?\s*)?(?:r\s*\$\s*)?(\d+(?:[.,]\d+)*)(?:\s*(kk|k|m|mi|mil|milhao|milhoes))?(?:\s*(?:reais|dinheiro|grana|cash))?$/i
+    );
+
+    if (!match) return null;
+
+    let numeric = match[1];
+
+    if (numeric.includes(',')) {
+      numeric = numeric
+        .replace(/\./g, '')
+        .replace(',', '.');
+    } else if (
+      /^\d{1,3}(?:\.\d{3})+$/.test(numeric)
+    ) {
+      numeric = numeric.replace(/\./g, '');
+    }
+
+    const multiplier = {
+      k: 1000,
+      mil: 1000,
+      kk: 1000000,
+      m: 1000000,
+      mi: 1000000,
+      milhao: 1000000,
+      milhoes: 1000000,
+    }[String(match[2] || '').toLowerCase()] || 1;
+
+    const amount = Number(numeric) * multiplier;
+    const cents = Math.round(amount * 100);
+
+    if (
+      !Number.isFinite(amount) ||
+      amount <= 0 ||
+      !Number.isSafeInteger(cents) ||
+      Math.abs(amount * 100 - cents) > 0.001
+    ) {
+      return null;
+    }
+
+    return cents;
+  }
+
+  const pieces = text
+    .split(/\s*\+\s*|[;\n]+/)
+    .map(piece => piece.trim())
+    .filter(Boolean);
+
+  for (const piece of pieces) {
+    const money = moneyInCents(piece);
+
+    if (money !== null) {
+      result.Dinheiro =
+        (result.Dinheiro || 0) + money;
+
+      if (!Number.isSafeInteger(result.Dinheiro)) {
+        return null;
+      }
+
+      continue;
+    }
+
+    const match = piece.match(
+      /^(?:(-?\d+(?:[.,]\d+)?)\s*(?:x\s*)?)?([a-z][a-z\s]*?)(?:\s*(?:x\s*)?(-?\d+(?:[.,]\d+)?))?$/i
+    );
+
+    if (!match) return null;
+
+    const before = match[1] == null
+      ? null
+      : Number(match[1].replace(',', '.'));
+
+    const after = match[3] == null
+      ? null
+      : Number(match[3].replace(',', '.'));
+
+    if (
+      before !== null &&
+      after !== null &&
+      before !== after
+    ) {
+      return null;
+    }
+
+    const quantity = before ?? after ?? 1;
+
+    if (
+      !Number.isSafeInteger(quantity) ||
+      quantity <= 0
+    ) {
+      return null;
+    }
+
+    const label = match[2].trim();
+
+    const category = aliases.find(
+      ([, expression]) => expression.test(label)
+    )?.[0];
+
+    if (!category) return null;
+
+    result[category] =
+      (result[category] || 0) + quantity;
+
+    if (!Number.isSafeInteger(result[category])) {
+      return null;
+    }
+  }
+
+  return Object.keys(result).length
+    ? result
+    : null;
+}

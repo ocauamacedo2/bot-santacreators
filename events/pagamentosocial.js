@@ -2,7 +2,7 @@
 
 import {
   validatePrizeInput,
-  parsePrizeComponents,
+  parseLinkPrizeComponents as parsePrizeComponents,
   normalizePrizeAliases,
 } from '../utils/prizeValidation.js';
 import fs from "node:fs";
@@ -4827,6 +4827,54 @@ function calcularDiferencaMinutosVip(a, b) {
 
   return Math.abs(n1 - n2) / 60000;
 }
+
+
+
+function componentesPagamentoParaVinculo(dados = {}) {
+  const tipo = String(dados.tipo || '').trim();
+
+  const categoria =
+    normalizarTipoPremiacao(tipo);
+
+  const premio = normalizarPremiacaoVipParaVinculo(
+    dados.premiacao || ''
+  );
+
+  const fromPrize =
+    parsePrizeComponents(premio);
+
+  if (fromPrize) {
+    return fromPrize;
+  }
+
+  if (categoria === 'Dinheiro') {
+    const fromValue =
+      parsePrizeComponents(dados.valor || '');
+
+    if (fromValue?.Dinheiro) {
+      return fromValue;
+    }
+
+    return null;
+  }
+
+  /*
+   * Se existe um texto de prêmio que não foi entendido,
+   * não trocar silenciosamente esse prêmio por uma unidade
+   * do tipo genérico.
+   */
+  const descriptivePrize = premio
+    .replace(/https?:\/\/\S+/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/[^\p{L}\p{N}]/gu, '')
+    .trim();
+
+  if (descriptivePrize) {
+    return null;
+  }
+
+  return parsePrizeComponents(tipo);
+}
 async function buscarVipEventoPorDados(
   client,
   dados = {},
@@ -4915,7 +4963,7 @@ async function buscarVipEventoPorDados(
   }
 
   const quantidadePagamento =
-    parsePrizeComponents(tipoPagamentoRaw);
+    componentesPagamentoParaVinculo(dados);
 
   const candidatos = mensagens
     .filter((msg) => msg.author?.id === client.user?.id)
@@ -5318,17 +5366,41 @@ async function sincronizarPagoDoPar(
     ...(vipEmbed.data.fields || []),
   ];
 
-  if (!vipPaid) {
-    setCampoPagamento(
-      vipFields,
-      '💸 Pagamento',
-
-      '✅ PAGO — sincronizado do Pagamento Social.\n' +
-      `🔗 ${payment.url}`,
-
-      false
+  const previousVipPayment =
+    getFieldValueStarts(
+      vip.embeds[0],
+      '💸 Pagamento'
     );
-  }
+
+  const currentPaymentUrl = payment.url;
+
+  const repairedVipPayment = vipPaid
+    ? previousVipPayment.replace(
+        /https?:\/\/(?:canary\.|ptb\.)?discord(?:app)?\.com\/channels\/\d+\/\d+\/\d+/gi,
+        url => {
+          const link =
+            extrairLinkMensagemDiscord(url);
+
+          return (
+            link?.guildId === payment.guildId &&
+            link?.channelId === payment.channelId
+          )
+            ? currentPaymentUrl
+            : url;
+        }
+      )
+    : '✅ PAGO — sincronizado do Pagamento Social.';
+
+  setCampoPagamento(
+    vipFields,
+    '💸 Pagamento',
+
+    repairedVipPayment.includes(currentPaymentUrl)
+      ? repairedVipPayment
+      : `${repairedVipPayment}\n🔗 ${currentPaymentUrl}`,
+
+    false
+  );
 
   vipEmbed.setFields(
     vipFields
@@ -5381,7 +5453,15 @@ async function sincronizarPagoDoPar(
 
       false
     );
+  }
 
+  const previousOrigin =
+    getFieldValue(
+      payment.embeds[0],
+      '🔗 Origem da sincronização'
+    );
+
+  if (!paymentPaid || previousOrigin) {
     setCampoPagamento(
       fields,
       '🔗 Origem da sincronização',
@@ -5575,15 +5655,81 @@ async function executarReconciliacaoVipPagamento(client) {
       continue;
     }
 
+
+
+    function completarAnoEventoParaVinculo(value, reference) {
+  const original = String(value || '')
+    .replace(/[`*_]/g, '')
+    .trim();
+
+  if (normalizeVipDate(original)) {
+    return original;
+  }
+
+  const match = original.match(
+    /^(\d{1,2})[\/.-](\d{1,2})$/
+  );
+
+  if (!match) return original;
+
+  const timestamp = Number(reference);
+
+  if (
+    !Number.isFinite(timestamp) ||
+    timestamp <= 0
+  ) {
+    return original;
+  }
+
+  const referenceYear = Number(
+    new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/Sao_Paulo',
+      year: 'numeric',
+    }).format(new Date(timestamp))
+  );
+
+  const candidates = [
+    referenceYear - 1,
+    referenceYear,
+    referenceYear + 1,
+  ]
+    .map(year => {
+      const date =
+        `${match[1]}/${match[2]}/${year}`;
+
+      const normalized = normalizeVipDate(date);
+
+      return {
+        date,
+        normalized,
+        distance: normalized
+          ? Math.abs(
+              Date.parse(
+                `${normalized}T12:00:00-03:00`
+              ) - timestamp
+            )
+          : Infinity,
+      };
+    })
+    .filter(candidate =>
+      candidate.normalized &&
+      candidate.distance <= 7 * 86400000
+    )
+    .sort((a, b) => a.distance - b.distance);
+
+  return candidates[0]?.date || original;
+}
     const data =
       getDadosPagamentoParaBuscarVip(
         payment.embeds[0]
       );
 
+    const categoria =
+      normalizarTipoPremiacao(data.tipo);
+
     if (
-      !categoriaEhVipOuPass(
-        data.tipo
-      )
+      !categoriaEhVipOuPass(categoria) &&
+      categoria !== 'Dinheiro'
     ) {
       continue;
     }
@@ -5593,6 +5739,15 @@ async function executarReconciliacaoVipPagamento(client) {
     data.registroTimestamp =
       horarioOriginalPagamentoParaVinculo(
         payment
+      );
+
+    data.eventoData =
+      completarAnoEventoParaVinculo(
+        getFieldValue(
+          payment.embeds[0],
+          '📅 Data do Evento'
+        ),
+        data.registroTimestamp
       );
 
     const match =
@@ -5913,7 +6068,7 @@ async function resolverVipEventoProfissional(client, texto, dados = {}) {
       const tipoPagamento = normalizarTipoPremiacao(tipoPagamentoRaw);
 
       const paymentComponents =
-        parsePrizeComponents(tipoPagamentoRaw);
+        componentesPagamentoParaVinculo(dados);
 
       const vipComponents =
         parsePrizeComponents(
@@ -6677,6 +6832,69 @@ async function atualizarTipoPremiacaoNoVipEvento(client, vipEventoResolvido, cat
   };
 }
 
+function completarAnoEventoParaVinculo(value, reference) {
+  const original = String(value || '')
+    .replace(/[`*_]/g, '')
+    .trim();
+
+  if (normalizeVipDate(original)) {
+    return original;
+  }
+
+  const match = original.match(
+    /^(\d{1,2})[\/.-](\d{1,2})$/
+  );
+
+  if (!match) return original;
+
+  const timestamp = Number(reference);
+
+  if (
+    !Number.isFinite(timestamp) ||
+    timestamp <= 0
+  ) {
+    return original;
+  }
+
+  const referenceYear = Number(
+    new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/Sao_Paulo',
+      year: 'numeric',
+    }).format(new Date(timestamp))
+  );
+
+  const candidates = [
+    referenceYear - 1,
+    referenceYear,
+    referenceYear + 1,
+  ]
+    .map(year => {
+      const date =
+        `${match[1]}/${match[2]}/${year}`;
+
+      const normalized = normalizeVipDate(date);
+
+      return {
+        date,
+        normalized,
+        distance: normalized
+          ? Math.abs(
+              Date.parse(
+                `${normalized}T12:00:00-03:00`
+              ) - timestamp
+            )
+          : Infinity,
+      };
+    })
+    .filter(candidate =>
+      candidate.normalized &&
+      candidate.distance <= 7 * 86400000
+    )
+    .sort((a, b) => a.distance - b.distance);
+
+  return candidates[0]?.date || original;
+}
+
 function getDadosPagamentoParaBuscarVip(embedLike) {
   const ganhadorRaw = getFieldValue(embedLike, "👤 Ganhador");
   const ganhadorParts = String(ganhadorRaw || "").split("|").map((p) => p.trim());
@@ -6687,10 +6905,19 @@ function getDadosPagamentoParaBuscarVip(embedLike) {
 
 return {
   eventoNome: getFieldValue(embedLike, "🏷️ Evento"),
-  eventoData: getFieldValue(embedLike, "📅 Data do Evento"),
+  eventoData: completarAnoEventoParaVinculo(
+    getFieldValue(embedLike, "📅 Data do Evento"),
+    timestampEmbed
+  ),
   ganhadorNome: ganhadorParts[0] || "",
   ganhadorId: ganhadorParts[1] || "",
   premiacao: getFieldValue(embedLike, "🔗 Premiação / Link"),
+
+  valor: getFieldValue(
+    embedLike,
+    "💰 Valor Identificado"
+  ),
+
   tipo: getTipoPagamentoFromEmbed(embedLike) || "",
   cidade: CIDADES_PAGAMENTO[getCidadeKeyFromEmbed(embedLike)]?.label || "",
   registroTimestamp: timestampEmbed,
