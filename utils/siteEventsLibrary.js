@@ -882,7 +882,9 @@ export function createSiteEventsLibrary({ client }) {
             value.eventId,
 
           name:
-            value.name,
+            state.names?.[
+              guild.id + ':' + value.eventId
+            ] || value.name,
 
           cover:
             Object.hasOwn(

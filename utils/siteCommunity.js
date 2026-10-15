@@ -68,6 +68,23 @@ export function createSiteCommunity({ client }) {
         !member.roles.cache.has('1430984036972494908')
       );
 
+    const presencePanel =
+      await member.guild.channels.fetch(
+        '1477800974574682242'
+      ).catch(() => null);
+
+    const presencePermissions =
+      presencePanel?.permissionsFor(member);
+
+    const presenceStaff =
+      isOfficialSantaCreatorsTeamMember(member) &&
+      presencePermissions?.has(
+        'ViewChannel'
+      ) === true &&
+      presencePermissions?.has(
+        'ReadMessageHistory'
+      ) === true;
+
     const context = leader
       ? await getMemberOrgTicketContext(member)
       : {
@@ -83,9 +100,14 @@ export function createSiteCommunity({ client }) {
 
     return {
       member,
+      presenceStaff,
       mywins: community || leader,
       viprequest: leader,
-      orgpresence: leader && tags.length > 0,
+
+      orgpresence:
+        presenceStaff ||
+        (leader && tags.length > 0),
+
       orginvites: leader && tags.length > 0,
       orgblacklist: leader && tags.length > 0,
 
@@ -503,8 +525,11 @@ export function createSiteCommunity({ client }) {
             item.status === 'PENDING' ||
             presence.rights.overwrite === true
           ) &&
-          ownKeys.has(
-            norm(readable(item.name, guild))
+          (
+            permissions.presenceStaff === true ||
+            ownKeys.has(
+              norm(readable(item.name, guild))
+            )
           ),
 
         image:
@@ -536,15 +561,18 @@ export function createSiteCommunity({ client }) {
     const matches = presence.organizations.filter(item =>
       norm(readable(item.name, guild)) ===
         norm(payload.org) &&
-      ownKeys.has(
-        norm(readable(item.name, guild))
+      (
+        permissions.presenceStaff === true ||
+        ownKeys.has(
+          norm(readable(item.name, guild))
+        )
       )
     );
 
     if (matches.length !== 1) {
       throw fail(
         403,
-        'Confirme somente a organização identificada pelos seus cargos.'
+        'A organização não foi identificada de forma única ou você não possui acesso para confirmá-la.'
       );
     }
 

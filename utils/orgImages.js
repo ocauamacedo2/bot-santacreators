@@ -400,80 +400,241 @@ function eligible(channel) {
   );
 }
 
+function isOriginalTicketPanel(message, client) {
+  if (
+    message?.author?.id !== client.user.id
+  ) {
+    return false;
+  }
+
+  const ids = new Set(
+    (message.components || []).flatMap(
+      row => row.components.map(
+        component => component.customId
+      )
+    )
+  );
+
+  return (
+    ids.has('fechar_ticket') &&
+    ids.has('adicionar_membro')
+  );
+}
+
+function isLegacyImagePanel(message, client) {
+  const components =
+    (message.components || []).flatMap(
+      row => row.components
+    );
+
+  return (
+    message.author?.id === client.user.id &&
+    message.content ===
+      '🖼️ Perfil da organização • gestão e líder autorizado podem definir a imagem.' &&
+    !message.embeds?.length &&
+    !message.attachments?.size &&
+    components.length === 1 &&
+    components[0].customId === BUTTON
+  );
+}
+
 async function ensureButton(client, channel) {
   if (!eligible(channel)) {
     return;
   }
 
-  const savedPanel =
-    load().__panels?.[channel.id];
+  client.__scOrgImagePanelJobs ||= new Map();
 
-  if (savedPanel) {
-    const panel =
+  const jobs =
+    client.__scOrgImagePanelJobs;
+
+  if (jobs.has(channel.id)) {
+    return jobs.get(channel.id);
+  }
+
+  const operation = (async () => {
+    let target = null;
+    const legacy = [];
+
+    const savedPanel =
+      load().__panels?.[channel.id];
+
+    if (savedPanel) {
+      const saved =
+        await channel.messages.fetch({
+          message: savedPanel,
+          force: true,
+        }).catch(() => null);
+
+      if (
+        isOriginalTicketPanel(saved, client)
+      ) {
+        target = saved;
+      }
+    }
+
+    let before;
+
+    for (
+      let page = 0;
+      !target && page < 50;
+      page += 1
+    ) {
+      const messages =
+        await channel.messages.fetch({
+          limit: 100,
+          before,
+        });
+
+      for (const message of messages.values()) {
+        if (
+          isLegacyImagePanel(message, client)
+        ) {
+          legacy.push(message);
+        }
+
+        if (
+          !target &&
+          isOriginalTicketPanel(message, client)
+        ) {
+          target = message;
+        }
+      }
+
+      if (
+        target ||
+        messages.size < 100
+      ) {
+        break;
+      }
+
+      const next =
+        messages.last()?.id;
+
+      if (
+        !next ||
+        next === before
+      ) {
+        break;
+      }
+
+      before = next;
+    }
+
+    if (!target) {
+      console.warn(
+        '[ORG IMAGES] Painel original não localizado:',
+        {
+          channelId: channel.id,
+        }
+      );
+
+      return;
+    }
+
+    const current =
+      await channel.guild.channels.fetch(
+        channel.id
+      );
+
+    if (!eligible(current)) {
+      return;
+    }
+
+    const fresh =
       await channel.messages.fetch({
-        message: savedPanel,
+        message: target.id,
         force: true,
-      }).catch(() => null);
+      });
 
     if (
-      panel?.author?.id === client.user.id &&
-      panel.components.some(
+      !isOriginalTicketPanel(fresh, client)
+    ) {
+      return;
+    }
+
+    const hasButton =
+      fresh.components.some(
         row => row.components.some(
           component =>
             component.customId === BUTTON
         )
-      )
+      );
+
+    if (!hasButton) {
+      const rows =
+        fresh.components.map(
+          row => ActionRowBuilder.from(row)
+        );
+
+      let row = rows.find(
+        item =>
+          item.components.length < 5 &&
+          item.components.every(
+            component =>
+              component.toJSON().type === 2
+          )
+      );
+
+      if (!row) {
+        if (rows.length >= 5) {
+          throw new Error(
+            'O painel original já utiliza todas as linhas disponíveis.'
+          );
+        }
+
+        row = new ActionRowBuilder();
+        rows.push(row);
+      }
+
+      row.addComponents(
+        new ButtonBuilder()
+          .setCustomId(BUTTON)
+          .setLabel('Imagem da organização')
+          .setStyle(ButtonStyle.Secondary)
+      );
+
+      await fresh.edit({
+        components: rows,
+      });
+    }
+
+    load().__panels ||= {};
+
+    load().__panels[channel.id] =
+      fresh.id;
+
+    save();
+
+    for (const message of legacy) {
+      if (message.id !== fresh.id) {
+        await message.delete().catch(
+          error => console.warn(
+            '[ORG IMAGES] Limpeza do painel separado:',
+            {
+              messageId: message.id,
+              message: error.message,
+            }
+          )
+        );
+      }
+    }
+  })();
+
+  jobs.set(
+    channel.id,
+    operation
+  );
+
+  try {
+    return await operation;
+  } finally {
+    if (
+      jobs.get(channel.id) === operation
     ) {
-      return;
+      jobs.delete(channel.id);
     }
   }
-
-  const messages =
-    await channel.messages.fetch({
-      limit: 100,
-    });
-
-  const existing =
-    messages.find(
-      message =>
-        message.author.id === client.user.id &&
-        message.components.some(
-          row => row.components.some(
-            component =>
-              component.customId === BUTTON
-          )
-        )
-    );
-
-  if (existing) {
-    return;
-  }
-
-  const panel =
-    await channel.send({
-      content:
-        '🖼️ Perfil da organização • gestão e líder autorizado podem definir a imagem.',
-
-      components: [
-        new ActionRowBuilder().addComponents(
-          new ButtonBuilder()
-            .setCustomId(BUTTON)
-            .setLabel('Imagem da organização')
-            .setStyle(ButtonStyle.Secondary)
-        ),
-      ],
-
-      allowedMentions: {
-        parse: [],
-      },
-    });
-
-  load().__panels ||= {};
-
-  load().__panels[channel.id] =
-    panel.id;
-
-  save();
 }
 
 export function installOrganizationImages(client) {
@@ -494,6 +655,42 @@ export function installOrganizationImages(client) {
   client.on(
     'channelCreate',
     ensure
+  );
+
+  client.on(
+    'messageCreate',
+    message => {
+      if (
+        eligible(message.channel) &&
+        isOriginalTicketPanel(message, client)
+      ) {
+        void ensure(message.channel);
+      }
+    }
+  );
+
+  client.on(
+    'messageUpdate',
+    (oldMessage, message) => {
+      if (
+        !eligible(message.channel) ||
+        !isOriginalTicketPanel(message, client)
+      ) {
+        return;
+      }
+
+      const hasButton =
+        message.components.some(
+          row => row.components.some(
+            component =>
+              component.customId === BUTTON
+          )
+        );
+
+      if (!hasButton) {
+        void ensure(message.channel);
+      }
+    }
   );
 
   client.on(
