@@ -5634,6 +5634,34 @@ async function executarReconciliacaoVipPagamento(client) {
       vipChannel
     );
 
+  const {
+    corrigirCidadeVipPorCargo,
+  } = await import(
+    './vipEvento.js'
+  );
+
+  const cityMembers = new Map();
+
+  for (
+    let index = 0;
+    index < vips.length;
+    index++
+  ) {
+    try {
+      vips[index] =
+        await corrigirCidadeVipPorCargo(
+          vips[index],
+          cityMembers
+        );
+    } catch (error) {
+      console.error(
+        '[VIP CIDADE] Falha na correção:',
+        vips[index].id,
+        error
+      );
+    }
+  }
+
   const proposals = [];
 
   const result = {

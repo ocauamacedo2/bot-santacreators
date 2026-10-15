@@ -276,9 +276,42 @@ function canReprove(member) {
 }
 
 async function VIP_getLeaderRequestContext(member) {
-  const isLeader = member?.roles?.cache?.has(IDS.LIDERES) === true;
+  try {
+    member = await member.guild.members.fetch({
+      user: member.id,
+      force: true,
+    });
+  } catch (error) {
+    console.error(
+      '[VIP CIDADE] Falha ao conferir cargos atuais:',
+      error
+    );
 
-  if (!isLeader) {
+    return {
+      strict: true,
+      ok: false,
+      source: 'error',
+      cityKeys: [],
+      orgName: null,
+      orgMatch: null,
+      message:
+        '⚠️ Não consegui conferir seus cargos atuais. Tente novamente.',
+    };
+  }
+
+  const isLeader =
+    member.roles.cache.has(IDS.LIDERES);
+
+  const isStaff =
+    hasAnyRole(
+      member,
+      REGISTER_ALLOWED.filter(
+        id => id !== IDS.LIDERES
+      )
+    ) ||
+    REGISTER_ALLOWED_USERS.includes(member.id);
+
+  if (!isLeader || isStaff) {
     return {
       strict: false,
       ok: true,
@@ -350,11 +383,32 @@ async function VIP_getLeaderRequestContext(member) {
   if (orgMatches.length === 1) {
     const orgMatch = orgMatches[0];
 
+    const cityKeys =
+      VIP_LIDER_CITY_KEYS.filter(key =>
+        member.roles.cache.has(
+          CITIES[key].roleId
+        )
+      );
+
+    if (cityKeys.length !== 1) {
+      return {
+        strict: true,
+        ok: false,
+        source: 'city_role_conflict',
+        cityKeys: [],
+        orgName: orgMatch.orgName,
+        orgMatch,
+        message:
+          '🚫 Não foi possível determinar sua cidade. ' +
+          'Seu usuário precisa ter exatamente um cargo de cidade autorizado.',
+      };
+    }
+
     return {
       strict: true,
       ok: true,
       source: 'org_ticket',
-      cityKeys: ['nobre'],
+      cityKeys,
       orgName: orgMatch.orgName,
       orgMatch,
     };
@@ -364,7 +418,7 @@ async function VIP_getLeaderRequestContext(member) {
     member.roles.cache.has(CITIES[cityKey].roleId)
   );
 
-  if (cityKeys.length === 0) {
+  if (cityKeys.length !== 1) {
     return {
       strict: true,
       ok: false,
@@ -374,8 +428,12 @@ async function VIP_getLeaderRequestContext(member) {
       orgMatch: null,
       message:
         '🚫 **Solicitação de VIP bloqueada.**\n' +
-        `Você possui <@&${IDS.LIDERES}>, mas não foi encontrada uma **tag de organização ligada a um ticket aberto** e você também não possui nenhum dos divisores de cidade autorizados:\n` +
-        VIP_LIDER_CITY_KEYS.map(cityKey => `<@&${CITIES[cityKey].roleId}>`).join(' • '),
+        'Seu usuário precisa ter exatamente um cargo de cidade autorizado. ' +
+        'Nenhuma cidade ou mais de uma cidade foi encontrada.\n' +
+        VIP_LIDER_CITY_KEYS.map(
+          cityKey =>
+            `<@&${CITIES[cityKey].roleId}>`
+        ).join(' • '),
     };
   }
 
@@ -1691,7 +1749,124 @@ async function VIP_sendAuditLog(client, guild, payload = {}) {
 }
 // ── MOVER REGISTROS POR FILTRO ──────────────────────────────────
 const VIP_REORDER_LOCKS = new Set();
+async function VIP_reordenarRegistros(
+  channel,
+  filtro,
+  client
+) {
+  if (
+    VIP_REORDER_LOCKS.has(channel.id)
+  ) {
+    throw new Error(
+      'Já existe uma reorganização neste canal.'
+    );
+  }
 
+  VIP_REORDER_LOCKS.add(channel.id);
+
+  let movidos = 0;
+  let resultado;
+
+  try {
+    resultado =
+      await VIP_moverRegistrosPorFiltro(
+        channel,
+        filtro,
+        client
+      );
+
+    const members = new Map();
+
+    const registros =
+      resultado.registros.sort(
+        (a, b) =>
+          vipOriginalTime(a) -
+          vipOriginalTime(b)
+      );
+
+    for (const message of registros) {
+      const current =
+        await message.channel.messages.fetch({
+          message: message.id,
+          force: true,
+        });
+
+      const embed =
+        EmbedBuilder.from(
+          current.embeds[0]
+        );
+
+      const solicitado =
+        VIP_hasSolicitado(embed);
+
+      const stillMatches =
+        !VIP_isPago(embed) &&
+        !VIP_isReprovado(embed) &&
+        (
+          filtro === 'solicitados'
+            ? solicitado
+            : !solicitado
+        );
+
+      if (!stillMatches) {
+        continue;
+      }
+
+      const corrected =
+        await corrigirCidadeVipPorCargo(
+          current,
+          members
+        );
+
+      await moveVipMessage(corrected);
+
+      movidos++;
+    }
+
+    await VIP_ensureFreshMenu(
+      channel.guild,
+      client,
+      true
+    );
+  } catch (error) {
+    error.message =
+      `${movidos} registro(s) movido(s). ` +
+      error.message;
+
+    throw error;
+  } finally {
+    VIP_REORDER_LOCKS.delete(
+      channel.id
+    );
+  }
+
+  /*
+   * A movimentação terminou.
+   * A reconciliação continua sem manter
+   * os botões do canal bloqueados.
+   */
+  try {
+    const {
+      reconciliarVinculosVipPagamento,
+    } = await import(
+      './pagamentosocial.js'
+    );
+
+    await reconciliarVinculosVipPagamento(
+      client
+    );
+  } catch (error) {
+    console.error(
+      '[VIP RECONCILIACAO] Varredura interrompida após movimentação:',
+      error
+    );
+  }
+
+  return {
+    movidos,
+    examinadas: resultado.examinadas,
+  };
+}
 async function VIP_reordenarRegistros(
   channel,
   filtro,
@@ -3813,4 +3988,216 @@ export async function vipEventoHandleMessage(message, client) {
   }
 
   return true;
+}
+export async function corrigirCidadeVipPorCargo(
+  message,
+  members = new Map()
+) {
+  if (
+    message.author?.id !== message.client.user?.id ||
+    !message.guild ||
+    !String(
+      message.embeds?.[0]?.title || ''
+    ).includes('Registro de VIP por Evento')
+  ) {
+    return message;
+  }
+
+  const embedRaw = message.embeds[0];
+
+  const actorId = String(
+    embedRaw.description || ''
+  ).match(
+    /Registrado por:\*{0,2}\s*<@!?(\d{17,20})>/i
+  )?.[1];
+
+  if (!actorId) return message;
+
+  if (!members.has(actorId)) {
+    members.set(
+      actorId,
+      message.guild.members.fetch({
+        user: actorId,
+        force: true,
+      }).catch(error => {
+        console.warn(
+          '[VIP CIDADE] Membro indisponível:',
+          actorId,
+          error.code
+        );
+
+        return null;
+      })
+    );
+  }
+
+  const member = await members.get(actorId);
+
+  if (
+    !member?.roles?.cache?.has(
+      IDS.LIDERES
+    )
+  ) {
+    return message;
+  }
+
+  const staffRoles =
+    REGISTER_ALLOWED.filter(
+      id => id !== IDS.LIDERES
+    );
+
+  if (
+    hasAnyRole(member, staffRoles) ||
+    REGISTER_ALLOWED_USERS.includes(
+      member.id
+    )
+  ) {
+    return message;
+  }
+
+  const keys =
+    VIP_LIDER_CITY_KEYS.filter(key =>
+      member.roles.cache.has(
+        CITIES[key].roleId
+      )
+    );
+
+  if (keys.length !== 1) {
+    console.warn(
+      '[VIP CIDADE] Cidade ausente ou ambígua:',
+      message.id,
+      actorId,
+      keys
+    );
+
+    return message;
+  }
+
+  const city = CITIES[keys[0]];
+
+  const normalize = value =>
+    String(value || '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-z0-9]/gi, '')
+      .toLowerCase();
+
+  const previous =
+    VIP_getFieldValue(
+      embedRaw,
+      '🌆 Cidade'
+    );
+
+  if (
+    normalize(previous) ===
+    normalize(city.label)
+  ) {
+    return message;
+  }
+
+  const current =
+    await message.channel.messages.fetch({
+      message: message.id,
+      force: true,
+    });
+
+  if (
+    current.editedTimestamp !==
+    message.editedTimestamp
+  ) {
+    console.warn(
+      '[VIP CIDADE] Registro alterado durante leitura:',
+      message.id
+    );
+
+    return current;
+  }
+
+  const embed =
+    EmbedBuilder.from(
+      current.embeds[0]
+    );
+
+  const fields = [
+    ...(embed.data.fields || []),
+  ];
+
+  const index = fields.findIndex(
+    field =>
+      String(field.name).startsWith(
+        '🌆 Cidade'
+      )
+  );
+
+  if (index < 0) return current;
+
+  fields[index] = {
+    ...fields[index],
+    value: `**${city.label}**`,
+  };
+
+  const audit = {
+    name: '🛠️ Correção da cidade',
+
+    value:
+      `Anterior: ${previous}\n` +
+      `Atual: **${city.label}**\n` +
+      `Conferido pelo cargo <@&${city.roleId}> ` +
+      `do registrante <@${actorId}>.`,
+
+    inline: false,
+  };
+
+  const auditIndex =
+    fields.findIndex(
+      field =>
+        field.name === audit.name
+    );
+
+  if (auditIndex >= 0) {
+    fields[auditIndex] = audit;
+  } else if (fields.length < 25) {
+    fields.push(audit);
+  }
+
+  embed.setFields(fields);
+
+  let content =
+    String(current.content || '').replace(
+      /Novo registro de VIP para (?:a|o) [^!\n]+!/i,
+      `Novo registro de VIP para a ${city.label}!`
+    );
+
+  for (
+    const config of Object.values(CITIES)
+  ) {
+    content = content
+      .split(`<@&${config.roleId}>`)
+      .join(`<@&${city.roleId}>`);
+  }
+
+  const updated = await current.edit({
+    content,
+
+    embeds: [
+      embed,
+      ...current.embeds.slice(1),
+    ],
+
+    allowedMentions: {
+      parse: [],
+    },
+  });
+
+  console.info(
+    '[VIP CIDADE] Corrigida:',
+    {
+      messageId: updated.id,
+      registranteId: actorId,
+      anterior: previous,
+      atual: city.label,
+    }
+  );
+
+  return updated;
 }
