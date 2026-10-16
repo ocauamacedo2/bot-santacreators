@@ -228,7 +228,7 @@ export function createSiteCommunity({ client }) {
         /<@&(\d{17,20})>/g,
         (_, id) =>
           guild.roles.cache.get(id)?.name ||
-          'Organização'
+          'Cargo indisponível'
       )
       .replace(
         /<@!?(\d{17,20})>/g,
@@ -823,10 +823,13 @@ export function createSiteCommunity({ client }) {
 
         return res.json({
           blocked: true,
-          reason: String(
+
+          reason: readable(
             error.message ||
-            'Confira seus cargos de cidade e organização.'
-          ),
+            'Confira seus cargos de cidade e organização.',
+            guild
+          ).replace(/\*\*/g, ''),
+
           generatedAt: Date.now(),
         });
       }
