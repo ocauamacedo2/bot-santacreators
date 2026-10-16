@@ -2284,8 +2284,10 @@ async function fetchDiscordMessagesPageShared(
 
   if (
     existing &&
-    existing.expiresAt >
-      now
+    (
+      existing.promise ||
+      existing.expiresAt > now
+    )
   ) {
     if (
       existing.promise
@@ -2355,8 +2357,10 @@ async function fetchDiscordMessagesPageShared(
     ) {
       if (
         !cacheValue ||
-        cacheValue.expiresAt <=
-          cleanupNow
+        (
+          !cacheValue.promise &&
+          cacheValue.expiresAt <= cleanupNow
+        )
       ) {
         cache.delete(
           cacheKey

@@ -2006,8 +2006,13 @@ const experience = createSiteHubExperience({
         // Autorizar ANTES de ler qualquer consulta persistida, inclusive em atualização manual.
         const moduleKey = action === 'teamRequests.list' ? 'staff' : action.split('.')[0];
         if (
-          action === 'bootstrap' || action === 'teamRequests.list' ||
-          (action.endsWith('.snapshot') && CHANNELS[moduleKey])
+          action === 'bootstrap' ||
+          action === 'teamRequests.list' ||
+          (
+            action.endsWith('.snapshot') &&
+            CHANNELS[moduleKey] &&
+            action !== 'weekly.snapshot'
+          )
         ) {
           await authorizeStoredRead(action, payload);
           const key = snapshotKey(guild, member, action, payload);
@@ -2222,6 +2227,7 @@ const experience = createSiteHubExperience({
             }
           };
 } else if (![
+  'weekly.snapshot',
   'bootstrap',
   'profile-options',
   'identity.batch',

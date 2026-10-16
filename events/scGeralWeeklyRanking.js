@@ -6981,6 +6981,7 @@ export async function geralWeeklyRankOnReady(client) {
 
   wireHub(client);
   wireWeekFlipScheduler(client);
+  wireWeeklySiteRefresh(client);
 
   // primeira render assim que subir
   await safeUpdate(client, "boot full scan", { scanMode: "full" });
@@ -7152,61 +7153,175 @@ function buildWeeklySiteAnalytics(items, ranking, weekKey) {
   };
 }
 
+const weeklySiteStates = new WeakMap();
+const WEEKLY_SITE_REFRESH_MS = 120000;
+
+function weeklySiteState(client) {
+  let state = weeklySiteStates.get(client);
+
+  if (!state) {
+    state = {
+      snapshot: null,
+      promise: null,
+      lastError: null,
+      timer: null,
+    };
+
+    weeklySiteStates.set(client, state);
+  }
+
+  return state;
+}
+
+function refreshWeeklySiteSnapshot(client) {
+  const state = weeklySiteState(client);
+
+  if (state.promise) {
+    return state.promise;
+  }
+
+  const weekKey = weekKeyFromDateSP(nowSP());
+
+  state.promise = Promise.resolve()
+    .then(async () => {
+      const ranking = await getWeeklyRanking(client, {
+        strict: true,
+        refresh: true,
+      });
+
+      // Não publica uma coleta que atravessou a virada da semana.
+      if (weekKey !== weekKeyFromDateSP(nowSP())) {
+        return;
+      }
+
+      const analytics = buildWeeklySiteAnalytics(
+        CACHE.payload?.items || [],
+        ranking,
+        weekKey
+      );
+
+      // Publica somente depois de concluir ranking e indicadores.
+      state.snapshot = {
+        weekKey,
+        generatedAt: Date.now(),
+        ranking,
+        analytics,
+      };
+
+      state.lastError = null;
+    })
+    .catch(error => {
+      state.lastError =
+        'Não foi possível concluir a última coleta.';
+
+      console.warn(
+        '[SC GERAL SITE] Atualização automática falhou:',
+        error.message
+      );
+
+      throw error;
+    })
+    .finally(() => {
+      state.promise = null;
+    });
+
+  return state.promise;
+}
+
+function wireWeeklySiteRefresh(client) {
+  const state = weeklySiteState(client);
+
+  if (state.timer) {
+    return;
+  }
+
+  const run = async () => {
+    try {
+      if (client.isReady()) {
+        await refreshWeeklySiteSnapshot(client);
+      }
+    } catch {
+      // Preserva a última coleta concluída.
+    } finally {
+      state.timer = setTimeout(
+        run,
+        WEEKLY_SITE_REFRESH_MS
+      );
+
+      state.timer.unref?.();
+    }
+  };
+
+  state.timer = setTimeout(run, 5000);
+  state.timer.unref?.();
+}
+
 export async function getWeeklyRankingSiteSnapshot({
   client,
   guild,
   actorId,
   refresh = false,
 }) {
-  const member =
-    await guild.members
-      .fetch(
-        String(actorId)
-      )
-      .catch(
-        () => null
-      );
+  const member = await guild.members
+    .fetch(String(actorId))
+    .catch(() => null);
 
-  const ranking =
-    await getWeeklyRanking(
-      client,
-      {
-        strict: true,
-        refresh: refresh === true
-      }
-    );
+  const state = weeklySiteState(client);
+  const weekKey = weekKeyFromDateSP(nowSP());
+
+  const prepared =
+    state.snapshot?.weekKey === weekKey
+      ? state.snapshot
+      : null;
+
+  if (
+    refresh === true ||
+    !prepared ||
+    Date.now() - prepared.generatedAt >= WEEKLY_SITE_REFRESH_MS
+  ) {
+    void refreshWeeklySiteSnapshot(client)
+      .catch(() => {});
+  }
+
+  if (!prepared) {
+    return {
+      pending: true,
+      message:
+        'Preparando a primeira coleta desta semana.',
+    };
+  }
 
   return {
-    ranking,
+    ...prepared,
 
-    pointAreas:
-      Object.entries(
-        SOURCE_LABEL
-      ).map(([key, label]) => ({
+    pointAreas: Object.entries(SOURCE_LABEL)
+      .map(([key, label]) => ({
         key,
-        label
+        label,
       })),
 
-    analytics: buildWeeklySiteAnalytics(CACHE.payload?.items || [], ranking, weekKeyFromDateSP(nowSP())),
+    delivery: {
+      savedAt: prepared.generatedAt,
+      updating: Boolean(state.promise),
+
+      stale:
+        Date.now() - prepared.generatedAt >=
+        WEEKLY_SITE_REFRESH_MS,
+
+      source: 'coleta-automatica-do-bot',
+      lastError: state.lastError,
+    },
 
     rights: {
       adjust:
-        canAdjustWeeklyPoints(
-          member
-        ) ||
-        canAddWeeklyPoints(
-          member
-        ),
+        canAdjustWeeklyPoints(member) ||
+        canAddWeeklyPoints(member),
 
       add:
-        canAddWeeklyPoints(
-          member
-        ),
+        canAddWeeklyPoints(member),
 
       remove:
-        canAdjustWeeklyPoints(
-          member
-        ),
+        canAdjustWeeklyPoints(member),
     },
   };
 }
