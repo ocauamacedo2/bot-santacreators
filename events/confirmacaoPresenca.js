@@ -1341,6 +1341,7 @@ if (interaction.isButton() && customId.startsWith("presenca_undo_")) {
 export async function getConfirmacaoPresencaSiteSnapshot({
   guild,
   actorId,
+  verifiedMember = null,
 }) {
   if (
     !guild?.members ||
@@ -1353,14 +1354,15 @@ export async function getConfirmacaoPresencaSiteSnapshot({
   }
 
   const actor =
-    await guild.members
-      .fetch({
-        user: String(actorId),
-        force: true,
-      })
-      .catch(
-        () => null
-      );
+    verifiedMember?.guild?.id === guild.id &&
+    verifiedMember.id === String(actorId)
+      ? verifiedMember
+      : await guild.members
+          .fetch({
+            user: String(actorId),
+            force: true,
+          })
+          .catch(() => null);
 
   if (!actor) {
     throw new Error(

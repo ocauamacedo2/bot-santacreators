@@ -1935,25 +1935,45 @@ async function scanChannelEmbeds(client, options) {
 }
 
 async function scanChannelEmbedsInternal(client, { channelId, weekFloorKey, maxPages = 60, onMessage }) {
-  const ch = await client.channels.fetch(channelId).catch(error => {
-    if (
-      Number(error?.code) !== 10003 ||
-      String(channelId) !== '1415102820826349648'
-    ) {
-      throw error;
-    }
+  const unavailable =
+    globalThis.__SC_GERAL_UNAVAILABLE_CHANNELS__ ??= new Map();
 
-    console.warn(
-      '[SC_GERAL_WEEKLY_RANK] Canal adicional de convites indisponível; esta coleta não leu esse canal:',
-      channelId
-    );
+  const channelKey =
+    String(client.user?.id || 'bot') + ':' + String(channelId);
 
-    return null;
-  });
+  const retryAt = unavailable.get(channelKey) || 0;
+
+  if (Date.now() < retryAt) {
+    return;
+  }
+
+  const ch = client.channels.cache.get(String(channelId)) ||
+    await client.channels.fetch(channelId).catch(error => {
+      if (
+        Number(error?.code) !== 10003 ||
+        String(channelId) !== '1415102820826349648'
+      ) {
+        throw error;
+      }
+
+      unavailable.set(
+        channelKey,
+        Date.now() + 5 * 60 * 1000
+      );
+
+      console.warn(
+        '[SC GERAL] Canal adicional de convites indisponível. Nova tentativa em 5 minutos:',
+        channelId
+      );
+
+      return null;
+    });
 
   if (!ch) {
     return;
   }
+
+  unavailable.delete(channelKey);
 
   if (!ch.isTextBased?.() || !ch.messages?.fetch) {
     throw new Error(

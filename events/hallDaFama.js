@@ -24635,6 +24635,39 @@ function getLifetimeHallPlayers(rankings) {
     );
 }
 
+let personalHallBaseCache = null;
+
+function personalHallBase() {
+  const info = fs.statSync(
+    HALL_RANKING_FILE,
+    { bigint: true }
+  );
+
+  const version = [
+    info.ino,
+    info.size,
+    info.mtimeNs,
+    info.ctimeNs,
+  ].map(String).join(':');
+
+  if (personalHallBaseCache?.version === version) {
+    return personalHallBaseCache;
+  }
+
+  const rankings = loadHallRankings();
+
+  const prepared = {
+    version,
+    rankings,
+    players: null,
+    organizations: null,
+  };
+
+  personalHallBaseCache = prepared;
+
+  return prepared;
+}
+
 export async function getPersonalHallSiteSnapshot({
   guild,
   member,
@@ -24656,8 +24689,13 @@ export async function getPersonalHallSiteSnapshot({
       { status: 503 }
     );
   }
+  const base = personalHallBase();
 
-  const rankings = loadHallRankings();
+  if (!base.players) {
+    base.players = getLifetimeHallPlayers(
+      base.rankings
+    );
+  }
 
   const playerId = String(member.displayName || '')
     .match(/\|\s*(\d{1,25})\s*$/)?.[1] || '';
@@ -24681,23 +24719,40 @@ export async function getPersonalHallSiteSnapshot({
   );
 
   const personalEntries = playerId
-    ? getLifetimeHallPlayers(rankings).filter(entry =>
+    ? base.players.filter(entry =>
         String(entry.playerId || '') === playerId
       )
     : [];
 
-  const organizationEntries =
-    member.roles.cache.has('1353858422063239310')
-      ? [
-          ...getLifetimeHallOrgs(rankings),
+  const isLeader =
+    member.roles.cache.has(
+      '1353858422063239310'
+    );
 
-          ...getHallOrgSeasons(rankings).flatMap(
-            season => season.ranking
-          ),
-        ].filter(entry =>
-          orgKeys.has(normalize(entry.name))
+  if (
+    isLeader &&
+    !base.organizations
+  ) {
+    base.organizations = [
+      ...getLifetimeHallOrgs(
+        base.rankings
+      ),
+
+      ...getHallOrgSeasons(
+        base.rankings
+      ).flatMap(
+        season => season.ranking
+      ),
+    ];
+  }
+
+  const organizationEntries = isLeader
+    ? base.organizations.filter(entry =>
+        orgKeys.has(
+          normalize(entry.name)
         )
-      : [];
+      )
+    : [];
 
   const collect = (entries, mode) => {
     const records = new Map();

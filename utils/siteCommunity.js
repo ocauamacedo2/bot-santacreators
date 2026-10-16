@@ -53,10 +53,12 @@ const norm = value => String(value || '')
 
 export function createSiteCommunity({ client }) {
   async function access(member, options = {}) {
-    member = await member.guild.members.fetch({
-      user: member.id,
-      force: true,
-    });
+    if (options.readOnly !== true) {
+      member = await member.guild.members.fetch({
+        user: member.id,
+        force: true,
+      });
+    }
 
     if (options.vipOnly === true) {
       return {
@@ -85,6 +87,9 @@ export function createSiteCommunity({ client }) {
       );
 
     const presencePanel =
+      member.guild.channels.cache.get(
+        '1477800974574682242'
+      ) ||
       await member.guild.channels.fetch(
         '1477800974574682242'
       ).catch(() => null);
@@ -513,6 +518,7 @@ export function createSiteCommunity({ client }) {
       await getConfirmacaoPresencaSiteSnapshot({
         guild,
         actorId: member.id,
+        verifiedMember: member,
       });
 
     const ownKeys = new Set(
@@ -670,6 +676,9 @@ export function createSiteCommunity({ client }) {
     }
 
     const permissions = await access(member, {
+      readOnly:
+        action.endsWith('.snapshot'),
+
       vipOnly:
         action === 'viprequest.snapshot' ||
         action === 'viprequest.submit',

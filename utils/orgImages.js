@@ -54,6 +54,8 @@ const norm = value => String(value || '')
 let records = null;
 let recovery = null;
 
+const imageRefreshes = new Map();
+
 const locks = new Set();
 
 function load() {
@@ -103,6 +105,7 @@ function save() {
 
 async function logChannel(client) {
   const channel =
+    client.channels.cache.get(LOG_CHANNEL) ||
     await client.channels.fetch(LOG_CHANNEL);
 
   if (
@@ -265,29 +268,75 @@ export async function getOrganizationImage(
       Number(record.checkedAt || 0) >
       3600000
   ) {
-    const channel =
-      await logChannel(client);
+    const refreshKey = [
+      client.user.id,
+      record.roleId,
+      record.messageId,
+    ].join(':');
 
-    const message =
-      await channel.messages.fetch({
-        message: record.messageId,
-        force: true,
-      });
+    const pending =
+      imageRefreshes.get(refreshKey);
 
-    const refreshed =
-      readArchive(message, client);
-
-    if (
-      !refreshed ||
-      refreshed.roleId !== record.roleId
-    ) {
-      return null;
+    if (pending) {
+      return pending;
     }
 
-    load()[record.roleId] = refreshed;
-    save();
+    const operation = Promise.resolve()
+      .then(async () => {
+        const channel =
+          await logChannel(client);
 
-    return refreshed.url;
+        const message =
+          await channel.messages.fetch({
+            message: record.messageId,
+            force: true,
+          });
+
+        const refreshed =
+          readArchive(message, client);
+
+        if (
+          !refreshed ||
+          refreshed.roleId !== record.roleId
+        ) {
+          return null;
+        }
+
+        const current =
+          load()[record.roleId];
+
+        // Preserva uma imagem nova enviada durante esta consulta.
+        if (
+          current?.messageId !==
+          record.messageId
+        ) {
+          return current?.url || null;
+        }
+
+        load()[record.roleId] =
+          refreshed;
+
+        save();
+
+        return refreshed.url;
+      })
+      .finally(() => {
+        if (
+          imageRefreshes.get(refreshKey) ===
+          operation
+        ) {
+          imageRefreshes.delete(
+            refreshKey
+          );
+        }
+      });
+
+    imageRefreshes.set(
+      refreshKey,
+      operation
+    );
+
+    return operation;
   }
 
   return record.url;
@@ -643,6 +692,13 @@ export function installOrganizationImages(client) {
   }
 
   client.__scOrgImagesInstalled = true;
+
+  void recover(client).catch(error => {
+    console.warn(
+      '[ORG IMAGES] Recuperação inicial indisponível:',
+      error.message
+    );
+  });
 
   const ensure = channel =>
     ensureButton(client, channel).catch(
