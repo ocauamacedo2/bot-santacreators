@@ -24776,6 +24776,19 @@ export async function getPersonalHallSiteSnapshot({
           continue;
         }
 
+        const sourceChannel =
+          guild.channels.cache.get(channelId);
+
+        if (
+          sourceChannel?.guildId !== guild.id ||
+          !sourceChannel.permissionsFor(member)?.has([
+            'ViewChannel',
+            'ReadMessageHistory',
+          ])
+        ) {
+          continue;
+        }
+
         const id = createHash('sha256')
           .update(
             JSON.stringify([

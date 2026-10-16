@@ -72,6 +72,7 @@ import { getNpsSiteSnapshot } from "./npsOperacional.js";
 
 import {
   createSiteCommunity,
+  SITE_COMMUNITY_VIEW_CHANNELS,
 } from "../utils/siteCommunity.js";
 
 import {
@@ -156,6 +157,7 @@ const GUILD_ID =
 
 
 const CHANNELS = {
+  ...SITE_COMMUNITY_VIEW_CHANNELS,
   vipadmin: [
     "1414718336826081330",
   ],
@@ -373,9 +375,13 @@ async function canAccessSiteModule(
   member,
   moduleKey
 ) {
-  const channelIds = CHANNELS[moduleKey];
+  const channelIds =
+    CHANNELS[moduleKey];
 
-  if (!member || !Array.isArray(channelIds)) {
+  if (
+    !member ||
+    !Array.isArray(channelIds)
+  ) {
     return false;
   }
 
@@ -387,52 +393,40 @@ async function canAccessSiteModule(
     'hall',
     'quiz',
     'cronograma',
+    ...Object.keys(
+      SITE_COMMUNITY_VIEW_CHANNELS
+    ),
   ]);
 
-  if (!isCentralMember && !communityModules.has(moduleKey)) {
+  if (
+    !isCentralMember &&
+    !communityModules.has(moduleKey)
+  ) {
+    return false;
+  }
+
+  const visible =
+    await canViewAnyChannel(
+      client,
+      member,
+      channelIds
+    );
+
+  if (!visible) {
     return false;
   }
 
   if (moduleKey === 'vipadmin') {
     const access =
       await getVipEventoAdminSiteAccess({
-        guild:
-          member.guild,
-
+        guild: member.guild,
         member,
       });
 
     return access.rights.view === true;
   }
 
-  if (moduleKey === 'quiz') {
-    return true;
-  }
-
-  const administrativeReader =
-    member.id === '660311795327828008' ||
-    member.roles.cache.some(role =>
-      [
-        '1262262852949905408',
-        '1352407252216184833',
-        '1262262852949905409',
-        '1352408327983861844',
-      ].includes(role.id)
-    );
-
-  if (administrativeReader) {
-    return true;
-  }
-
-  if (member.id === '660311795327828008') {
-    return true;
-  }
-
-  return canViewAnyChannel(
-    client,
-    member,
-    channelIds
-  );
+  return true;
 }
 
 

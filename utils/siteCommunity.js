@@ -51,7 +51,81 @@ const norm = value => String(value || '')
   .replace(/[^a-z0-9]/gi, '')
   .toLowerCase();
 
+export const SITE_COMMUNITY_VIEW_CHANNELS = {
+  mywins: [
+    '1386503496353976470',
+  ],
+
+  viprequest: [
+    '1414718336826081330',
+  ],
+
+  orgpresence: [
+    '1477800974574682242',
+  ],
+
+  orginvites: [
+    String(
+      process.env.FACSMENU_CHANNEL_ID ||
+      '1400280714548744252'
+    ).trim(),
+  ],
+
+  orgblacklist: [
+    '1409223457446694992',
+  ],
+};
+
 export function createSiteCommunity({ client }) {
+  async function channelAccess(member) {
+    const entries = await Promise.all(
+      Object.entries(
+        SITE_COMMUNITY_VIEW_CHANNELS
+      ).map(async ([key, ids]) => {
+        const allowed = await Promise.all(
+          ids.map(async id => {
+            let channel =
+              member.guild.channels.cache.get(id);
+
+            if (!channel) {
+              try {
+                channel =
+                  await member.guild.channels.fetch(id);
+              } catch (error) {
+                if (
+                  [10003, 50001, 50013].includes(
+                    Number(error.code)
+                  )
+                ) {
+                  return false;
+                }
+
+                throw fail(
+                  503,
+                  'Não foi possível confirmar as permissões do Discord.'
+                );
+              }
+            }
+
+            return Boolean(
+              channel?.guildId === member.guild.id &&
+              channel.permissionsFor(member)?.has([
+                'ViewChannel',
+                'ReadMessageHistory',
+              ])
+            );
+          })
+        );
+
+        return [
+          key,
+          allowed.some(Boolean),
+        ];
+      })
+    );
+
+    return Object.fromEntries(entries);
+  }
   async function access(member, options = {}) {
     if (options.readOnly !== true) {
       member = await member.guild.members.fetch({
@@ -60,10 +134,16 @@ export function createSiteCommunity({ client }) {
       });
     }
 
+    const visible =
+      await channelAccess(member);
+
     if (options.vipOnly === true) {
       return {
         member,
-        viprequest: member.roles.cache.has(leaderRole),
+
+        viprequest:
+          visible.viprequest === true &&
+          member.roles.cache.has(leaderRole),
       };
     }
 
@@ -86,27 +166,11 @@ export function createSiteCommunity({ client }) {
         !member.roles.cache.has('1430984036972494908')
       );
 
-    const presencePanel =
-      member.guild.channels.cache.get(
-        '1477800974574682242'
-      ) ||
-      await member.guild.channels.fetch(
-        '1477800974574682242'
-      ).catch(() => null);
-
-    const presencePermissions =
-      presencePanel?.permissionsFor(member);
-
     const presenceStaff =
-      communityAdmin ||
+      visible.orgpresence === true &&
       (
-        isOfficialSantaCreatorsTeamMember(member) &&
-        presencePermissions?.has(
-          'ViewChannel'
-        ) === true &&
-        presencePermissions?.has(
-          'ReadMessageHistory'
-        ) === true
+        communityAdmin ||
+        isOfficialSantaCreatorsTeamMember(member)
       );
 
     const context = leader
@@ -125,20 +189,25 @@ export function createSiteCommunity({ client }) {
     return {
       member,
       presenceStaff,
-      mywins: community || leader,
-      viprequest: leader,
+      mywins:
+        visible.mywins === true,
+
+      viprequest:
+        visible.viprequest === true &&
+        leader,
 
       orgpresence:
-        presenceStaff ||
-        (leader && tags.length > 0),
+        visible.orgpresence === true &&
+        (
+          presenceStaff ||
+          (leader && tags.length > 0)
+        ),
 
       orginvites:
-        community ||
-        (leader && tags.length > 0),
+        visible.orginvites === true,
 
       orgblacklist:
-        community ||
-        (leader && tags.length > 0),
+        visible.orgblacklist === true,
 
       orgticket:
         leader &&
