@@ -2369,9 +2369,27 @@ async function fetchDiscordMessagesPageShared(
 }
 
 async function scanChannelEmbeds(client, { channelId, weekFloorKey, maxPages = 60, onMessage }) {
-  const ch = await client.channels.fetch(channelId);
+  const ch = await client.channels.fetch(channelId).catch(error => {
+    if (
+      Number(error?.code) !== 10003 ||
+      String(channelId) !== '1415102820826349648'
+    ) {
+      throw error;
+    }
 
-  if (!ch?.isTextBased?.() || !ch.messages?.fetch) {
+    console.warn(
+      '[SC_GERAL_DASH] Canal adicional de convites indisponível; esta coleta não leu esse canal:',
+      channelId
+    );
+
+    return null;
+  });
+
+  if (!ch) {
+    return;
+  }
+
+  if (!ch.isTextBased?.() || !ch.messages?.fetch) {
     throw new Error(
       'O canal ' + channelId +
       ' não está disponível para a coleta.'
