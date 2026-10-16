@@ -2026,10 +2026,26 @@ const experience = createSiteHubExperience({
             };
           };
           const previousError = snapshots.error(key);
-          if (previousError) {
-            if (saved && !payload.requireFresh) {
-              return res.json(deliver({ ...saved, fresh: false }));
+          if (
+            previousError &&
+            (
+              payload.poll === true ||
+              payload.refresh !== true
+            )
+          ) {
+            if (
+              saved &&
+              !payload.requireFresh &&
+              payload.poll !== true
+            ) {
+              return res.json(
+                deliver({
+                  ...saved,
+                  fresh: false
+                })
+              );
             }
+
             throw previousError;
           }
           const completedPoll =
@@ -3071,6 +3087,9 @@ if (await experience.handle({ guild, member, action, payload, res })) return;
               client,
               guild,
               actorId,
+              refresh:
+                payload.refresh === true ||
+                payload.requireFresh === true,
             })
           );
         }

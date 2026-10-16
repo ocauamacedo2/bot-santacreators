@@ -5769,12 +5769,15 @@ registerOperationalMetricProvider(
 export async function getWeeklyRanking(
   client,
   {
-    strict = false
+    strict = false,
+    refresh = false
   } = {}
 ) {
   try {
-    // Navegação do site reaproveita a coleta recente; a rotina do bot mantém a varredura completa.
-    const { items } = await collectAllPoints(client, "light");
+    const { items } = await collectAllPoints(
+      client,
+      refresh === true ? "full" : "light"
+    );
     const wkNow = weekKeyFromDateSP(nowSP());
     const agg = aggregateWeekDetailed(items, wkNow);
 
@@ -7038,6 +7041,7 @@ export async function getWeeklyRankingSiteSnapshot({
   client,
   guild,
   actorId,
+  refresh = false,
 }) {
   const member =
     await guild.members
@@ -7052,7 +7056,8 @@ export async function getWeeklyRankingSiteSnapshot({
     await getWeeklyRanking(
       client,
       {
-        strict: true
+        strict: true,
+        refresh: refresh === true
       }
     );
 
