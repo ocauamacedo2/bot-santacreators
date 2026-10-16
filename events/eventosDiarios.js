@@ -859,23 +859,43 @@ function createEventModal(cityKey, eventData) {
   return modal;
 }
 
-// ✅ Lógica inteligente: se force=false, só cria se não existir. Se force=true, apaga e recria (pra descer).
+// Se force=false, mantém o painel atualizado existente.
+// Se force=true, envia um novo painel antes de remover os antigos.
 async function ensureButtonAtBottom(channel, client, force = true) {
   try {
-    const messages = await channel.messages.fetch({ limit: 20 }).catch(() => null);
-    if (!messages) return;
-
-    const myMsgs = messages.filter((m) => {
-      if (m.author.id !== client.user.id || m.components.length === 0) return false;
-
-      const allButtons = m.components.flatMap(row => row.components || []);
-      return allButtons.some(c => [BTN_OPEN_MENU, BTN_EDIT_LAST, BTN_EDIT_CITY].includes(c.customId));
+    const messages = await channel.messages.fetch({
+      limit: 100,
     });
 
-    // ✅ Checa se já existe um painel de botões atualizado com os 3 botões
+    const myMsgs = messages.filter((m) => {
+      if (
+        m.author.id !== client.user.id ||
+        m.components.length === 0
+      ) {
+        return false;
+      }
+
+      const allButtons = m.components.flatMap(
+        row => row.components || []
+      );
+
+      return allButtons.some(c =>
+        [
+          BTN_OPEN_MENU,
+          BTN_EDIT_LAST,
+          BTN_EDIT_CITY,
+        ].includes(c.customId)
+      );
+    });
+
     const upToDateMsg = myMsgs.find((m) => {
-      const allButtons = m.components.flatMap(row => row.components || []);
-      const ids = allButtons.map(c => c.customId);
+      const allButtons = m.components.flatMap(
+        row => row.components || []
+      );
+
+      const ids = allButtons.map(
+        c => c.customId
+      );
 
       return (
         ids.includes(BTN_OPEN_MENU) &&
@@ -884,19 +904,41 @@ async function ensureButtonAtBottom(channel, client, force = true) {
       );
     });
 
-    // Se não for forçado e já existir um painel atualizado, não faz nada.
-    if (!force && upToDateMsg) return;
-
-    // Apaga todas as mensagens de botão antigas/desatualizadas do bot
-    for (const m of myMsgs.values()) {
-      await m.delete().catch(() => {});
+    if (!force && upToDateMsg) {
+      return;
     }
 
-    await channel.send({
-      components: [buildControlButtons()]
+    const newMenu = await channel.send({
+      components: [
+        buildControlButtons(),
+      ],
     });
-  } catch (e) {
-    console.error("[EventosDiarios] Erro ao mover botão:", e);
+
+    // Remove somente os menus encontrados antes do envio.
+    // O novo painel já está publicado neste ponto.
+    for (const m of myMsgs.values()) {
+      try {
+        await m.delete();
+      } catch (error) {
+        console.warn(
+          "[EventosDiarios] Novo menu publicado, mas não foi possível remover um menu antigo:",
+          {
+            channelId: channel.id,
+            oldMessageId: m.id,
+            newMessageId: newMenu.id,
+            error,
+          }
+        );
+      }
+    }
+  } catch (error) {
+    console.error(
+      "[EventosDiarios] Erro ao reposicionar o menu:",
+      {
+        channelId: channel?.id,
+        error,
+      }
+    );
   }
 }
 

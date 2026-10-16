@@ -9013,23 +9013,38 @@ if (vipEventoResolvido?.ok && vipEventoResolvido?.vinculoValidado) {
     );
   }
 }
-        // reposta o menu e limpa duplicados
-        if (interaction.siteOrigin !== true) {
-          await canal.send({
-            embeds: [
-              criarEmbedMenu(),
-            ],
+        // Reposiciona o menu após o registro,
+        // tanto pelo Discord quanto pelo site.
+        // A organização do menu não bloqueia a resposta.
+        void (async () => {
+          try {
+            await canal.send({
+              embeds: [
+                criarEmbedMenu(),
+              ],
 
-            components: [
-              criarRowMenu(),
-            ],
-          }).catch(() => {});
+              components: [
+                criarRowMenu(),
+              ],
+            });
 
-          await limparBotoesAntigos(
-            client,
-            canal
-          ).catch(() => {});
-        }
+            await limparBotoesAntigos(
+              client,
+              canal
+            );
+          } catch (error) {
+            console.error(
+              "[PagamentoSocial] Registro publicado, mas não foi possível reposicionar o menu:",
+              {
+                channelId: canal.id,
+                messageId: mensagem.id,
+                siteOrigin:
+                  interaction.siteOrigin === true,
+                error,
+              }
+            );
+          }
+        })();
 
         // ✅ Atualiza as estatísticas de QUEM CRIOU e dispara o Dashboard
 const stats = loadStats();
