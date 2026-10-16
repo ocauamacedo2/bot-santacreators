@@ -1780,8 +1780,10 @@ async function fetchDiscordMessagesPageShared(
 
   if (
     existing &&
-    existing.expiresAt >
-      now
+    (
+      existing.promise ||
+      existing.expiresAt > now
+    )
   ) {
     if (
       existing.promise
@@ -1802,9 +1804,11 @@ async function fetchDiscordMessagesPageShared(
         limit,
         before,
       })
-      .catch(
-        () => null
-      );
+      .catch(error => {
+        cache.delete(key);
+
+        throw error;
+      });
 
   cache.set(
     key,
@@ -1851,8 +1855,10 @@ async function fetchDiscordMessagesPageShared(
     ) {
       if (
         !cacheValue ||
-        cacheValue.expiresAt <=
-          cleanupNow
+        (
+          !cacheValue.promise &&
+          cacheValue.expiresAt <= cleanupNow
+        )
       ) {
         cache.delete(
           cacheKey
@@ -2670,8 +2676,51 @@ async function collectAllPoints(client, mode = "light") {
     return requests.get(mode);
   }
 
-  const operation = collectAllPointsUnshared(client, mode).finally(() => {
-    if (requests.get(mode) === operation) requests.delete(mode);
+  const collectionStartedAt = Date.now();
+
+  const operation = collectAllPointsUnshared(
+    client,
+    mode
+  ).then(
+    result => {
+      const durationMs =
+        Date.now() - collectionStartedAt;
+
+      if (durationMs >= 10000) {
+        console.warn(
+          "[SC_GERAL_WEEKLY_RANK] Coleta lenta concluída:",
+          {
+            mode,
+            durationMs,
+            items:
+              Array.isArray(result?.items)
+                ? result.items.length
+                : null,
+          }
+        );
+      }
+
+      return result;
+    },
+    error => {
+      console.error(
+        "[SC_GERAL_WEEKLY_RANK] Coleta falhou:",
+        {
+          mode,
+          durationMs:
+            Date.now() - collectionStartedAt,
+          error,
+        }
+      );
+
+      throw error;
+    }
+  ).finally(() => {
+    if (
+      requests.get(mode) === operation
+    ) {
+      requests.delete(mode);
+    }
   });
 
   requests.set(mode, operation);

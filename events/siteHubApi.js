@@ -3088,8 +3088,8 @@ if (await experience.handle({ guild, member, action, payload, res })) return;
               guild,
               actorId,
               refresh:
-                payload.refresh === true ||
-                payload.requireFresh === true,
+                payload.refresh === true &&
+                payload.poll !== true,
             })
           );
         }
