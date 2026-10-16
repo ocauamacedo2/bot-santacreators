@@ -666,15 +666,19 @@ app.use(
       requestId
     );
 
-    console.info(
-      "[SITE HUB INGRESS] Requisição recebida:",
-      {
-        requestId,
-        method: req.method,
-        pid: process.pid,
-        discordReady: client.isReady(),
-      }
-    );
+    if (
+      process.env.SITE_HUB_TRACE === "1"
+    ) {
+      console.info(
+        "[SITE HUB INGRESS] Requisição recebida:",
+        {
+          requestId,
+          method: req.method,
+          pid: process.pid,
+          discordReady: client.isReady(),
+        }
+      );
+    }
 
     const report = completed => {
       if (reported) {
@@ -713,14 +717,24 @@ app.use(
           process.pid,
       };
 
-      if (completed) {
-        console.info(
-          "[SITE HUB INGRESS] Resposta encerrada:",
-          result
-        );
-      } else {
+      if (!completed) {
         console.warn(
           "[SITE HUB INGRESS] Conexão encerrada antes da resposta:",
+          result
+        );
+      } else if (
+        res.statusCode >= 400 ||
+        result.durationMs >= 5000
+      ) {
+        console.warn(
+          "[SITE HUB INGRESS] Resposta com falha ou lentidão:",
+          result
+        );
+      } else if (
+        process.env.SITE_HUB_TRACE === "1"
+      ) {
+        console.info(
+          "[SITE HUB INGRESS] Resposta encerrada:",
           result
         );
       }
