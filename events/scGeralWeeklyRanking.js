@@ -1992,7 +1992,12 @@ for (let p = 0; p < maxPages; p++) {
 
     lastId = nextId;
 
-    if (stop) break;
+    if (
+      stop ||
+      batch.size < 100
+    ) {
+      break;
+    }
   }
 }
 

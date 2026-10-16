@@ -1406,7 +1406,11 @@ const experience = createSiteHubExperience({
         const member = await resolveSiteMember(
           guild,
           actorId,
-          !permissionRead || payload.requireFresh === true
+          !permissionRead ||
+          (
+            payload.requireFresh === true &&
+            payload.poll !== true
+          )
         );
 
         if (!member) {
