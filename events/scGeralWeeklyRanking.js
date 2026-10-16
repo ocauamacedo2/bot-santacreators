@@ -1529,17 +1529,32 @@ function saveState(s) {
 }
 
 // ================== TIME HELPERS ==================
+const rankingDateFormatter = new Intl.DateTimeFormat(
+  "en-CA",
+  {
+    timeZone: TZ,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }
+);
+
+const rankingWeekdayFormatter = new Intl.DateTimeFormat(
+  "en-US",
+  {
+    timeZone: TZ,
+    weekday: "short",
+  }
+);
+
 function nowSP() {
   return new Date();
 }
 
 function ymdSP(date) {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: TZ,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(date);
+  const parts =
+    rankingDateFormatter.formatToParts(date);
+
   return {
     y: +parts.find((p) => p.type === "year").value,
     m: +parts.find((p) => p.type === "month").value,
@@ -1555,11 +1570,19 @@ function startOfDaySP(date) {
 }
 
 function dowSP(date) {
-  const wd = new Intl.DateTimeFormat("en-US", {
-    timeZone: TZ,
-    weekday: "short",
-  }).format(date);
-  const map = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+  const wd =
+    rankingWeekdayFormatter.format(date);
+
+  const map = {
+    Sun: 0,
+    Mon: 1,
+    Tue: 2,
+    Wed: 3,
+    Thu: 4,
+    Fri: 5,
+    Sat: 6,
+  };
+
   return map[wd] ?? 0;
 }
 
