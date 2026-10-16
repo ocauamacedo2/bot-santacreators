@@ -16,6 +16,7 @@ import {
 
 import {
   getBlacklistSiteSnapshot,
+  submitBlacklistFromSite,
 } from '../events/blacklistFacs.js';
 
 import {
@@ -43,24 +44,39 @@ const fail = (status, message) =>
   Object.assign(new Error(message), { status });
 
 const norm = value => String(value || '')
-  .split('|')
-  .at(-1)
+  .trim()
+  .replace(/^\d+\s*\|\s*/, '')
   .normalize('NFD')
   .replace(/[\u0300-\u036f]/g, '')
   .replace(/[^a-z0-9]/gi, '')
   .toLowerCase();
 
 export function createSiteCommunity({ client }) {
-  async function access(member) {
+  async function access(member, options = {}) {
     member = await member.guild.members.fetch({
       user: member.id,
       force: true,
     });
 
+    if (options.vipOnly === true) {
+      return {
+        member,
+        viprequest: member.roles.cache.has(leaderRole),
+      };
+    }
+
     const leader =
       member.roles.cache.has(leaderRole);
 
+    const communityAdmin =
+      member.id === '660311795327828008' ||
+      member.roles.cache.has('1262262852949905408') ||
+      member.roles.cache.has('1352407252216184833') ||
+      member.roles.cache.has('1262262852949905409') ||
+      member.roles.cache.has('1352408327983861844');
+
     const community =
+      communityAdmin ||
       isOfficialSantaCreatorsTeamMember(member) ||
       member.roles.cache.has('1352275728476930099') ||
       (
@@ -77,16 +93,19 @@ export function createSiteCommunity({ client }) {
       presencePanel?.permissionsFor(member);
 
     const presenceStaff =
-      isOfficialSantaCreatorsTeamMember(member) &&
-      presencePermissions?.has(
-        'ViewChannel'
-      ) === true &&
-      presencePermissions?.has(
-        'ReadMessageHistory'
-      ) === true;
+      communityAdmin ||
+      (
+        isOfficialSantaCreatorsTeamMember(member) &&
+        presencePermissions?.has(
+          'ViewChannel'
+        ) === true &&
+        presencePermissions?.has(
+          'ReadMessageHistory'
+        ) === true
+      );
 
     const context = leader
-      ? await getMemberOrgTicketContext(member)
+      ? await getMemberOrgTicketContext(member, { freshMember: true })
       : {
           matches: [],
           tags: [],
@@ -108,8 +127,13 @@ export function createSiteCommunity({ client }) {
         presenceStaff ||
         (leader && tags.length > 0),
 
-      orginvites: leader && tags.length > 0,
-      orgblacklist: leader && tags.length > 0,
+      orginvites:
+        community ||
+        (leader && tags.length > 0),
+
+      orgblacklist:
+        community ||
+        (leader && tags.length > 0),
 
       orgticket:
         leader &&
@@ -519,8 +543,11 @@ export function createSiteCommunity({ client }) {
           ),
 
         canConfirm:
-          presence.windowOpen &&
-          presence.rights.confirm &&
+          (
+            presence.windowOpen === true ||
+            presence.rights.bypass === true
+          ) &&
+          presence.rights.confirm === true &&
           (
             item.status === 'PENDING' ||
             presence.rights.overwrite === true
@@ -534,7 +561,18 @@ export function createSiteCommunity({ client }) {
 
         image:
           guild.iconURL({ size: 128 }) || '',
-      })),
+      })).sort((a, b) =>
+        a.name
+          .replace(/^\s*\d+\s*\|\s*/, '')
+          .localeCompare(
+            b.name.replace(/^\s*\d+\s*\|\s*/, ''),
+            'pt-BR',
+            {
+              sensitivity: 'base',
+              numeric: true,
+            }
+          )
+      ),
 
       generatedAt: Date.now(),
     };
@@ -546,6 +584,16 @@ export function createSiteCommunity({ client }) {
     permissions,
     payload
   ) {
+    const requestedStatus =
+      String(payload.status || '').toUpperCase();
+
+    if (!['YES', 'NO'].includes(requestedStatus)) {
+      throw fail(
+        400,
+        'Informe YES para confirmar ou NO para registrar ausência.'
+      );
+    }
+
     const presence =
       await getConfirmacaoPresencaSiteSnapshot({
         guild,
@@ -603,14 +651,29 @@ export function createSiteCommunity({ client }) {
       'orgpresence.image',
       'orginvites.snapshot',
       'orgblacklist.snapshot',
+      'orgblacklist.submit',
     ];
 
     if (!routes.includes(action)) {
       return false;
     }
 
-    const permissions =
-      await access(member);
+    if (
+      !payload ||
+      typeof payload !== 'object' ||
+      Array.isArray(payload)
+    ) {
+      throw fail(
+        400,
+        'Os dados da solicitação precisam ser um objeto válido.'
+      );
+    }
+
+    const permissions = await access(member, {
+      vipOnly:
+        action === 'viprequest.snapshot' ||
+        action === 'viprequest.submit',
+    });
 
     member =
       permissions.member;
@@ -653,13 +716,46 @@ export function createSiteCommunity({ client }) {
       return true;
     }
 
-    const result =
-      action === 'viprequest.snapshot'
-        ? await getVipEventoSiteForm({
+    if (action === 'orgblacklist.submit') {
+      const result =
+        await submitBlacklistFromSite({
+          client,
+          guild,
+          actorId: member.id,
+          payload,
+        });
+
+      res.json(result);
+
+      return true;
+    }
+
+    if (action === 'viprequest.snapshot') {
+      try {
+        return res.json(
+          await getVipEventoSiteForm({
             guild,
             actorId: member.id,
           })
-        : action === 'viprequest.submit'
+        );
+      } catch (error) {
+        if (Number(error.status) !== 403) {
+          throw error;
+        }
+
+        return res.json({
+          blocked: true,
+          reason: String(
+            error.message ||
+            'Confira seus cargos de cidade e organização.'
+          ),
+          generatedAt: Date.now(),
+        });
+      }
+    }
+
+    const result =
+      action === 'viprequest.submit'
           ? await submitVipEventoFromSite({
               client,
               guild,
@@ -696,14 +792,25 @@ export function createSiteCommunity({ client }) {
           continue;
         }
 
-        await Promise.all(
-          list.map(async record => {
+        let nextIndex = 0;
+
+        const worker = async () => {
+          while (nextIndex < list.length) {
+            const record = list[nextIndex++];
+
+            if (
+              !record ||
+              typeof record.name !== 'string' ||
+              !record.name.trim()
+            ) {
+              continue;
+            }
+
             try {
-              const image =
-                await getOrganizationImage(
-                  client,
-                  record.name
-                );
+              const image = await getOrganizationImage(
+                client,
+                record.name
+              );
 
               if (image) {
                 record.image = image;
@@ -717,7 +824,14 @@ export function createSiteCommunity({ client }) {
                 }
               );
             }
-          })
+          }
+        };
+
+        await Promise.all(
+          Array.from(
+            { length: Math.min(4, list.length) },
+            worker
+          )
         );
       }
     }

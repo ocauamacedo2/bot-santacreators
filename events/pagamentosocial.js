@@ -8,6 +8,7 @@ import {
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
+import { runSiteOperation } from "../utils/siteOperationJournal.js";
 import {
   ActionRowBuilder,
   ButtonBuilder,
@@ -8819,9 +8820,22 @@ const ganhadorNome = corrigirNomeGanhadorPorOCR(ganhadorNomeRaw, analiseComprova
 
 const ganhadorId = ganhadorIdRaw;
 
-const canal = await client.channels.fetch(CANAL_PAGAMENTO).catch(() => null);
-        if (!canal || !canal.isTextBased()) {
-          await interaction.editReply({ content: "❌ Não achei o canal de pagamento." }).catch(() => {});
+const canal =
+  await client.channels.fetch(
+    CANAL_PAGAMENTO
+  ).catch(() => null);
+
+        if (
+          !canal ||
+          !canal.isTextBased() ||
+          typeof canal.send !== "function" ||
+          canal.guildId !== interaction.guildId
+        ) {
+          await interaction.editReply({
+            content:
+              "❌ Não achei o canal de pagamento deste servidor.",
+          }).catch(() => {});
+
           return true;
         }
 
@@ -8934,6 +8948,16 @@ atualizarCampoCidade(
           return true;
         }
 
+        interaction.__scSocialCreationApplied = {
+          messageId:
+            mensagem.id,
+
+          url:
+            mensagem.url,
+
+          warnings: [],
+        };
+
 const componentesRegistro = [
   criarRowStatus(mensagem.id),
 ];
@@ -8946,7 +8970,25 @@ if (!cidadeAutomaticaPorLink) {
 
 await mensagem.edit({
   components: componentesRegistro,
-}).catch(() => {});
+}).catch(error => {
+  console.error(
+    "[PagamentoSocial] Registro publicado; falha ao adicionar controles:",
+    {
+      messageId:
+        mensagem.id,
+
+      error,
+    }
+  );
+
+  if (
+    interaction.__scSocialCreationApplied
+  ) {
+    interaction.__scSocialCreationApplied.warnings.push(
+      "O registro foi publicado, mas seus botões de pagamento não foram adicionados. Confira a mensagem no Discord."
+    );
+  }
+});
 
 await autoMarcarCidadePagamentoMensagem(
   client,
@@ -8972,8 +9014,22 @@ if (vipEventoResolvido?.ok && vipEventoResolvido?.vinculoValidado) {
   }
 }
         // reposta o menu e limpa duplicados
-        await canal.send({ embeds: [criarEmbedMenu()], components: [criarRowMenu()] }).catch(() => {});
-        await limparBotoesAntigos(client, canal).catch(() => {});
+        if (interaction.siteOrigin !== true) {
+          await canal.send({
+            embeds: [
+              criarEmbedMenu(),
+            ],
+
+            components: [
+              criarRowMenu(),
+            ],
+          }).catch(() => {});
+
+          await limparBotoesAntigos(
+            client,
+            canal
+          ).catch(() => {});
+        }
 
         // ✅ Atualiza as estatísticas de QUEM CRIOU e dispara o Dashboard
 const stats = loadStats();
@@ -9933,6 +9989,350 @@ export async function getPagamentoSocialSitePendingNotifications({
   };
 }
 
+const socialSiteCreationLocks =
+  new Set();
+
+export async function submitPagamentoSocialFromSite(options) {
+  return runSiteOperation({
+    action: 'social.submit',
+    guildId: options.guild.id,
+    actorId: options.actorId,
+    payload: options.payload || {},
+    authorize: async () => {
+      const member = await options.guild.members.fetch({
+        user: String(options.actorId), force: true,
+      });
+
+      const form = await getPagamentoSocialSiteForm({
+        guild: options.guild,
+        member,
+      });
+
+      if (
+        member.guild.id !== options.guild.id ||
+        form.rights?.create !== true
+      ) {
+        throw Object.assign(
+          new Error('Seu acesso atual não permite este registro.'),
+          { status: 403 }
+        );
+      }
+    },
+    execute: () => executePagamentoSocialFromSite(options),
+  });
+}
+
+async function executePagamentoSocialFromSite({
+  client,
+  guild,
+  actorId,
+  payload = {},
+}) {
+  const lockKey =
+    `${guild.id}:${actorId}`;
+
+  if (socialSiteCreationLocks.has(lockKey)) {
+    throw Object.assign(
+      new Error(
+        "Já existe um pagamento em criação para sua conta."
+      ),
+      { status: 409 }
+    );
+  }
+
+  socialSiteCreationLocks.add(lockKey);
+
+  try {
+    const member =
+      await guild.members.fetch({
+        user:
+          String(actorId),
+
+        force:
+          true,
+      });
+
+    const form =
+      await getPagamentoSocialSiteForm({
+        guild,
+        member,
+      });
+
+    if (form.rights.create !== true) {
+      throw Object.assign(
+        new Error(
+          "Seu cargo ou acesso atual não permite criar pagamentos."
+        ),
+        { status: 403 }
+      );
+    }
+
+    const values = {};
+
+    for (const field of form.fields) {
+      const value =
+        String(
+          payload[field.key] || ""
+        ).trim();
+
+      if (
+        !value ||
+        value.length > field.maxLength
+      ) {
+        throw Object.assign(
+          new Error(
+            `Preencha corretamente: ${field.label}.`
+          ),
+          { status: 400 }
+        );
+      }
+
+      values[field.key] = value;
+    }
+
+    const interaction = {
+      siteOrigin: true,
+
+      id:
+        `site-social-create-${crypto.randomUUID()}`,
+
+      createdTimestamp:
+        Date.now(),
+
+      client,
+      guild,
+
+      guildId:
+        guild.id,
+
+      channelId:
+        form.channelId,
+
+      member,
+
+      user:
+        member.user,
+
+      customId:
+        "form_pagamento",
+
+      deferred:
+        false,
+
+      replied:
+        false,
+
+      lastReply:
+        null,
+
+      fields: {
+        getTextInputValue(key) {
+          return values[key] || "";
+        },
+      },
+
+      isButton() {
+        return false;
+      },
+
+      isModalSubmit() {
+        return true;
+      },
+
+      isRepliable() {
+        return true;
+      },
+
+      async deferReply() {
+        this.deferred = true;
+      },
+
+      async reply(value) {
+        this.replied = true;
+        this.lastReply = value;
+        return value;
+      },
+
+      async editReply(value) {
+        this.lastReply = value;
+        return value;
+      },
+
+      async followUp(value) {
+        this.lastReply = value;
+        return value;
+      },
+    };
+
+    try {
+      await handlePagamentoSocial(
+        interaction,
+        client
+      );
+    } catch (error) {
+      if (
+        !interaction.__scSocialCreationApplied
+      ) {
+        throw error;
+      }
+
+      console.error(
+        "[PagamentoSocial SITE] Registro publicado; etapa posterior falhou:",
+        error
+      );
+
+      interaction.__scSocialCreationApplied.warnings.push(
+        "O registro foi publicado, mas uma etapa posterior precisa ser conferida."
+      );
+    }
+
+    const applied =
+      interaction.__scSocialCreationApplied;
+
+    if (!applied) {
+      const reply =
+        interaction.lastReply;
+
+      throw Object.assign(
+        new Error(
+          typeof reply === "string"
+            ? reply
+            : reply?.content ||
+              "A criação do pagamento não foi confirmada."
+        ),
+        { status: 409 }
+      );
+    }
+
+    return {
+      ok: true,
+
+      message:
+        "Registro de pagamento criado no Discord.",
+
+      messageId:
+        applied.messageId,
+
+      url:
+        applied.url,
+
+      warnings:
+        [...new Set(applied.warnings)],
+    };
+  } finally {
+    socialSiteCreationLocks.delete(
+      lockKey
+    );
+  }
+}
+
+export async function getPagamentoSocialSiteForm({
+  guild,
+  member,
+}) {
+  if (
+    member?.guild?.id !== guild.id ||
+    !temPermissaoPagamentoMember(
+      member,
+      member.id
+    )
+  ) {
+    return {
+      rights: {
+        create: false,
+      },
+
+      fields: [],
+    };
+  }
+
+  const channel =
+    await guild.channels.fetch(
+      CANAL_PAGAMENTO
+    );
+
+  const channelAllowed =
+    channel?.guildId === guild.id &&
+    typeof channel.send === "function" &&
+    (
+      member.id === "660311795327828008" ||
+      channel.permissionsFor(member)?.has([
+        "ViewChannel",
+        "ReadMessageHistory",
+      ]) === true
+    );
+
+  return {
+    rights: {
+      create:
+        channelAllowed,
+    },
+
+    channelId:
+      channelAllowed
+        ? CANAL_PAGAMENTO
+        : null,
+
+    fields:
+      channelAllowed
+        ? [
+            {
+              key:
+                "eventoInfo",
+
+              label:
+                "Evento | Data",
+
+              placeholder:
+                "Missão Rosa | 15/10/2026",
+
+              maxLength:
+                256,
+            },
+            {
+              key:
+                "ganhador",
+
+              label:
+                "Ganhador: nome | ID",
+
+              placeholder:
+                "Nome | 12345",
+
+              maxLength:
+                256,
+            },
+            {
+              key:
+                "tipoPremiacao",
+
+              label:
+                "Tipo da premiação",
+
+              placeholder:
+                "VIP Evento, Battlepass, dinheiro...",
+
+              maxLength:
+                128,
+            },
+            {
+              key:
+                "premiacao",
+
+              label:
+                "Premiação ou link do comprovante",
+
+              type:
+                "textarea",
+
+              maxLength:
+                1024,
+            },
+          ]
+        : [],
+  };
+}
+
 export async function getPagamentoSocialSiteSnapshot({
   guild,
   actorId,
@@ -10143,6 +10543,13 @@ export async function getPagamentoSocialSiteSnapshot({
     },
 
     rights: {
+      create:
+        recordsAvailable &&
+        temPermissaoPagamentoMember(
+          actor,
+          actorId
+        ),
+
       use:
         temPermissaoPagamentoMember(
           actor,

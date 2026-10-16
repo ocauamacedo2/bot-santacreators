@@ -358,7 +358,7 @@ export async function collectOperationalMetrics(
   if (
     cacheIsValid
   ) {
-    return operationalCollectionCache.payload;
+    return structuredClone(operationalCollectionCache.payload);
   }
 
   /*
@@ -373,7 +373,9 @@ export async function collectOperationalMetrics(
       collectionKey &&
     operationalCollectionCache.promise
   ) {
-    return operationalCollectionCache.promise;
+    return structuredClone(
+      await operationalCollectionCache.promise
+    );
   }
 
   /*
@@ -424,6 +426,42 @@ export async function collectOperationalMetrics(
                 'O provedor ' +
                   providerId +
                   ' retornou um formato inválido.'
+              );
+            }
+            if (
+              result?.available === true &&
+              (
+                !['number', 'string'].includes(typeof result.score) ||
+                String(result.score).trim() === '' ||
+                !Number.isFinite(Number(result.score)) ||
+                Number(result.score) < 0 ||
+                Number(result.score) > 100
+              )
+            ) {
+              throw new TypeError(
+                'O provedor ' + providerId + ' informou nota inválida.'
+              );
+            }
+
+            if (
+              result?.available !== undefined &&
+              typeof result.available !== 'boolean'
+            ) {
+              throw new TypeError(
+                'O provedor ' + providerId +
+                ' informou disponibilidade inválida.'
+              );
+            }
+
+            if (
+              result?.id !== undefined &&
+              (
+                typeof result.id !== 'string' ||
+                !result.id.trim()
+              )
+            ) {
+              throw new TypeError(
+                'O provedor ' + providerId + ' informou um ID inválido.'
               );
             }
 
@@ -566,6 +604,5 @@ export async function collectOperationalMetrics(
 
   operationalCollectionCache.promise =
     collectionPromise;
-
-  return collectionPromise;
+  return structuredClone(await collectionPromise);
 }

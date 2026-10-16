@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 
 import {
   AuditLogEvent,
@@ -68,20 +69,116 @@ const ORG_ACCESS_STORAGE = path.resolve(process.cwd(), 'data', 'org_ticket_acces
 
 function loadOrgAccessState() {
   try {
-    if (!fs.existsSync(ORG_ACCESS_STORAGE)) return {};
-    const raw = fs.readFileSync(ORG_ACCESS_STORAGE, 'utf8');
-    return raw ? JSON.parse(raw) : {};
-  } catch {
-    return {};
+    if (!fs.existsSync(ORG_ACCESS_STORAGE)) {
+      return {};
+    }
+
+    const state = JSON.parse(
+      fs.readFileSync(ORG_ACCESS_STORAGE, 'utf8')
+    );
+
+    const record = value =>
+      value !== null &&
+      typeof value === 'object' &&
+      !Array.isArray(value);
+
+    const id = value =>
+      /^\d{17,20}$/.test(value);
+
+    if (!record(state)) {
+      throw new Error(
+        'Raiz inválida no histórico de acessos.'
+      );
+    }
+
+    for (
+      const [guildId, channels]
+      of Object.entries(state)
+    ) {
+      if (!id(guildId) || !record(channels)) {
+        throw new Error(
+          'Servidor inválido no histórico.'
+        );
+      }
+
+      for (
+        const [channelId, members]
+        of Object.entries(channels)
+      ) {
+        if (!id(channelId) || !record(members)) {
+          throw new Error(
+            'Canal inválido no histórico.'
+          );
+        }
+
+        for (
+          const [memberId, roles]
+          of Object.entries(members)
+        ) {
+          if (
+            !id(memberId) ||
+            !Array.isArray(roles) ||
+            roles.some(roleId => !id(roleId))
+          ) {
+            throw new Error(
+              'Membro ou cargos inválidos no histórico.'
+            );
+          }
+        }
+      }
+    }
+
+    return state;
+  } catch (error) {
+    console.error(
+      '[ORG ACCESS] Histórico preservado; leitura interrompida:',
+      error.message
+    );
+
+    throw error;
   }
 }
 
 function saveOrgAccessState(state) {
+  const dir = path.dirname(ORG_ACCESS_STORAGE);
+
+  fs.mkdirSync(dir, {
+    recursive: true,
+    mode: 0o700,
+  });
+
+  const temporary =
+    ORG_ACCESS_STORAGE +
+    '.' +
+    randomUUID() +
+    '.tmp';
+
   try {
-    const dir = path.dirname(ORG_ACCESS_STORAGE);
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(ORG_ACCESS_STORAGE, JSON.stringify(state, null, 2));
-  } catch {}
+    fs.writeFileSync(
+      temporary,
+      JSON.stringify(state, null, 2),
+      {
+        flag: 'wx',
+        mode: 0o600,
+      }
+    );
+
+    fs.renameSync(
+      temporary,
+      ORG_ACCESS_STORAGE
+    );
+  } finally {
+    try {
+      fs.unlinkSync(temporary);
+    } catch (error) {
+      if (error.code !== 'ENOENT') {
+        console.warn(
+          '[ORG ACCESS] Temporário:',
+          error.code || error.name
+        );
+      }
+    }
+  }
 }
 
 function rememberSystemAccess({ guildId, channelId, memberId, roleId }) {
@@ -123,7 +220,12 @@ function forgetSystemAccess({ guildId, channelId, memberId, roleId }) {
 
 function getRememberedMemberChannelRoles({ guildId, channelId, memberId }) {
   const state = loadOrgAccessState();
-  return state?.[guildId]?.[channelId]?.[memberId] || [];
+  const roles =
+    state?.[guildId]?.[channelId]?.[memberId];
+
+  return Array.isArray(roles)
+    ? [...roles]
+    : [];
 }
 
 function normalizeName(value) {
@@ -215,9 +317,22 @@ function isProbablyOrgRole(guild, role) {
   if (isRoleInsideTagsRange(guild, role)) return true;
 
   const clean = normalizeName(role.name);
-  if (clean.length < 3) return false;
 
-  return true;
+  if (clean.length < 3) {
+    return false;
+  }
+
+  return [
+    ...guild.channels.cache.values(),
+  ].some(channel =>
+    channel.type === ChannelType.GuildText &&
+    ORG_TICKET_CATEGORY_IDS.includes(
+      channel.parentId
+    ) &&
+    normalizeName(
+      prettyChannelName(channel.name)
+    ) === clean
+  );
 }
 
 function roleMentionOrName(role) {
@@ -313,7 +428,21 @@ async function findMatchingOrgTicketChannel(guild, role) {
     };
   }
 
-  if (second && best.score < 0.94 && Math.abs(best.score - second.score) < 0.08) {
+  if (
+    second &&
+    (
+      (
+        best.score === 1 &&
+        second.score === 1
+      ) ||
+      (
+        best.score < 1 &&
+        Math.abs(
+          best.score - second.score
+        ) < 0.08
+      )
+    )
+  ) {
     return {
       channel: null,
       score: best.score,
@@ -334,10 +463,26 @@ export async function getOrgTicketImageContext(
   channel,
   actorId
 ) {
-  channel =
-    await channel.guild.channels.fetch(
-      channel.id
+  if (!channel?.guild?.id || !channel.id) {
+    throw new Error(
+      'Ticket de organização inválido.'
     );
+  }
+
+  const expectedGuildId =
+    channel.guild.id;
+
+  channel = await channel.guild.channels.fetch(
+    channel.id
+  );
+
+  if (
+    channel?.guild?.id !== expectedGuildId
+  ) {
+    throw new Error(
+      'O ticket não pertence ao servidor esperado.'
+    );
+  }
 
   if (
     !channel ||
@@ -435,7 +580,10 @@ export async function getOrgTicketImageContext(
   };
 }
 
-export async function getMemberOrgTicketContext(member) {
+export async function getMemberOrgTicketContext(
+  member,
+  options = {}
+) {
   if (!member?.guild) {
     return {
       matches: [],
@@ -446,10 +594,13 @@ export async function getMemberOrgTicketContext(member) {
 
   const guild = member.guild;
 
-  const freshMember = await guild.members.fetch({
-    user: member.id,
-    force: true,
-  });
+  const freshMember =
+    options.freshMember === true
+      ? member
+      : await guild.members.fetch({
+          user: member.id,
+          force: true,
+        });
 
   const channels = await fetchOrgTicketChannels(guild);
 
@@ -507,7 +658,15 @@ export async function getMemberOrgTicketContext(member) {
 
   const directTicketChannels = channels.filter(channel => {
     const overwrite = channel.permissionOverwrites.cache.get(member.id);
-    return overwrite?.allow?.has(PermissionsBitField.Flags.ViewChannel) === true;
+    return (
+      overwrite?.allow?.has(
+        PermissionsBitField.Flags.ViewChannel
+      ) === true &&
+      channel.permissionsFor(freshMember)?.has([
+        PermissionsBitField.Flags.ViewChannel,
+        PermissionsBitField.Flags.ReadMessageHistory,
+      ]) === true
+    );
   });
 
   if (directTicketChannels.length > 0) {
@@ -525,8 +684,18 @@ export async function getMemberOrgTicketContext(member) {
       const ambiguous =
         second &&
         best &&
-        best.score < 0.94 &&
-        Math.abs(best.score - second.score) < 0.08;
+        (
+          (
+            best.score === 1 &&
+            second.score === 1
+          ) ||
+          (
+            best.score < 1 &&
+            Math.abs(
+              best.score - second.score
+            ) < 0.08
+          )
+        );
 
       if (!best || best.score < 0.86 || ambiguous) {
         missingTagTickets.push({
@@ -761,7 +930,39 @@ async function sendOrgAccessLog({
 async function applyTicketPermission({ member, role, action, executor = null, source = 'Sistema automático' }) {
   const guild = member.guild;
 
-  const match = await findMatchingOrgTicketChannel(guild, role);
+  loadOrgAccessState();
+
+  member = await guild.members.fetch({
+    user: member.id,
+    force: true,
+  });
+
+  const hasRole =
+    member.roles.cache.has(role.id);
+
+  if (
+    (
+      action === 'add' &&
+      !hasRole
+    ) ||
+    (
+      action === 'remove' &&
+      hasRole
+    )
+  ) {
+    return {
+      success: false,
+      channel: null,
+      silent: true,
+      reason:
+        'O estado atual do cargo não corresponde à ação solicitada. Nenhuma permissão foi alterada.',
+    };
+  }
+
+  const match = await findMatchingOrgTicketChannel(
+    guild,
+    role
+  );
   const channel = match.channel;
 
   if (!channel) {
@@ -810,7 +1011,46 @@ async function applyTicketPermission({ member, role, action, executor = null, so
     }
 
     if (action === 'remove') {
-      const overwrite = channel.permissionOverwrites.cache.get(member.id);
+      const overwrite =
+        channel.permissionOverwrites.cache.get(
+          member.id
+        );
+
+      const remembered =
+        getRememberedMemberChannelRoles({
+          guildId: guild.id,
+          channelId: channel.id,
+          memberId: member.id,
+        });
+
+      if (!remembered.includes(role.id)) {
+        return {
+          success: false,
+          channel,
+          silent: true,
+          reason:
+            'Este acesso não está registrado como automático; a permissão existente foi preservada.',
+        };
+      }
+
+      const remainingRoleIds = remembered.filter(
+        id => id !== role.id
+      );
+
+      const stillHasAnotherAccessRole =
+        remainingRoleIds.some(
+          id => member.roles.cache.has(id)
+        );
+
+      if (
+        overwrite &&
+        !stillHasAnotherAccessRole
+      ) {
+        await channel.permissionOverwrites.delete(
+          member.id,
+          `OrgTicketAccessSync: cargo ${role.name} removido`
+        );
+      }
 
       forgetSystemAccess({
         guildId: guild.id,
@@ -819,24 +1059,13 @@ async function applyTicketPermission({ member, role, action, executor = null, so
         roleId: role.id,
       });
 
-      const remainingRoleIds = getRememberedMemberChannelRoles({
-        guildId: guild.id,
-        channelId: channel.id,
-        memberId: member.id,
-      });
-
-      const stillHasAnotherAccessRole = remainingRoleIds.some(roleId => member.roles.cache.has(roleId));
-
-      if (overwrite && !stillHasAnotherAccessRole) {
-        await channel.permissionOverwrites.delete(member.id, `OrgTicketAccessSync: cargo ${role.name} removido`);
-      }
-
       if (!overwrite) {
         return {
-          success: false,
+          success: true,
           channel,
           silent: true,
-          reason: 'Usuário não tinha permissão específica nesse canal.',
+          reason:
+            'Nenhuma permissão específica permanece nesse canal.',
         };
       }
 
@@ -886,6 +1115,17 @@ export async function syncOrgTicketAccessForRoleChange({
 }) {
   if (!member || !role) return null;
 
+  if (
+    member.guild?.id !== role.guild?.id ||
+    !['add', 'remove'].includes(action) ||
+    !/^\d{17,20}$/.test(String(member.id)) ||
+    !/^\d{17,20}$/.test(String(role.id))
+  ) {
+    throw new Error(
+      'Servidor, membro, cargo ou ação de sincronização inválidos.'
+    );
+  }
+
   const key = `${member.guild.id}:${member.id}:${role.id}:${action}`;
   const last = recentActions.get(key);
 
@@ -903,24 +1143,149 @@ export async function syncOrgTicketAccessForRoleChange({
   });
 }
 
-async function cleanRememberedOrgAccess(client) {
+let orgAccessCleanupTask = null;
+
+function cleanRememberedOrgAccess(client) {
+  if (orgAccessCleanupTask) {
+    return orgAccessCleanupTask;
+  }
+
+  const task = cleanRememberedOrgAccessLive(
+    client
+  ).finally(() => {
+    if (orgAccessCleanupTask === task) {
+      orgAccessCleanupTask = null;
+    }
+  });
+
+  orgAccessCleanupTask = task;
+
+  return task;
+}
+
+function commitOrgAccessCleanup(initial, cleaned) {
+  const current = loadOrgAccessState();
+
+  for (
+    const [guildId, channels]
+    of Object.entries(initial)
+  ) {
+    for (
+      const [channelId, members]
+      of Object.entries(channels)
+    ) {
+      for (
+        const [memberId, roles]
+        of Object.entries(members)
+      ) {
+        if (
+          cleaned[guildId]?.[channelId]?.[memberId] !==
+          undefined
+        ) {
+          continue;
+        }
+
+        const latest =
+          current[guildId]?.[channelId]?.[memberId];
+
+        if (
+          JSON.stringify(latest) !==
+          JSON.stringify(roles)
+        ) {
+          continue;
+        }
+
+        delete current[guildId][channelId][memberId];
+
+        if (
+          !Object.keys(
+            current[guildId][channelId]
+          ).length
+        ) {
+          delete current[guildId][channelId];
+        }
+
+        if (
+          !Object.keys(current[guildId]).length
+        ) {
+          delete current[guildId];
+        }
+      }
+    }
+  }
+
+  saveOrgAccessState(current);
+}
+
+async function cleanRememberedOrgAccessLive(client) {
   const state = loadOrgAccessState();
+
+  const initialState = JSON.parse(
+    JSON.stringify(state)
+  );
 
   for (const [guildId, channels] of Object.entries(state)) {
     const guild = client.guilds.cache.get(guildId);
     if (!guild) continue;
 
     for (const [channelId, members] of Object.entries(channels)) {
-      const channel = await guild.channels.fetch(channelId).catch(() => null);
+      const channel = await guild.channels.fetch(
+        channelId
+      ).catch(error => {
+        if (Number(error.code) === 10003) {
+          return null;
+        }
+
+        console.warn(
+          '[ORG ACCESS] Canal não conferido; histórico preservado:',
+          {
+            channelId,
+            code: error.code || error.name,
+          }
+        );
+
+        return undefined;
+      });
       if (!channel || channel.type !== ChannelType.GuildText) continue;
 
       for (const [memberId, roleIds] of Object.entries(members)) {
-        const member = await guild.members.fetch(memberId).catch(() => null);
+        const member = await guild.members.fetch({
+          user: memberId,
+          force: true,
+        }).catch(error => {
+          if (Number(error.code) === 10007) {
+            return null;
+          }
+
+          console.warn(
+            '[ORG ACCESS] Membro não conferido; acesso preservado:',
+            {
+              memberId,
+              code: error.code || error.name,
+            }
+          );
+
+          return undefined;
+        });
+
+        if (member === undefined) {
+          continue;
+        }
 
         if (!member) {
-          await channel.permissionOverwrites
-            .delete(memberId, 'OrgTicketAccessSync: membro saiu do servidor')
-            .catch(() => {});
+          try {
+            await channel.permissionOverwrites.delete(
+              memberId,
+              'OrgTicketAccessSync: membro saiu do servidor'
+            );
+          } catch (error) {
+            console.warn(
+              '[ORG ACCESS] Remoção não confirmada:',
+              error.code || error.name
+            );
+
+            continue;
+          }
 
           delete state[guildId][channelId][memberId];
           continue;
@@ -932,9 +1297,19 @@ async function cleanRememberedOrgAccess(client) {
           const overwrite = channel.permissionOverwrites.cache.get(memberId);
 
           if (overwrite) {
-            await channel.permissionOverwrites
-              .delete(memberId, 'OrgTicketAccessSync: limpeza automática sem cargo necessário')
-              .catch(() => {});
+            try {
+              await channel.permissionOverwrites.delete(
+                memberId,
+                'OrgTicketAccessSync: limpeza automática sem cargo necessário'
+              );
+            } catch (error) {
+              console.warn(
+                '[ORG ACCESS] Limpeza não confirmada:',
+                error.code || error.name
+              );
+
+              continue;
+            }
 
             await sendOrgAccessLog({
               guild,
@@ -964,10 +1339,19 @@ async function cleanRememberedOrgAccess(client) {
     }
   }
 
-  saveOrgAccessState(state);
+  commitOrgAccessCleanup(
+    initialState,
+    state
+  );
 }
 
 export function installOrgTicketAccessSync(client) {
+  if (client.__SC_ORG_ACCESS_INSTALLED__) {
+    return;
+  }
+
+  client.__SC_ORG_ACCESS_INSTALLED__ = true;
+
   cleanRememberedOrgAccess(client).catch(error => {
     console.error('[ORG_TICKET_ACCESS_SYNC] Erro na limpeza inicial:', error);
   });
@@ -1031,47 +1415,122 @@ export function installOrgTicketAccessSync(client) {
   console.log('[ORG_TICKET_ACCESS_SYNC] instalado.');
 }
 
-export async function orgTicketAccessHandleInteraction(interaction) {
-  if (!interaction.isButton()) return false;
-  if (!interaction.customId.startsWith('orgticket_remove_role:')) return false;
-
-  await interaction.deferReply({ ephemeral: true }).catch(() => null);
-
-  const [, memberId, roleId] = interaction.customId.split(':');
-
-  const isAllowed =
-    USERS_SEMPRE_PODEM.includes(interaction.user.id) ||
-    ALLOWED_TO_MANAGE_TICKET.includes(interaction.user.id) ||
-    interaction.member?.roles?.cache?.some(role => ALLOWED_TO_MANAGE_TICKET.includes(role.id));
-
-  if (!isAllowed) {
-    await interaction.editReply('🚫 Você não tem permissão para usar esse botão.');
-    return true;
+export async function orgTicketAccessHandleInteraction(
+  interaction
+) {
+  if (!interaction.isButton()) {
+    return false;
   }
 
-  const member = await interaction.guild.members.fetch(memberId).catch(() => null);
-  const role = interaction.guild.roles.cache.get(roleId);
-
-  if (!member || !role) {
-    await interaction.editReply('⚠️ Não achei o membro ou o cargo.');
-    return true;
+  if (
+    !interaction.customId.startsWith(
+      'orgticket_remove_role:'
+    )
+  ) {
+    return false;
   }
 
-  if (member.roles.cache.has(role.id)) {
-    await member.roles.remove(role.id, `Botão log OrgTicketAccessSync usado por ${interaction.user.tag}`).catch(async error => {
-      await interaction.editReply(`❌ Não consegui remover o cargo: ${error.message}`);
-    });
-  }
-
-  await syncOrgTicketAccessForRoleChange({
-    member,
-    role,
-    action: 'remove',
-    executor: interaction.user,
-    source: 'Botão da log',
+  await interaction.deferReply({
+    ephemeral: true,
   });
 
-  await interaction.editReply(`✅ Cargo **${role.name}** removido e acesso do ticket sincronizado para <@${member.id}>.`);
+  try {
+    const [
+      ,
+      memberId,
+      roleId,
+    ] = interaction.customId.split(':');
+
+    if (
+      !interaction.guild ||
+      !/^\d{17,20}$/.test(memberId || '') ||
+      !/^\d{17,20}$/.test(roleId || '')
+    ) {
+      throw new Error(
+        'Pedido de remoção inválido.'
+      );
+    }
+
+    const actor =
+      await interaction.guild.members.fetch({
+        user: interaction.user.id,
+        force: true,
+      });
+
+    const allowed =
+      USERS_SEMPRE_PODEM.includes(actor.id) ||
+      ALLOWED_TO_MANAGE_TICKET.includes(
+        actor.id
+      ) ||
+      actor.roles.cache.some(
+        role =>
+          ALLOWED_TO_MANAGE_TICKET.includes(
+            role.id
+          )
+      );
+
+    if (!allowed) {
+      await interaction.editReply(
+        '🚫 Você não tem permissão para usar esse botão.'
+      );
+
+      return true;
+    }
+
+    const member =
+      await interaction.guild.members.fetch({
+        user: memberId,
+        force: true,
+      });
+
+    const role =
+      await interaction.guild.roles.fetch(
+        roleId
+      );
+
+    if (!role) {
+      throw new Error(
+        'O cargo não foi encontrado.'
+      );
+    }
+
+    if (member.roles.cache.has(role.id)) {
+      await member.roles.remove(
+        role.id,
+        `Botão log OrgTicketAccessSync usado por ${interaction.user.tag}`
+      );
+    }
+
+    const result =
+      await syncOrgTicketAccessForRoleChange({
+        member,
+        role,
+        action: 'remove',
+        executor: interaction.user,
+        source: 'Botão da log',
+      });
+
+    const message =
+      result?.success === true
+        ? `✅ Cargo ${role.name} removido e sincronização confirmada.`
+        : result
+          ? 'O cargo foi removido, mas o acesso do ticket precisa ser conferido: ' +
+            result.reason
+          : 'O cargo foi removido. A sincronização já foi acionada; confira a log do ticket.';
+
+    await interaction.editReply(message);
+  } catch (error) {
+    console.error(
+      '[ORG ACCESS] Botão de remoção:',
+      error
+    );
+
+    await interaction.editReply(
+      'Não foi possível confirmar todas as etapas da remoção. Confira o cargo e a log: ' +
+      error.message
+    );
+  }
+
   return true;
 }
 

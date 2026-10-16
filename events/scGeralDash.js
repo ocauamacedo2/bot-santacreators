@@ -2369,8 +2369,14 @@ async function fetchDiscordMessagesPageShared(
 }
 
 async function scanChannelEmbeds(client, { channelId, weekFloorKey, maxPages = 60, onMessage }) {
-  const ch = await client.channels.fetch(channelId).catch(() => null);
-  if (!ch?.isTextBased?.()) return;
+  const ch = await client.channels.fetch(channelId);
+
+  if (!ch?.isTextBased?.() || !ch.messages?.fetch) {
+    throw new Error(
+      'O canal ' + channelId +
+      ' não está disponível para a coleta.'
+    );
+  }
 
   // se não passar floor, mantém comportamento antigo (seguro)
   const floor = String(weekFloorKey || "").trim() || null;
@@ -2391,6 +2397,16 @@ async function scanChannelEmbeds(client, { channelId, weekFloorKey, maxPages = 6
   if (!batch?.size) break;
 
     for (const msg of batch.values()) {
+      if (
+        !Number.isFinite(msg.createdTimestamp) ||
+        msg.createdTimestamp <= 0
+      ) {
+        throw new Error(
+          'Uma mensagem do canal ' + channelId +
+          ' não possui data válida.'
+        );
+      }
+
       // ✅ condição de parada: quando chegar em msgs mais antigas que o floor
       if (floor) {
         const wkMsg = weekKeyFromDateSP(new Date(msg.createdTimestamp));
@@ -2401,8 +2417,25 @@ async function scanChannelEmbeds(client, { channelId, weekFloorKey, maxPages = 6
       await onMessage(msg);
     }
 
-    lastId = batch.last()?.id;
-    if (!lastId) break;
+    const nextId = batch.last()?.id;
+
+    if (!nextId) break;
+
+    if (
+      !/^\d{17,20}$/.test(nextId) ||
+      (
+        lastId &&
+        BigInt(nextId) >= BigInt(lastId)
+      )
+    ) {
+      throw new Error(
+        'A paginação do canal ' + channelId +
+        ' não avançou.'
+      );
+    }
+
+    lastId = nextId;
+
     if (stop) break;
   }
 }
@@ -2695,6 +2728,7 @@ async function resolveDashboardMessage(dashChannel, st) {
 
 
 let generalCollectionPromise = null;
+let generalCollectionMode = null;
 
 function collectAllGeneral(client, mode = "light") {
   const cacheNow = Date.now();
@@ -2711,8 +2745,21 @@ function collectAllGeneral(client, mode = "light") {
   }
 
   if (generalCollectionPromise) {
+    if (
+      mode === 'full' &&
+      generalCollectionMode !== 'full'
+    ) {
+      return generalCollectionPromise
+        .catch(() => {})
+        .then(() =>
+          collectAllGeneral(client, 'full')
+        );
+    }
+
     return generalCollectionPromise;
   }
+
+  generalCollectionMode = mode;
 
   const collectionPromise = Promise.resolve().then(
     () => collectAllGeneralInternal(client, mode)
@@ -2789,10 +2836,18 @@ const pushItem = (item) => {
     ).trim();
 
   if (
-    !userId ||
+    !/^\d{17,20}$/.test(String(userId || '')) ||
     !source ||
-    !item?.ts
-  ) return;
+    !item?.ts ||
+    !Number.isFinite(new Date(item.ts).getTime())
+  ) {
+    auditor.reject(
+      source || 'unknown',
+      'invalid_identity_or_timestamp'
+    );
+
+    return;
+  }
 
   if (
     client?.user?.id &&

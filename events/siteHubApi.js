@@ -75,7 +75,14 @@ import {
 } from "../utils/siteCommunity.js";
 
 import {
+  getVipEventoAdminSiteAccess,
+  getVipEventoAdminSiteSnapshot,
+} from "./vipEvento.js";
+
+import {
   requestAbsencesSiteSnapshot,
+  getAbsenceSiteForm,
+  submitAbsenceFromSite,
 } from "./ausencias.js";
 import { readFile as readSiteAbsencesFile } from "node:fs/promises";
 import { resolve as resolveSiteAbsencesPath } from "node:path";
@@ -122,6 +129,10 @@ import {
   getGraficoManagersSiteSnapshot,
 } from "./GraficoManagers.js";
 
+import {
+  getFacsSemanaisHistorySiteSnapshot,
+} from "./facsSemanais.js";
+
 
 // =====================================================
 // SITE HUB • SOCIAL MEDIA
@@ -130,6 +141,8 @@ import {
 import {
   getPagamentoSocialSiteSnapshot,
   getPagamentoSocialSitePendingNotifications,
+  getPagamentoSocialSiteForm,
+  submitPagamentoSocialFromSite,
   refreshPagamentoSocialFromSite,
   pagamentoSocialSiteDecision,
 } from "./pagamentosocial.js";
@@ -143,6 +156,10 @@ const GUILD_ID =
 
 
 const CHANNELS = {
+  vipadmin: [
+    "1414718336826081330",
+  ],
+
   absences: [
     "1425945370621640704",
     "1520197927614677143",
@@ -208,6 +225,11 @@ const CHANNELS = {
   manager: [
     "1392680204517769277",
     "1477800974574682242",
+
+    String(
+      process.env.FACSMENU_CHANNEL_ID ||
+      "1400280714548744252"
+    ).trim(),
   ],
 
   /*
@@ -371,17 +393,34 @@ async function canAccessSiteModule(
     return false;
   }
 
+  if (moduleKey === 'vipadmin') {
+    const access =
+      await getVipEventoAdminSiteAccess({
+        guild:
+          member.guild,
+
+        member,
+      });
+
+    return access.rights.view === true;
+  }
+
   if (moduleKey === 'quiz') {
     return true;
   }
 
-  if (
-    isCentralMember &&
-    (
-      moduleKey === 'events' ||
-      moduleKey === 'nps'
-    )
-  ) {
+  const administrativeReader =
+    member.id === '660311795327828008' ||
+    member.roles.cache.some(role =>
+      [
+        '1262262852949905408',
+        '1352407252216184833',
+        '1262262852949905409',
+        '1352408327983861844',
+      ].includes(role.id)
+    );
+
+  if (administrativeReader) {
     return true;
   }
 
@@ -612,9 +651,17 @@ async function workflowCatalog(
     if (
       result.status === 'fulfilled'
     ) {
-      modules.push(
-        result.value.data
-      );
+      const catalog = result.value.data;
+      if (
+        !catalog || typeof catalog !== 'object' || Array.isArray(catalog) ||
+        typeof catalog.key !== 'string' || !catalog.key.trim() ||
+        !catalog.rights || typeof catalog.rights !== 'object' ||
+        Array.isArray(catalog.rights)
+      ) {
+        warnings.push(`O catálogo de ${result.value.key} retornou dados inválidos.`);
+        continue;
+      }
+      modules.push(catalog);
 
       continue;
     }
@@ -664,11 +711,50 @@ async function workflowCatalog(
   const organizationAccess =
     await community.access(member);
 
+  let timeclock = null;
+  let paymentForm = null;
+
+  if (
+    typeof client.__SC_BP_SITE_API__?.form ===
+    'function'
+  ) {
+    try {
+      timeclock =
+        await client.__SC_BP_SITE_API__.form({
+          guild,
+          member,
+        });
+    } catch (error) {
+      console.warn(
+        '[SITE HUB] Catálogo de bate-ponto:',
+        error
+      );
+
+      warnings.push(
+        'Não foi possível consultar o bate-ponto.'
+      );
+    }
+  }
+
+  try {
+    paymentForm = await getPagamentoSocialSiteForm({ guild, member });
+  } catch (error) {
+    console.warn('[SITE HUB] Catálogo de pagamento social:', error);
+    warnings.push('Não foi possível consultar o pagamento social.');
+  }
+
   return {
     modules,
     warnings,
+
     confirmOrganization:
       organizationAccess.orgpresence === true,
+
+    blacklist:
+      organizationAccess.orgblacklist === true,
+
+    timeclock,
+    paymentForm,
   };
 }
 
@@ -1070,10 +1156,32 @@ const experience = createSiteHubExperience({
       next();
     },
 
-    express.json({
-      limit:
-        "128kb",
-    }),
+    (req, res, next) => {
+      express.json({
+        limit: "128kb",
+      })(req, res, error => {
+        if (!error) {
+          return next();
+        }
+
+        const status =
+          error.type === "entity.too.large"
+            ? 413
+            : 400;
+
+        res.setHeader(
+          "Cache-Control",
+          "no-store"
+        );
+
+        return res.status(status).json({
+          error:
+            status === 413
+              ? "Os dados enviados excedem o limite de 128 KB."
+              : "O corpo da requisição contém JSON inválido.",
+        });
+      });
+    },
 
     async (
       req,
@@ -1098,6 +1206,41 @@ const experience = createSiteHubExperience({
               error:
                 "Ponte não autorizada.",
             });
+        }
+
+        if (
+          !req.body ||
+          typeof req.body !== "object" ||
+          Array.isArray(req.body)
+        ) {
+          return res.status(400).json({
+            error:
+              "O corpo da requisição deve ser um objeto JSON.",
+          });
+        }
+
+        if (
+          typeof req.body.action !== "string" ||
+          !req.body.action.trim() ||
+          req.body.action.length > 100
+        ) {
+          return res.status(400).json({
+            error:
+              "Informe uma ação válida da Central.",
+          });
+        }
+
+        if (
+          req.body.payload != null &&
+          (
+            typeof req.body.payload !== "object" ||
+            Array.isArray(req.body.payload)
+          )
+        ) {
+          return res.status(400).json({
+            error:
+              "Os dados da operação devem ser um objeto JSON.",
+          });
         }
 
         const guildId =
@@ -1263,7 +1406,7 @@ const experience = createSiteHubExperience({
         const member = await resolveSiteMember(
           guild,
           actorId,
-          !permissionRead
+          !permissionRead || payload.requireFresh === true
         );
 
         if (!member) {
@@ -1273,6 +1416,143 @@ const experience = createSiteHubExperience({
               error:
                 "Você não está no servidor Santa Creators.",
             });
+        }
+
+               if (
+          action === 'timeclock.form' ||
+          action === 'timeclock.submit'
+        ) {
+          const centralMember =
+            member.id === '660311795327828008' ||
+            isOfficialSantaCreatorsTeamMember(
+              member
+            );
+
+          if (!centralMember) {
+            return res.status(403).json({
+              error:
+                'O bate-ponto é exclusivo da equipe autorizada.',
+            });
+          }
+
+          const timeclock =
+            client.__SC_BP_SITE_API__;
+
+          if (
+            typeof timeclock?.form !== 'function' ||
+            typeof timeclock?.submit !== 'function'
+          ) {
+            return res.status(503).json({
+              error:
+                'O sistema de bate-ponto ainda não está disponível.',
+            });
+          }
+
+          if (action === 'timeclock.form') {
+            return res.json(
+              await timeclock.form({
+                guild,
+                member,
+              })
+            );
+          }
+
+          const result =
+            await timeclock.submit({
+              guild,
+              actorId: member.id,
+              payload,
+            });
+
+          snapshots.invalidate(
+            'weekly'
+          );
+
+          snapshots.invalidate(
+            'nps'
+          );
+
+          return res.json(result);
+        }
+
+        if (
+          action === 'social.form' ||
+          action === 'social.submit'
+        ) {
+          const centralMember =
+            member.id === '660311795327828008' ||
+            isOfficialSantaCreatorsTeamMember(member);
+
+          if (!centralMember) {
+            return res.status(403).json({
+              error:
+                'O registro de pagamento é exclusivo da equipe autorizada.',
+            });
+          }
+
+          if (action === 'social.form') {
+            return res.json(
+              await getPagamentoSocialSiteForm({
+                guild,
+                member,
+              })
+            );
+          }
+
+          const result =
+            await submitPagamentoSocialFromSite({
+              client,
+              guild,
+              actorId: member.id,
+              payload,
+            });
+
+          snapshots.invalidate('social');
+          snapshots.invalidate('weekly');
+          snapshots.invalidate('nps');
+
+          return res.json(result);
+        }
+
+        if (
+          action === 'absences.form' ||
+          action === 'absences.submit'
+        ) {
+          const centralMember =
+            member.id === '660311795327828008' ||
+            isOfficialSantaCreatorsTeamMember(
+              member
+            );
+
+          if (!centralMember) {
+            return res.status(403).json({
+              error:
+                'O registro de ausência é exclusivo da equipe autorizada.',
+            });
+          }
+
+          if (action === 'absences.form') {
+            return res.json(
+              await getAbsenceSiteForm({
+                guild,
+                member,
+              })
+            );
+          }
+
+          const result =
+            await submitAbsenceFromSite({
+              client,
+              guild,
+              actorId: member.id,
+              payload,
+            });
+
+          snapshots.invalidate(
+            'absences'
+          );
+
+          return res.json(result);
         }
 
         if (
@@ -1292,7 +1572,10 @@ const experience = createSiteHubExperience({
           isOfficialSantaCreatorsTeamMember(member);
 
         const internalModules = new Set([
+          'vipadmin',
+          'timeclock',
           'absences',
+          'nps',
           'checklist',
           'workflow',
           'events',
@@ -1938,6 +2221,22 @@ const experience = createSiteHubExperience({
           );
         }
 
+        if (action === 'vipadmin.snapshot') {
+          await assertModuleView(
+            client,
+            member,
+            'vipadmin'
+          );
+
+          return res.json(
+            await getVipEventoAdminSiteSnapshot({
+              guild,
+              member,
+              before: payload.before,
+            })
+          );
+        }
+
         if (action.startsWith('events.')) {
           await assertModuleView(client, member, 'events');
 
@@ -2140,16 +2439,23 @@ if (await experience.handle({ guild, member, action, payload, res })) return;
     member
   );
 
-  entries.push([
+    entries.push([
     'workflow',
-    workflowData.modules.length > 0,
+    workflowData.modules.length > 0 ||
+    workflowData.confirmOrganization === true ||
+    workflowData.timeclock?.rights?.view === true ||
+    workflowData.paymentForm?.rights?.create === true,
   ]);
 
   const checklistCatalog =
-    await getChecklistSiteCatalog({
-      guild,
-      member,
-    });
+    isCentralMember
+      ? await getChecklistSiteCatalog({
+          guild,
+          member,
+        })
+      : {
+          allowed: false,
+        };
 
   entries.push([
     'checklist',
@@ -2172,6 +2478,23 @@ if (await experience.handle({ guild, member, action, payload, res })) return;
       communityAccess[key] === true,
     ]);
   }
+
+  const socialEntry = entries.find(
+    ([key]) => key === 'social'
+  );
+
+  const vipEntry = entries.find(
+    ([key]) => key === 'vipadmin'
+  );
+
+  entries.push([
+    'payments',
+    isCentralMember &&
+    (
+      socialEntry?.[1] === true ||
+      vipEntry?.[1] === true
+    ),
+  ]);
 
   return res.json({
     modules:
@@ -2310,6 +2633,7 @@ if (await experience.handle({ guild, member, action, payload, res })) return;
             presence,
             approvers,
             performance,
+            invitations,
           ] =
             await Promise.all([
               getRegistroManagerSiteSnapshot({
@@ -2333,6 +2657,23 @@ if (await experience.handle({ guild, member, action, payload, res })) return;
                 guild,
                 actorId,
               }),
+
+              getFacsSemanaisHistorySiteSnapshot({
+                client,
+                guild,
+              }).catch(error => {
+                console.warn(
+                  '[SITE HUB] Histórico de convites indisponível:',
+                  error
+                );
+
+                return {
+                  weeks: [],
+
+                  error:
+                    'Não foi possível carregar o histórico de convites.',
+                };
+              }),
             ]);
 
           return res.json({
@@ -2340,6 +2681,7 @@ if (await experience.handle({ guild, member, action, payload, res })) return;
             presence,
             approvers,
             performance,
+            invitations,
           });
         }
 

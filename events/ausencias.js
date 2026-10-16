@@ -14,6 +14,7 @@ import sharp from "sharp";
 import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+import { runSiteOperation } from "../utils/siteOperationJournal.js";
 
 import {
   findFormsCreatorThreadIdByUserId,
@@ -59,6 +60,12 @@ const CARGOS_AUTORIZADOS_AUSENCIA = [
   '1388976314253312100',
   '1262262852949905408',
   '660311795327828008',
+
+  '1388975939161161728',
+  '1388976155830255697',
+  '1392678638176043029',
+  '1388976094920704141',
+  '1387253972661964840',
 ];
 
 const GIF_URL =
@@ -2189,6 +2196,354 @@ async function enviarBotaoFixoPorCanal(client, canalId) {
 
 // ===== EXPORTS =====
 
+const absenceSiteLocks = new Set();
+
+export async function submitAbsenceFromSite(options) {
+  return runSiteOperation({
+    action: 'absences.submit',
+    guildId: options.guild.id,
+    actorId: options.actorId,
+    payload: options.payload || {},
+    authorize: async () => {
+      const member = await options.guild.members.fetch({
+        user: String(options.actorId), force: true,
+      });
+
+      const form = await getAbsenceSiteForm({
+        guild: options.guild,
+        member,
+      });
+
+      if (
+        member.guild.id !== options.guild.id ||
+        form.rights?.create !== true
+      ) {
+        throw Object.assign(
+          new Error('Seu acesso atual não permite este registro.'),
+          { status: 403 }
+        );
+      }
+    },
+    execute: () => executeAbsenceFromSite(options),
+  });
+}
+
+async function executeAbsenceFromSite({
+  client,
+  guild,
+  actorId,
+  payload = {},
+}) {
+  const lockKey =
+    `${guild.id}:${actorId}`;
+
+  if (absenceSiteLocks.has(lockKey)) {
+    throw Object.assign(
+      new Error(
+        "Já existe uma ausência em processamento para sua conta."
+      ),
+      { status: 409 }
+    );
+  }
+
+  absenceSiteLocks.add(lockKey);
+
+  try {
+    const member =
+      await guild.members.fetch({
+        user: String(actorId),
+        force: true,
+      });
+
+    const form =
+      await getAbsenceSiteForm({
+        guild,
+        member,
+      });
+
+    if (form.rights.create !== true) {
+      throw Object.assign(
+        new Error(
+          "Seu cargo ou canal atual não permite registrar ausência pelo site."
+        ),
+        { status: 403 }
+      );
+    }
+
+    const values = {};
+
+    for (const field of form.fields) {
+      const value =
+        String(
+          payload[field.key] || ""
+        ).trim();
+
+      if (
+        (
+          field.required !== false &&
+          !value
+        ) ||
+        value.length > field.maxLength
+      ) {
+        throw Object.assign(
+          new Error(
+            `Preencha corretamente o campo: ${field.label}.`
+          ),
+          { status: 400 }
+        );
+      }
+
+      values[field.key] = value;
+    }
+
+    const interaction = {
+      siteOrigin: true,
+      client,
+      guild,
+      guildId: guild.id,
+      member,
+      user: member.user,
+
+      channelId:
+        form.channelId,
+
+      customId:
+        `modal_ausencia_${form.channelId}`,
+
+      deferred: false,
+      replied: false,
+      lastReply: null,
+
+      fields: {
+        getTextInputValue(key) {
+          return values[key] || "";
+        },
+      },
+
+      isButton() {
+        return false;
+      },
+
+      isModalSubmit() {
+        return true;
+      },
+
+      isRepliable() {
+        return true;
+      },
+
+      async deferReply() {
+        this.deferred = true;
+      },
+
+      async reply(value) {
+        this.replied = true;
+        this.lastReply = value;
+        return value;
+      },
+
+      async editReply(value) {
+        this.lastReply = value;
+        return value;
+      },
+    };
+
+    await ausenciasHandleInteraction(
+      interaction,
+      client
+    );
+
+    if (!interaction.__scAbsenceApplied) {
+      const reply =
+        interaction.lastReply;
+
+      throw Object.assign(
+        new Error(
+          typeof reply === "string"
+            ? reply
+            : reply?.content ||
+              "O registro de ausência não foi confirmado."
+        ),
+        { status: 409 }
+      );
+    }
+
+    return {
+      ok: true,
+
+      message:
+        "Ausência publicada no Discord. O painel mensal é atualizado em segundo plano.",
+
+      channelId:
+        form.channelId,
+
+      ...interaction.__scAbsenceApplied,
+    };
+  } finally {
+    absenceSiteLocks.delete(lockKey);
+  }
+}
+
+export async function getAbsenceSiteForm({
+  guild,
+  member,
+}) {
+  if (member?.guild?.id !== guild.id) {
+    throw Object.assign(
+      new Error(
+        "Membro inválido para este servidor."
+      ),
+      { status: 403 }
+    );
+  }
+
+  const authorized =
+    CARGOS_AUTORIZADOS_AUSENCIA.includes(
+      member.id
+    ) ||
+    member.roles.cache.some(role =>
+      CARGOS_AUTORIZADOS_AUSENCIA.includes(
+        role.id
+      )
+    );
+
+  const channelId =
+    authorized
+      ? resolveAbsenceSiteChannel(member)
+      : null;
+
+  if (!channelId) {
+    return {
+      rights: {
+        create: false,
+      },
+
+      channelId: null,
+      fields: [],
+    };
+  }
+
+  const channel =
+    await guild.channels.fetch(
+      channelId
+    );
+
+  const canView =
+    channel?.guildId === guild.id &&
+    typeof channel.send === "function" &&
+    channel.permissionsFor(member)?.has([
+      "ViewChannel",
+      "ReadMessageHistory",
+    ]) === true;
+
+  return {
+    rights: {
+      create: canView,
+    },
+
+    channelId:
+      canView ? channelId : null,
+
+    fields:
+      canView
+        ? [
+            {
+              key: "nome",
+              label: "Seu nome",
+              maxLength: 128,
+              value: member.displayName,
+            },
+            {
+              key: "data",
+              label: "Data inicial",
+              maxLength: 64,
+              placeholder: "DD/MM/AAAA",
+            },
+            {
+              key: "ate_data",
+              label: "Data final",
+              maxLength: 64,
+              placeholder: "DD/MM/AAAA",
+              required: false,
+            },
+            {
+              key: "hora",
+              label: "Horário",
+              maxLength: 64,
+              placeholder: "HH:MM",
+              pattern:
+                "(?:[01][0-9]|2[0-3]):[0-5][0-9]",
+            },
+            {
+              key: "motivo",
+              label: "Motivo",
+              type: "textarea",
+              maxLength: 1024,
+            },
+          ]
+        : [],
+  };
+}
+
+function resolveAbsenceSiteChannel(member) {
+  const roles =
+    member?.roles?.cache;
+
+  if (!roles) {
+    return null;
+  }
+
+  if (
+    member.id === '660311795327828008' ||
+    roles.has('1262262852949905408') ||
+    roles.has('1352407252216184833') ||
+    roles.has('1262262852949905409') ||
+    roles.has('1352408327983861844')
+  ) {
+    return CANAIS_REGISTRO.responsaveis;
+  }
+
+  if (roles.has('1388976314253312100')) {
+    return CANAIS_REGISTRO.coord;
+  }
+
+  if (roles.has('1388975939161161728')) {
+    return CANAIS_REGISTRO.gestor;
+  }
+
+  const operationalChannels = {
+    '1388976155830255697':
+      CANAIS_REGISTRO.manager,
+
+    '1392678638176043029':
+      CANAIS_REGISTRO.manager,
+
+    '1388976094920704141':
+      CANAIS_REGISTRO.social,
+
+    '1387253972661964840':
+      CANAIS_REGISTRO.social,
+  };
+
+  const operationalRole = [
+    ...roles.values(),
+  ]
+    .filter(role =>
+      Object.hasOwn(
+        operationalChannels,
+        role.id
+      )
+    )
+    .sort(
+      (first, second) =>
+        second.position - first.position
+    )[0];
+
+  return operationalRole
+    ? operationalChannels[operationalRole.id]
+    : null;
+}
+
 export async function ausenciasOnReady(client) {
   console.log(
     '[AUSÊNCIAS] Inicializando registros e snapshot mensal.'
@@ -2354,6 +2709,29 @@ export async function ausenciasHandleInteraction(interaction, client) {
           return true;
         }
 
+        if (interaction.siteOrigin === true) {
+          const currentSiteForm =
+            await getAbsenceSiteForm({
+              guild:
+                interaction.guild,
+
+              member:
+                membroAtual,
+            });
+
+          if (
+            currentSiteForm.rights.create !== true ||
+            currentSiteForm.channelId !== canalId
+          ) {
+            await interaction.editReply({
+              content:
+                "❌ Seus cargos ou o canal de ausência mudaram. Reabra o formulário antes de registrar.",
+            });
+
+            return true;
+          }
+        }
+
         const canalOrigem =
           await lerAusenciasComPrazo(
             "modal.origin_channel:" +
@@ -2465,13 +2843,23 @@ export async function ausenciasHandleInteraction(interaction, client) {
               ate || null,
           });
 
-        await canalGerais.send({
-          content:
-            `<@${interaction.user.id}>`,
-          embeds: [
-            embedGerais,
-          ],
-        });
+        const publishedAbsence =
+          await canalGerais.send({
+            content:
+              `<@${interaction.user.id}>`,
+
+            embeds: [
+              embedGerais,
+            ],
+          });
+
+        interaction.__scAbsenceApplied = {
+          messageId:
+            publishedAbsence.id,
+
+          url:
+            publishedAbsence.url,
+        };
 
         if (dtFim) {
           registrarAusenciaIntervalo(

@@ -9642,6 +9642,16 @@ async function generateResults(
       providerContext
     );
 
+  if (
+    !collectedProviderMetrics ||
+    !Array.isArray(collectedProviderMetrics.results) ||
+    !Array.isArray(collectedProviderMetrics.errors)
+  ) {
+    throw new Error(
+      "A coleta operacional retornou listas inválidas. O snapshot anterior foi preservado."
+    );
+  }
+
   const providerCollection = {
     ...collectedProviderMetrics,
 
@@ -9699,21 +9709,36 @@ await ensureCoreOperationalMetrics(
     !Array.isArray(value);
 
   const fileRankingSources =
-    isSourceWeek(rankingFile?.[currentWeekInfo.key]) &&
-    isSourceWeek(rankingFile?.[previousWeekInfo.key])
+    isSourceWeek(rankingFile?.[currentWeekInfo.key])
       ? {
           weekKey: currentWeekInfo.key,
           previousWeekKey: previousWeekInfo.key,
-          currentByUser: rankingFile[currentWeekInfo.key],
-          previousByUser: rankingFile[previousWeekInfo.key],
+
+          currentByUser:
+            rankingFile[currentWeekInfo.key],
+
+          previousByUser:
+            isSourceWeek(
+              rankingFile?.[previousWeekInfo.key]
+            )
+              ? rankingFile[previousWeekInfo.key]
+              : {},
         }
       : null;
 
   const rankingSources =
-    fileRankingSources ||
-    rankingMetric?.details?.operationalSources;
+    rankingMetric?.details?.operationalSources ||
+    fileRankingSources;
+
+  const rankingRequiredIds = new Set([
+    "bate_ponto", "pagamentos", "registro_poderes",
+  ]);
 
   const sourceMappings = [
+    {
+      categoryId: "bate_ponto",
+      sources: ["bateponto"],
+    },
     {
       categoryId: "alinhamentos",
       sources: ["alinhamentos"],
@@ -9766,6 +9791,7 @@ await ensureCoreOperationalMetrics(
 
     for (const [userId, userSources] of Object.entries(byUser || {})) {
       if (
+        !/^\d{17,20}$/.test(userId) ||
         !userSources ||
         typeof userSources !== "object" ||
         Array.isArray(userSources)
@@ -9797,6 +9823,12 @@ await ensureCoreOperationalMetrics(
       };
 
       total += userTotal;
+
+      if (!Number.isSafeInteger(userTotal) || !Number.isSafeInteger(total)) {
+        throw new Error(
+          "A soma dos pontos do Ranking excedeu o limite numérico seguro."
+        );
+      }
     }
 
     return {
@@ -9835,10 +9867,41 @@ await ensureCoreOperationalMetrics(
           : null;
 
       if (
+        !rankingRequiredIds.has(mapping.categoryId) &&
         existingMetric &&
         existingMetric.available !== false &&
         validScore(existingMetric.score)
       ) {
+        console.info(
+          "[NPS Ranking Sources] Provedor existente preservado:",
+          {
+            categoryId: mapping.categoryId,
+            providerId:
+              existingMetric.providerId ||
+              existingMetric.id,
+
+            source:
+              existingMetric.source || null,
+
+            sourceType:
+              existingMetric.sourceType || null,
+
+            score:
+              Number(existingMetric.score),
+
+            volume:
+              existingMetric.volume ?? null,
+
+            current:
+              existingMetric.current ?? null,
+
+            goal:
+              existingMetric.goal ??
+              existingMetric.details?.goal ??
+              null,
+          }
+        );
+
         continue;
       }
 
@@ -9853,6 +9916,31 @@ await ensureCoreOperationalMetrics(
       );
 
       if (currentSource.total === 0) {
+        if (rankingRequiredIds.has(mapping.categoryId)) {
+          const unavailable = {
+            id: mapping.categoryId,
+            providerId: mapping.categoryId,
+            available: false,
+            score: null,
+            sourceType: "weekly_ranking_sources",
+            scoreBasis: "weekly_ranking_goal_v1",
+            source: mapping.sources.join(","),
+            current: 0,
+            volume: 0,
+            goal,
+            details: {
+              reason: "Sem pontos verificáveis nesta fonte do Ranking Geral.",
+              weekKey: currentWeekInfo.key,
+            },
+          };
+
+          if (existingIndex >= 0) {
+            providerCollection.results[existingIndex] = unavailable;
+          } else {
+            providerCollection.results.push(unavailable);
+          }
+        }
+
         continue;
       }
 
@@ -9933,6 +10021,22 @@ await ensureCoreOperationalMetrics(
       );
     }
   } else {
+    providerCollection.results = providerCollection.results.filter(metric =>
+      !rankingRequiredIds.has(metric?.id || metric?.providerId)
+    );
+
+    for (const id of rankingRequiredIds) {
+      providerCollection.results.push({
+        id,
+        providerId: id,
+        available: false,
+        score: null,
+        details: {
+          reason: "A fonte semanal do Ranking Geral está indisponível.",
+        },
+      });
+    }
+
     console.warn(
       "[NPS Ranking Sources] A coleta não entregou as fontes das duas semanas esperadas.",
       {
@@ -10636,6 +10740,23 @@ for (
   const providerMetric of
   providerCollection.results
 ) {
+  if (providerMetric?.available === false) {
+    const category = current.categories.find(item =>
+      item.categoryId === (
+        providerMetric.id || providerMetric.providerId
+      )
+    );
+
+    if (category) {
+      category.raw = {
+        ...category.raw,
+        providerMetric,
+      };
+    }
+
+    continue;
+  }
+
   if (
     !providerMetric ||
     providerMetric.available === false ||
@@ -10651,7 +10772,9 @@ for (
       Number(
         providerMetric.score
       )
-    )
+    ) ||
+    Number(providerMetric.score) < 0 ||
+    Number(providerMetric.score) > 100
   ) {
     continue;
   }
@@ -10688,14 +10811,12 @@ for (
     ...category.raw,
 
     events:
-      Math.max(
-        Number(
-          category.raw?.events || 0
-        ),
-        Number(
-          providerMetric.volume || 0
-        )
-      ),
+      providerMetric.sourceType === "weekly_ranking_sources"
+        ? Number(providerMetric.volume)
+        : Math.max(
+            Number(category.raw?.events || 0),
+            Number(providerMetric.volume || 0)
+          ),
 
     awaitingProvider: false,
     providerMetric,
@@ -14717,6 +14838,64 @@ async function sendAutomaticWeeklyReport(
 // RESULTADO ATUAL VISÍVEL DO PAINEL
 // ============================================================================
 
+function projectNpsSiteEvidence(metric) {
+  const number = value =>
+    typeof value === 'number' &&
+    Number.isFinite(value) &&
+    value >= 0
+      ? value
+      : null;
+
+  const byUser = metric?.details?.byUser;
+
+  const available =
+    byUser !== null &&
+    typeof byUser === 'object' &&
+    !Array.isArray(byUser);
+
+  const contributors = available
+    ? Object.entries(byUser).flatMap(([userId, record]) => {
+        if (!/^\d{17,20}$/.test(userId)) return [];
+
+        const amount = number(
+          typeof record === 'number'
+            ? record
+            : record?.total ?? record?.points
+        );
+
+        if (amount === null) return [];
+
+        const rawSources =
+          record && typeof record === 'object'
+            ? record.sources
+            : null;
+
+        const sources =
+          rawSources &&
+          typeof rawSources === 'object' &&
+          !Array.isArray(rawSources)
+            ? Object.fromEntries(
+                Object.entries(rawSources).filter(
+                  ([, value]) => number(value) !== null
+                )
+              )
+            : {};
+
+        return [{ userId, amount, sources }];
+      })
+    : [];
+
+  return {
+    available,
+    volume: number(metric?.volume),
+    unit:
+      metric?.scoreBasis === 'weekly_ranking_goal_v1'
+        ? 'pontos'
+        : 'valor informado pela fonte',
+    contributors,
+  };
+}
+
 function saveNpsSiteSnapshot(results) {
   if (
     !results || Array.isArray(results) ||
@@ -14822,8 +15001,34 @@ function saveNpsSiteSnapshot(results) {
       id: category.categoryId,
       label: category.label,
 
+      sourceEvidence: projectNpsSiteEvidence(
+        category.raw?.providerMetric
+      ),
+
       scoreBasis:
         category.raw?.providerMetric?.scoreBasis || '',
+
+      source:
+        category.raw?.providerMetric?.source || '',
+
+      sourceType:
+        category.raw?.providerMetric?.sourceType || '',
+
+      sourceReason:
+        category.raw?.providerMetric?.details?.reason ||
+        (
+          category.raw?.awaitingProvider
+            ? 'Aguardando uma fonte válida para esta área.'
+            : ''
+        ),
+
+      sourceCurrent:
+        category.raw?.providerMetric?.current ?? null,
+
+      sourceGoal:
+        category.raw?.providerMetric?.goal ??
+        category.raw?.providerMetric?.details?.goal ??
+        null,
 
       score,
       previousScore,

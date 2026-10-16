@@ -22,6 +22,7 @@ import cron from "node-cron";
 import mongoose from "mongoose";
 import express from "express";
 import { EventEmitter } from "node:events";
+import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 
@@ -639,6 +640,106 @@ app.get("/transcript/:canalId", async (req, res) => {
  * A rota /site-hub continua protegida
  * pelo BRIDGE_SECRET.
  */
+app.use(
+  "/site-hub",
+  (req, res, next) => {
+    const incomingRequestId =
+      String(
+        req.get("X-Request-ID") || ""
+      ).trim();
+
+    const requestId =
+      /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(
+        incomingRequestId
+      )
+        ? incomingRequestId
+        : randomUUID();
+
+    const startedAt =
+      Date.now();
+
+    let reported =
+      false;
+
+    res.setHeader(
+      "X-Request-ID",
+      requestId
+    );
+
+    console.info(
+      "[SITE HUB INGRESS] Requisição recebida:",
+      {
+        requestId,
+        method: req.method,
+        pid: process.pid,
+        discordReady: client.isReady(),
+      }
+    );
+
+    const report = completed => {
+      if (reported) {
+        return;
+      }
+
+      reported = true;
+
+      const action =
+        typeof req.body?.action === "string"
+          ? req.body.action.slice(0, 100)
+          : null;
+
+      const result = {
+        requestId,
+        action,
+        method: req.method,
+
+        status:
+          completed
+            ? res.statusCode
+            : null,
+
+        durationMs:
+          Date.now() - startedAt,
+
+        completed,
+
+        responseStarted:
+          res.headersSent,
+
+        discordReady:
+          client.isReady(),
+
+        pid:
+          process.pid,
+      };
+
+      if (completed) {
+        console.info(
+          "[SITE HUB INGRESS] Resposta encerrada:",
+          result
+        );
+      } else {
+        console.warn(
+          "[SITE HUB INGRESS] Conexão encerrada antes da resposta:",
+          result
+        );
+      }
+    };
+
+    res.once(
+      "finish",
+      () => report(true)
+    );
+
+    res.once(
+      "close",
+      () => report(res.writableFinished)
+    );
+
+    next();
+  }
+);
+
 const siteHubInstalled = installSiteHubApi({ app, client });
 
 app.get(

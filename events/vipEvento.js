@@ -32,6 +32,10 @@ import {
   normalizePrizeAliases,
 } from '../utils/prizeValidation.js';
 // ── CONFIG DE CANAIS ─────────────────────────────────────────────
+import {
+  isOfficialSantaCreatorsTeamMember,
+} from "./hierarquiaDivisoes.js";
+
 const VIP_MENU_CHANNEL_ID = "1414718336826081330"; // onde fica o MENU e os REGISTROS
 const VIP_NOTIFY_CHANNEL_ID = "1424489278615978114"; // notificação de novo registro
 const VIP_CHECK_MENU_CHAT_ID = "1387922662134775818"; // referência ao "outro menu" para checagem
@@ -275,12 +279,17 @@ function canReprove(member) {
   return hasAnyRole(member, REPROVE_ALLOWED) || REPROVE_ALLOWED_USERS.includes(member?.id);
 }
 
-async function VIP_getLeaderRequestContext(member) {
+async function VIP_getLeaderRequestContext(
+  member,
+  options = {}
+) {
   try {
-    member = await member.guild.members.fetch({
-      user: member.id,
-      force: true,
-    });
+    if (options.freshMember !== true) {
+      member = await member.guild.members.fetch({
+        user: member.id,
+        force: true,
+      });
+    }
   } catch (error) {
     console.error(
       '[VIP CIDADE] Falha ao conferir cargos atuais:',
@@ -325,7 +334,12 @@ async function VIP_getLeaderRequestContext(member) {
   let orgContext;
 
   try {
-    orgContext = await getMemberOrgTicketContext(member);
+    orgContext = await getMemberOrgTicketContext(
+      member,
+      {
+        freshMember: true,
+      }
+    );
   } catch (error) {
     console.error('[VIP] Falha ao validar organização/ticket do líder:', error);
 
@@ -399,8 +413,13 @@ async function VIP_getLeaderRequestContext(member) {
         orgName: orgMatch.orgName,
         orgMatch,
         message:
-          '🚫 Não foi possível determinar sua cidade. ' +
-          'Seu usuário precisa ter exatamente um cargo de cidade autorizado.',
+          cityKeys.length === 0
+            ? 'Nenhum cargo de cidade autorizado foi encontrado. Peça à equipe para corrigir seu cargo de cidade e consulte novamente.'
+            : 'Há mais de uma cidade autorizada no seu usuário: ' +
+              cityKeys.map(
+                key => CITIES[key].label
+              ).join(', ') +
+              '. Peça à equipe para manter somente a cidade correta.',
       };
     }
 
@@ -2013,9 +2032,34 @@ function VIP_siteDate(value) {
 }
 
 async function VIP_siteActor(guild, actorId) {
+  actorId = String(actorId || '').trim();
+
+  if (!/^\d{17,20}$/.test(actorId)) {
+    throw VIP_siteFail(
+      400,
+      'Usuário inválido para solicitar VIP.'
+    );
+  }
+
   const member = await guild.members.fetch({
     user: String(actorId),
     force: true,
+  }).catch(error => {
+    console.warn(
+      '[VIP SITE] Consulta do solicitante:',
+      {
+        code: error.code || null,
+        status: error.status || null,
+      }
+    );
+
+    throw VIP_siteFail(
+      Number(error.code) === 10007 ? 403 : 503,
+
+      Number(error.code) === 10007
+        ? 'Seu usuário não está mais no servidor.'
+        : 'O Discord não respondeu à consulta dos seus cargos. Tente novamente.'
+    );
   });
 
   if (
@@ -2030,8 +2074,12 @@ async function VIP_siteActor(guild, actorId) {
     );
   }
 
-  const context =
-    await VIP_getLeaderRequestContext(member);
+  const context = await VIP_getLeaderRequestContext(
+    member,
+    {
+      freshMember: true,
+    }
+  );
 
   if (
     !context.strict ||
@@ -2047,6 +2095,357 @@ async function VIP_siteActor(guild, actorId) {
   return {
     member,
     context,
+  };
+}
+
+export async function getVipEventoAdminSiteAccess({
+  guild,
+  member,
+}) {
+  const sameGuild =
+    member?.guild?.id === guild.id;
+
+  if (
+    !sameGuild ||
+    member.user?.bot
+  ) {
+    return {
+      rights: {
+        view: false,
+      },
+    };
+  }
+
+  const administrativeReader =
+    member.id === IDS.EU ||
+    member.roles.cache.some(role =>
+      [
+        IDS.OWNER,
+        IDS.RESP_LIDER,
+        IDS.RESP_INFLU,
+        IDS.RESP_CREATORS,
+      ].includes(role.id)
+    );
+
+  const teamReader =
+    administrativeReader ||
+    isOfficialSantaCreatorsTeamMember(member) ||
+    canAction(member) ||
+    canMarkPaid(member) ||
+    canReprove(member);
+
+  if (!teamReader) {
+    return {
+      rights: {
+        view: false,
+      },
+    };
+  }
+
+  let channel;
+
+  try {
+    channel =
+      await guild.channels.fetch(
+        VIP_MENU_CHANNEL_ID
+      );
+  } catch (error) {
+    console.warn(
+      "[VIP SITE] Canal administrativo indisponível:",
+      {
+        guildId: guild.id,
+        code: error.code || null,
+        message: error.message,
+      }
+    );
+
+    return {
+      rights: {
+        view: false,
+      },
+
+      unavailable: true,
+    };
+  }
+
+  const available =
+    channel?.guildId === guild.id &&
+    Boolean(channel.messages);
+
+  const allowed =
+    available &&
+    (
+      administrativeReader ||
+      channel.permissionsFor(member)?.has([
+        "ViewChannel",
+        "ReadMessageHistory",
+      ]) === true
+    );
+
+  return {
+    rights: {
+      view: allowed,
+    },
+
+    unavailable:
+      !available,
+  };
+}
+
+function projectVipAdminSiteRecord(
+  message,
+  guild
+) {
+  const embed =
+    message.embeds[0];
+
+  const paid =
+    VIP_isPago(embed);
+
+  const rejected =
+    VIP_isReprovado(embed);
+
+  const requested =
+    VIP_hasSolicitado(embed);
+
+  const fields =
+    VIP_getFields(embed);
+
+  const hasStatusFields =
+    fields.some(field =>
+      String(field.name || "").startsWith(
+        "💸 Pagamento"
+      )
+    );
+
+  const status =
+    paid && rejected
+      ? "inconsistent"
+      : rejected
+        ? "rejected"
+        : paid
+          ? "approved"
+          : requested
+            ? "requested"
+            : hasStatusFields
+              ? "pending"
+              : "unknown";
+
+  const readable = value =>
+    String(value || "")
+      .replace(
+        /<@&(\d{17,20})>/g,
+        (_, id) =>
+          guild.roles.cache.get(id)?.name ||
+          id
+      )
+      .replace(
+        /<@!?(\d{17,20})>/g,
+        (_, id) =>
+          guild.members.cache.get(id)?.displayName ||
+          id
+      )
+      .replace(/[`*_]/g, "")
+      .trim();
+
+  const field = prefix =>
+    readable(
+      VIP_getFieldValueByNameStarts(
+        fields,
+        prefix
+      )
+    );
+
+  const creatorMatch =
+    String(embed.description || "").match(
+      /Registrado por:\*{0,2}\s*<@!?(\d{17,20})>/i
+    );
+
+  return {
+    messageId:
+      message.id,
+
+    creatorId:
+      creatorMatch?.[1] || null,
+
+    status,
+
+    event:
+      field("🏁 Nome do evento ganho"),
+
+    eventDate:
+      field("📅 Dia do evento"),
+
+    organization:
+      field("🏢 Organização"),
+
+    city:
+      field("🌆 Cidade"),
+
+    winner:
+      field("👤 Nome do ganhador"),
+
+    winnerId:
+      field("🆔 ID do ganhador"),
+
+    prize:
+      field("🎁 Premiação"),
+
+    createdAt:
+      message.createdTimestamp,
+
+    url:
+      message.url,
+
+    presentation: {
+      description:
+        readable(embed.description),
+
+      fields:
+        fields.map(item => ({
+          name:
+            readable(item.name),
+
+          value:
+            readable(item.value),
+        })),
+
+      links: [
+        {
+          label:
+            "Abrir registro no Discord",
+
+          url:
+            message.url,
+        },
+      ],
+    },
+  };
+}
+
+export async function getVipEventoAdminSiteSnapshot({
+  guild,
+  member,
+  before,
+}) {
+  const access =
+    await getVipEventoAdminSiteAccess({
+      guild,
+      member,
+    });
+
+  if (access.unavailable === true) {
+    throw Object.assign(
+      new Error(
+        "O canal de registros VIP está indisponível."
+      ),
+      { status: 503 }
+    );
+  }
+
+  if (access.rights.view !== true) {
+    throw Object.assign(
+      new Error(
+        "Seu acesso atual não permite consultar os registros VIP."
+      ),
+      { status: 403 }
+    );
+  }
+
+  const cursor =
+    String(before || "").trim();
+
+  if (
+    cursor &&
+    !/^\d{17,20}$/.test(cursor)
+  ) {
+    throw Object.assign(
+      new Error(
+        "Página de registros VIP inválida."
+      ),
+      { status: 400 }
+    );
+  }
+
+  const channel =
+    await guild.channels.fetch(
+      VIP_MENU_CHANNEL_ID
+    );
+
+  if (
+    channel?.guildId !== guild.id ||
+    !channel.messages
+  ) {
+    throw Object.assign(
+      new Error(
+        "O canal VIP deste servidor está indisponível."
+      ),
+      { status: 503 }
+    );
+  }
+
+  const page =
+    await channel.messages.fetch({
+      limit: 100,
+
+      ...(cursor
+        ? { before: cursor }
+        : {}),
+    });
+
+  const records = [];
+
+  for (const message of page.values()) {
+    const embed =
+      message.embeds[0];
+
+    const recognizedTitle =
+      /^(?:💎\s*)?Registro de VIP por Evento$/i.test(
+        String(embed?.title || "").trim()
+      );
+
+    if (
+      message.author?.bot !== true ||
+      !recognizedTitle ||
+      !VIP_messageHasVipButtons(message)
+    ) {
+      continue;
+    }
+
+    records.push(
+      projectVipAdminSiteRecord(
+        message,
+        guild
+      )
+    );
+  }
+
+  return {
+    records,
+
+    recordsAvailable:
+      true,
+
+    rights: {
+      view: true,
+    },
+
+    before:
+      cursor || null,
+
+    nextBefore:
+      page.size === 100
+        ? page.last()?.id || null
+        : null,
+
+    scannedMessages:
+      page.size,
+
+    source:
+      "vip_evento_discord",
+
+    generatedAt:
+      Date.now(),
   };
 }
 
@@ -2269,19 +2668,29 @@ function VIP_siteSave(file, record) {
   const temporary =
     file + '.' + randomUUID() + '.tmp';
 
-  fs.writeFileSync(
-    temporary,
-    JSON.stringify(record),
-    {
-      flag: 'wx',
-      mode: 0o600,
-    }
-  );
+  try {
+    fs.writeFileSync(
+      temporary,
+      JSON.stringify(record),
+      {
+        flag: 'wx',
+        mode: 0o600,
+      }
+    );
 
-  fs.renameSync(
-    temporary,
-    file
-  );
+    fs.renameSync(temporary, file);
+  } finally {
+    try {
+      fs.unlinkSync(temporary);
+    } catch (error) {
+      if (error.code !== 'ENOENT') {
+        console.warn(
+          '[VIP SITE] Limpeza de temporário:',
+          error.code || error.name
+        );
+      }
+    }
+  }
 }
 
 function VIP_siteResult(
@@ -2306,7 +2715,51 @@ function VIP_siteResult(
   };
 }
 
+const VIP_SITE_RECOVERING = new Map();
+
 async function VIP_siteRecover(
+  client,
+  guild,
+  key,
+  file,
+  fingerprint
+) {
+  const running = VIP_SITE_RECOVERING.get(key);
+
+  if (running) {
+    if (running.fingerprint !== fingerprint) {
+      throw VIP_siteFail(
+        409,
+        'A recuperação em andamento pertence a outro conteúdo.'
+      );
+    }
+
+    return running.promise;
+  }
+
+  const promise = VIP_siteRecoverLive(
+    client,
+    guild,
+    key,
+    file,
+    fingerprint
+  ).finally(() => {
+    if (
+      VIP_SITE_RECOVERING.get(key)?.promise === promise
+    ) {
+      VIP_SITE_RECOVERING.delete(key);
+    }
+  });
+
+  VIP_SITE_RECOVERING.set(key, {
+    fingerprint,
+    promise,
+  });
+
+  return promise;
+}
+
+async function VIP_siteRecoverLive(
   client,
   guild,
   key,
@@ -2329,6 +2782,14 @@ async function VIP_siteRecover(
 
   let before;
 
+  const startedAt = VIP_siteRead(file)?.at;
+
+  const earliest =
+    Number.isSafeInteger(startedAt) &&
+    startedAt > 0
+      ? startedAt - 120000
+      : 0;
+
   for (let page = 0; page < 5; page++) {
     const messages = await channel.messages.fetch({
       limit: 100,
@@ -2341,7 +2802,7 @@ async function VIP_siteRecover(
       item.author.id === client.user.id &&
       item.embeds.some(embed =>
         String(embed.footer?.text || '')
-          .includes('SITE:' + key)
+          .endsWith('SITE:' + key)
       )
     );
 
@@ -2359,16 +2820,33 @@ async function VIP_siteRecover(
       return VIP_siteResult(record, true);
     }
 
-    if (messages.size < 100) {
+    if (
+      messages.size < 100 ||
+      (
+        earliest > 0 &&
+        [...messages.values()].some(message =>
+          Number.isFinite(message.createdTimestamp) &&
+          message.createdTimestamp < earliest
+        )
+      )
+    ) {
       break;
     }
 
-    before =
-      messages.last()?.id;
+    const oldest = [...messages.values()].reduce(
+      (previous, message) =>
+        !previous ||
+        BigInt(message.id) < BigInt(previous.id)
+          ? message
+          : previous,
+      null
+    );
 
-    if (!before) {
+    if (!oldest || oldest.id === before) {
       break;
     }
+
+    before = oldest.id;
   }
 
   return null;
@@ -2548,6 +3026,14 @@ async function VIP_siteExecute({
       client
     ).then(() => {
       if (interaction.__scSiteVipCreated) {
+        resolve(
+          VIP_siteResult({
+            ...record,
+            ...interaction.__scSiteVipCreated,
+            phase: 'created',
+          })
+        );
+
         return;
       }
 
@@ -2657,6 +3143,33 @@ export async function submitVipEventoFromSite({
     return VIP_siteResult(stored, true);
   }
 
+  const running =
+    VIP_SITE_IN_FLIGHT.get(key);
+
+  if (running) {
+    if (running.fingerprint !== fingerprint) {
+      throw VIP_siteFail(
+        409,
+        'O pedido em andamento possui outros dados.'
+      );
+    }
+
+    return running.promise;
+  }
+
+  const activeActorRequest =
+    VIP_SITE_ACTOR_LOCKS.get(actorKey);
+
+  if (
+    activeActorRequest &&
+    activeActorRequest !== key
+  ) {
+    throw VIP_siteFail(
+      429,
+      'Outro pedido seu ainda está sendo enviado. Aguarde a conclusão.'
+    );
+  }
+
   if (stored?.phase === 'pending') {
     const recovered =
       await VIP_siteRecover(
@@ -2677,20 +3190,6 @@ export async function submitVipEventoFromSite({
     if (stored?.phase === 'created') {
       return VIP_siteResult(stored, true);
     }
-  }
-
-  const running =
-    VIP_SITE_IN_FLIGHT.get(key);
-
-  if (running) {
-    if (running.fingerprint !== fingerprint) {
-      throw VIP_siteFail(
-        409,
-        'O pedido em andamento possui outros dados.'
-      );
-    }
-
-    return running.promise;
   }
 
   if (stored?.phase === 'pending') {
@@ -3505,7 +4004,12 @@ if (
         });
 
         const latestContext =
-          await VIP_getLeaderRequestContext(latestMember);
+          await VIP_getLeaderRequestContext(
+            latestMember,
+            {
+              freshMember: true,
+            }
+          );
 
         if (
           !latestMember.roles.cache.has(IDS.LIDERES) ||

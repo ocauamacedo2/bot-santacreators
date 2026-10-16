@@ -423,7 +423,9 @@ function checkPerms(member, type = "CONFIRM") {
 }
 
 function getOrgId(orgString) {
-  const match = orgString.match(/^(\d{2})\s*\|/);
+  const match =
+    String(orgString || '').match(/^\s*(\d+)\s*\|/);
+
   return match ? match[1] : null;
 }
 
@@ -950,6 +952,12 @@ const isUserBypass = isPresenceBypass(interaction.member);
     }
 
     const status = customId.split("_")[2]; // YES ou NO
+
+    if (!["YES", "NO"].includes(status)) {
+      await interaction.editReply("Status de presença inválido.");
+      return true;
+    }
+
     const input = interaction.fields.getTextInputValue("org_input").trim().toLowerCase();
     
     // Removida redeclaração duplicada de 'state' que causava erro
@@ -1334,6 +1342,16 @@ export async function getConfirmacaoPresencaSiteSnapshot({
   guild,
   actorId,
 }) {
+  if (
+    !guild?.members ||
+    !/^\d{17,20}$/.test(String(actorId || ''))
+  ) {
+    throw Object.assign(
+      new Error('Usuário ou servidor inválido.'),
+      { status: 400 }
+    );
+  }
+
   const actor =
     await guild.members
       .fetch({
@@ -1396,15 +1414,20 @@ export async function getConfirmacaoPresencaSiteSnapshot({
             ),
         })
       )
-      .sort(
-        (
-          a,
-          b
-        ) =>
-          a.name.localeCompare(
-            b.name,
-            "pt-BR"
-          )
+      .sort((a, b) =>
+        getOrgNameOnly(a.name).localeCompare(
+          getOrgNameOnly(b.name),
+          "pt-BR",
+          {
+            sensitivity: "base",
+            numeric: true,
+          }
+        ) ||
+        String(a.id || "").localeCompare(
+          String(b.id || ""),
+          "pt-BR",
+          { numeric: true }
+        )
       );
 
   return {
@@ -1479,11 +1502,22 @@ export async function setConfirmacaoPresencaFromSite({
   org,
   status,
 }) {
+  if (
+    !guild?.members ||
+    !/^\d{17,20}$/.test(String(actorId || ''))
+  ) {
+    throw Object.assign(
+      new Error('Usuário ou servidor inválido.'),
+      { status: 400 }
+    );
+  }
+
   const actor =
     await guild.members
-      .fetch(
-        String(actorId)
-      )
+      .fetch({
+        user: String(actorId),
+        force: true,
+      })
       .catch(
         () => null
       );
@@ -1532,9 +1566,9 @@ export async function setConfirmacaoPresencaFromSite({
 
   let ownOrganization = false;
 
-  if (isLeader) {
+  if (isLeader && !checkPerms(actor, "CONFIRM")) {
     const context =
-      await getMemberOrgTicketContext(actor);
+      await getMemberOrgTicketContext(actor, { freshMember: true });
 
     ownOrganization =
       (context.tags || []).some(tag =>
@@ -1561,7 +1595,7 @@ export async function setConfirmacaoPresencaFromSite({
       ownOrganization,
 
     id:
-      `site-presenca-${Date.now()}-${actorId}`,
+      `site-presenca-${crypto.randomUUID()}-${actorId}`,
 
     customId:
       `modal_presenca_${normalizedStatus}`,
@@ -1639,11 +1673,35 @@ export async function setConfirmacaoPresencaFromSite({
     },
   };
 
-  const handled =
-    await confirmacaoPresencaHandleInteraction(
+  let handled;
+
+  try {
+    handled = await confirmacaoPresencaHandleInteraction(
       fakeInteraction,
       client
     );
+  } catch (error) {
+    if (fakeInteraction.__scPresenceApplied !== true) {
+      throw error;
+    }
+
+    console.error(
+      '[PRESENCA SITE] Registro salvo; sincronização incompleta:',
+      {
+        actorId: String(actorId),
+        organization: orgInput,
+        message: error.message,
+      }
+    );
+
+    return {
+      ok: true,
+      status: normalizedStatus,
+      synchronizationPending: true,
+      response:
+        'Confirmação salva. Uma etapa de sincronização com o Discord falhou; não envie novamente.',
+    };
+  }
 
   if (!handled) {
     throw new Error(

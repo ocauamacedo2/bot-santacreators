@@ -277,17 +277,38 @@ function ensureDataFile() {
 
 // ✅ Normaliza formato do JSON (suporta o antigo que era { [userId]: [] })
 function normalizeAll(rawObj) {
-  const obj = rawObj && typeof rawObj === "object" ? rawObj : {};
+  const isRecord = value =>
+    value !== null &&
+    typeof value === 'object' &&
+    !Array.isArray(value);
 
-  // formato novo
-  if (obj.users && typeof obj.users === "object") {
-    obj.byMsgId ??= {};
-    if (typeof obj.byMsgId !== "object") obj.byMsgId = {};
-    return { users: obj.users, byMsgId: obj.byMsgId };
+  if (!isRecord(rawObj)) {
+    throw new Error('Histórico de Set Staff com formato inválido.');
   }
 
-  // formato antigo (legacy): { "123": [ ... ] }
-  return { users: obj, byMsgId: {} };
+  if (Object.hasOwn(rawObj, 'users')) {
+    if (
+      !isRecord(rawObj.users) ||
+      (
+        rawObj.byMsgId !== undefined &&
+        !isRecord(rawObj.byMsgId)
+      )
+    ) {
+      throw new Error(
+        'Índices de Set Staff inválidos; arquivo preservado.'
+      );
+    }
+
+    return {
+      users: rawObj.users,
+      byMsgId: rawObj.byMsgId ?? {},
+    };
+  }
+
+  return {
+    users: rawObj,
+    byMsgId: {},
+  };
 }
 
 function loadAll() {
@@ -360,10 +381,37 @@ function setByMsgId(msgId, payload) {
 }
 
 function getByMsgId(msgId) {
-  if (!msgId) return null;
+  const key = String(msgId || '').trim();
+
+  if (!/^\d{17,20}$/.test(key)) return null;
+
   const all = loadAll();
-  const p = all.byMsgId?.[msgId];
-  return p && typeof p === "object" ? p : null;
+  const indexed = all.byMsgId?.[key];
+
+  if (
+    indexed &&
+    typeof indexed === 'object' &&
+    !Array.isArray(indexed)
+  ) {
+    return indexed;
+  }
+
+  const candidates = Object.values(all.users)
+    .flatMap(history => Array.isArray(history) ? history : [])
+    .filter(item =>
+      item &&
+      typeof item === 'object' &&
+      String(item.msgId || '') === key
+    );
+
+  if (candidates.length !== 1) return null;
+
+  const recovered = { ...candidates[0], msgId: key };
+
+  all.byMsgId[key] = recovered;
+  saveAll(all);
+
+  return recovered;
 }
 
 function updateByMsgIdStatus(msgId, status) {
@@ -3152,30 +3200,140 @@ async function submitSetStaffSiteRequest({
 // SITE HUB • DECIDIR SET STAFF
 // =====================================================
 
-export async function decideSetStaffFromSite({
+async function recoverSetStaffRequestByMessage({
+  client,
+  guild,
+  actor,
+  msgId,
+}) {
+  const channel = await resolveLogChannel(client, CFG.CANAL_REGISTRO);
+
+  if (
+    channel?.guildId !== guild.id ||
+    !channel.messages ||
+    !channel.permissionsFor(actor)?.has([
+      'ViewChannel',
+      'ReadMessageHistory',
+    ])
+  ) {
+    throw Object.assign(
+      new Error('Não foi possível consultar o pedido com seu acesso atual.'),
+      { status: 403 }
+    );
+  }
+
+  const message = await channel.messages.fetch({
+    message: msgId,
+    force: true,
+  }).catch(error => {
+    if (Number(error.code) === 10008) return null;
+
+    throw Object.assign(
+      new Error('O Discord não respondeu à consulta do pedido.'),
+      { status: 503 }
+    );
+  });
+
+  if (!message || message.author?.id !== client.user.id) return null;
+
+  const buttons = (message.components || [])
+    .flatMap(row => row.components || []);
+
+  const approve = buttons.find(button =>
+    !button.disabled &&
+    /^ss2_aprovar_\d{17,20}$/.test(button.customId || '')
+  );
+
+  const reject = approve && buttons.find(button =>
+    !button.disabled &&
+    button.customId === approve.customId.replace(
+      'ss2_aprovar_',
+      'ss2_reprovar_'
+    )
+  );
+
+  if (!approve || !reject) return null;
+
+  const userId = approve.customId.slice('ss2_aprovar_'.length);
+  const request = reconstruirPedidoDoEmbed(message.embeds[0], userId);
+
+  if (!request || String(request.userId) !== userId) return null;
+
+  const all = loadAll();
+
+  if (all.byMsgId[msgId]) return all.byMsgId[msgId];
+
+  const recovered = {
+    ...request,
+    msgId,
+    createdAt: message.createdTimestamp,
+  };
+
+  const history = all.users[userId] ?? [];
+
+  if (!Array.isArray(history)) {
+    throw Object.assign(
+      new Error('O histórico deste usuário precisa ser conferido.'),
+      { status: 503 }
+    );
+  }
+
+  if (!history.some(item => String(item?.msgId || '') === msgId)) {
+    history.push(recovered);
+  }
+
+  all.users[userId] = history;
+  all.byMsgId[msgId] = recovered;
+
+  saveAll(all);
+
+  return recovered;
+}
+
+const setStaffSiteDecisionLocks = new Set();
+
+export async function decideSetStaffFromSite(options) {
+  const key =
+    `${options.guild.id}:${String(options.msgId || '').trim()}`;
+
+  if (setStaffSiteDecisionLocks.has(key)) {
+    throw Object.assign(
+      new Error(
+        'Este pedido já está sendo decidido. Atualize a lista antes de tentar novamente.'
+      ),
+      { status: 409 }
+    );
+  }
+
+  setStaffSiteDecisionLocks.add(key);
+
+  try {
+    return await executeSetStaffDecisionFromSite(options);
+  } finally {
+    setStaffSiteDecisionLocks.delete(key);
+  }
+}
+
+async function executeSetStaffDecisionFromSite({
   client,
   guild,
   actorId,
   msgId,
   action,
 }) {
-  const normalizedActorId =
-    String(
-      actorId ||
-      ""
-    );
+  const normalizedActorId = String(actorId || '').trim();
+  const normalizedMsgId = String(msgId || '').trim();
+  const normalizedAction = String(action || '').trim().toLowerCase();
 
-  const normalizedMsgId =
-    String(
-      msgId ||
-      ""
+  if (
+    !/^\d{17,20}$/.test(normalizedActorId) ||
+    !/^\d{17,20}$/.test(normalizedMsgId)
+  ) {
+    throw Object.assign(
+      new Error('Usuário ou mensagem de Set Staff inválidos.'),
+      { status: 400 }
     );
-
-  const normalizedAction =
-    String(
-      action ||
-      ""
-    ).toLowerCase();
+  }
 
   if (
     ![
@@ -3185,19 +3343,27 @@ export async function decideSetStaffFromSite({
       normalizedAction
     )
   ) {
-    throw new Error(
-      "Ação de Set Staff inválida."
+    throw Object.assign(
+      new Error('Ação de Set Staff inválida.'),
+      { status: 400 }
     );
   }
 
-  const actor =
-    await guild.members
-      .fetch(
-        normalizedActorId
-      )
-      .catch(
-        () => null
-      );
+  const actor = await guild.members.fetch({
+    user: normalizedActorId,
+    force: true,
+  }).catch(error => {
+    if (Number(error.code) === 10007) return null;
+
+    console.error('[SET STAFF SITE] Consulta do responsável:', error);
+
+    throw Object.assign(
+      new Error(
+        'Não foi possível conferir seus cargos no Discord. Tente novamente após atualizar a lista.'
+      ),
+      { status: 503 }
+    );
+  });
 
   if (
     !actor ||
@@ -3209,14 +3375,29 @@ export async function decideSetStaffFromSite({
     throw Object.assign(new Error('Você não possui permissão para aprovar ou reprovar Set Staff.'), { status: 403 });
   }
 
-  const pedido =
-    getByMsgId(
-      normalizedMsgId
-    );
+  const pedido = getByMsgId(normalizedMsgId) ||
+    await recoverSetStaffRequestByMessage({
+      client,
+      guild,
+      actor,
+      msgId: normalizedMsgId,
+    });
 
   if (!pedido) {
-    throw new Error(
-      "Pedido de Set Staff não encontrado."
+    console.warn(
+      "[SET STAFF SITE] Pedido não localizado:",
+      {
+        guildId: guild.id,
+        actorId: normalizedActorId,
+        msgId: normalizedMsgId,
+      }
+    );
+
+    throw Object.assign(
+      new Error(
+        "Pedido de Set Staff não encontrado. Atualize a lista antes de tentar novamente."
+      ),
+      { status: 404 }
     );
   }
 

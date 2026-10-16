@@ -1,4 +1,5 @@
 // /application/events/blacklistFacs.js
+import { runSiteOperation } from "../utils/siteOperationJournal.js";
 import {
   ActionRowBuilder,
   ButtonBuilder,
@@ -8,6 +9,10 @@ import {
   TextInputStyle,
   EmbedBuilder
 } from "discord.js";
+
+import {
+  isOfficialSantaCreatorsTeamMember,
+} from "./hierarquiaDivisoes.js";
 
 // Guard global para evitar múltiplas inicializações
 if (globalThis.__SC_BLACKLIST_MINI_INSTALLED) {
@@ -52,7 +57,9 @@ function extractSnowflakeId(raw) {
   if (!raw) return null;
   const s = String(raw).trim();
   // aceita <@123>, <@!123> ou ID puro
-  const m = s.match(/^<@!?(\d{15,21})>$/) || s.match(/(\d{15,21})/);
+  const m =
+    s.match(/^<@!?(\d{17,20})>$/) ||
+    s.match(/^(\d{17,20})$/);
   return m ? m[1] : null;
 }
 
@@ -201,12 +208,28 @@ export async function getBlacklistSiteSnapshot({
   member,
   before,
 }) {
-  if (
-    member?.guild?.id !== guild.id ||
-    !member.roles.cache.has('1353858422063239310')
-  ) {
+  const sameGuild =
+    member?.guild?.id === guild.id;
+
+  const communityReader =
+    sameGuild &&
+    (
+      member.id === '660311795327828008' ||
+      isOfficialSantaCreatorsTeamMember(member) ||
+      hasAnyAllowedRole(member) ||
+      member.roles.cache.has('1353858422063239310') ||
+      member.roles.cache.has('1352275728476930099') ||
+      (
+        member.roles.cache.has('1262978759922028575') &&
+        !member.roles.cache.has('1430984036972494908')
+      )
+    );
+
+  if (!communityReader) {
     throw Object.assign(
-      new Error('Esta consulta é exclusiva dos líderes.'),
+      new Error(
+        'Seu acesso atual não permite consultar a blacklist.'
+      ),
       { status: 403 }
     );
   }
@@ -289,12 +312,209 @@ export async function getBlacklistSiteSnapshot({
 
   return {
     records,
+
+    rights: {
+      view: true,
+      create: hasAnyAllowedRole(member),
+    },
+
     nextBefore:
       page.size === 100
         ? page.last()?.id || null
         : null,
+
     generatedAt: Date.now(),
   };
+}
+
+const blacklistSiteLocks = new Set();
+
+export async function submitBlacklistFromSite(options) {
+  return runSiteOperation({
+    action: 'orgblacklist.submit',
+    guildId: options.guild.id,
+    actorId: options.actorId,
+    payload: options.payload || {},
+    authorize: async () => {
+      const member = await options.guild.members.fetch({
+        user: String(options.actorId), force: true,
+      });
+
+      if (
+        member.guild.id !== options.guild.id ||
+        !hasAnyAllowedRole(member)
+      ) {
+        throw Object.assign(
+          new Error('Seu acesso atual não permite este registro.'),
+          { status: 403 }
+        );
+      }
+    },
+    execute: () => executeBlacklistFromSite(options),
+  });
+}
+
+async function executeBlacklistFromSite({
+  client,
+  guild,
+  actorId,
+  payload = {},
+}) {
+  const lockKey =
+    `${guild.id}:${actorId}`;
+
+  if (blacklistSiteLocks.has(lockKey)) {
+    throw Object.assign(
+      new Error(
+        "Já existe um cadastro de blacklist em processamento para sua conta."
+      ),
+      { status: 409 }
+    );
+  }
+
+  blacklistSiteLocks.add(lockKey);
+
+  try {
+    const member =
+      await guild.members.fetch({
+        user: String(actorId),
+        force: true,
+      });
+
+    if (
+      member.guild.id !== guild.id ||
+      !hasAnyAllowedRole(member)
+    ) {
+      throw Object.assign(
+        new Error(
+          "Seu cargo atual não permite cadastrar blacklist."
+        ),
+        { status: 403 }
+      );
+    }
+
+    const fields = {
+      [INPUT_ORG_ID]:
+        String(payload.org || "").trim(),
+
+      [INPUT_FAMILIA_ID]:
+        String(payload.familia || "").trim(),
+
+      [INPUT_RESP_AUTORIZOU_ID]:
+        String(payload.resp || "").trim(),
+
+      [INPUT_MOTIVO_ID]:
+        String(payload.motivo || "").trim(),
+    };
+
+    const limits = {
+      [INPUT_ORG_ID]: 256,
+      [INPUT_FAMILIA_ID]: 256,
+      [INPUT_RESP_AUTORIZOU_ID]: 128,
+      [INPUT_MOTIVO_ID]: 1024,
+    };
+
+    for (const [key, value] of Object.entries(fields)) {
+      if (!value || value.length > limits[key]) {
+        throw Object.assign(
+          new Error(
+            "Preencha organização, família, responsável e motivo dentro dos limites do formulário."
+          ),
+          { status: 400 }
+        );
+      }
+    }
+
+    if (
+      !extractSnowflakeId(
+        fields[INPUT_RESP_AUTORIZOU_ID]
+      )
+    ) {
+      throw Object.assign(
+        new Error(
+          "Informe um ID Discord válido ou a menção do responsável."
+        ),
+        { status: 400 }
+      );
+    }
+
+    const interaction = {
+      siteOrigin: true,
+      client,
+      guild,
+      guildId: guild.id,
+      member,
+      user: member.user,
+      customId: MODAL_ID,
+      deferred: false,
+      replied: false,
+      lastReply: null,
+
+      fields: {
+        getTextInputValue(key) {
+          return fields[key] || "";
+        },
+      },
+
+      isButton() {
+        return false;
+      },
+
+      isModalSubmit() {
+        return true;
+      },
+
+      isRepliable() {
+        return true;
+      },
+
+      async deferReply() {
+        this.deferred = true;
+      },
+
+      async reply(value) {
+        this.replied = true;
+        this.lastReply = value;
+        return value;
+      },
+
+      async editReply(value) {
+        this.lastReply = value;
+        return value;
+      },
+    };
+
+    await blacklistFacsHandleInteraction(
+      interaction,
+      client
+    );
+
+    if (!interaction.__scBlacklistApplied) {
+      const reply =
+        interaction.lastReply;
+
+      throw Object.assign(
+        new Error(
+          typeof reply === "string"
+            ? reply
+            : reply?.content ||
+              "O cadastro de blacklist não foi confirmado."
+        ),
+        { status: 409 }
+      );
+    }
+
+    return {
+      ok: true,
+
+      message:
+        "Blacklist registrada no Discord.",
+
+      ...interaction.__scBlacklistApplied,
+    };
+  } finally {
+    blacklistSiteLocks.delete(lockKey);
+  }
 }
 
 export async function blacklistFacsOnReady(client) {
@@ -433,21 +653,50 @@ export async function blacklistFacsHandleInteraction(interaction, client) {
         .setFooter({ text: `Registrado por: ${interaction.user.tag}` })
         .setTimestamp();
 
-      const ch = await interaction.client.channels.fetch(BLACKLIST_BUTTON_CHANNEL_ID).catch(() => null);
-      if (!ch || !ch.isTextBased()) {
-        return interaction.editReply("⚠️ Não consegui acessar o canal de registros.");
+      const ch =
+        await interaction.client.channels.fetch(
+          BLACKLIST_BUTTON_CHANNEL_ID
+        ).catch(() => null);
+
+      if (
+        !ch ||
+        !ch.isTextBased() ||
+        typeof ch.send !== "function" ||
+        ch.guildId !== interaction.guildId
+      ) {
+        return interaction.editReply(
+          "⚠️ Não consegui acessar o canal de registros deste servidor."
+        );
       }
 
       // ✅ Menciona quem registrou + quem autorizou
-      await ch.send({
+      const publishedBlacklist = await ch.send({
         content: `📌 Registro por <@${interaction.user.id}> • ✅ Autorizado por <@${respId}>`,
         embeds: [registro],
-      }).catch(() => {});
+      });
 
-      await interaction.editReply("✅ Blacklist registrada com sucesso!");
+      interaction.__scBlacklistApplied = {
+        messageId: publishedBlacklist.id,
+        url: publishedBlacklist.url,
+      };
+
+      await interaction.editReply(
+        "✅ Blacklist registrada com sucesso!"
+      );
 
       // reexibe um único botão “limpo” no final
-      await sendFreshBlacklistButton(ch, client.user);
+      if (interaction.siteOrigin !== true) {
+        await sendFreshBlacklistButton(
+          ch,
+          client.user
+        ).catch(error => {
+          console.warn(
+            "[Blacklist] Registro publicado, mas o painel não foi atualizado:",
+            error
+          );
+        });
+      }
+
       return true;
     }
   } catch (err) {

@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { runSiteOperation } from "../utils/siteOperationJournal.js";
 import {
   EmbedBuilder,
   ButtonBuilder,
@@ -133,18 +134,54 @@ export default async function setupBatePonto(client) {
       return out;
     }
 
-    function saveMonthToDisk(state) {
+    function saveMonthToDisk(
+      state,
+      required = false
+    ) {
       try {
-        if (!state?.monthKey) return;
+        if (!state?.monthKey) {
+          if (required) {
+            throw new Error(
+              "O mês do bate-ponto não foi identificado."
+            );
+          }
+
+          return;
+        }
+
         ensureBpStateDir();
 
-        const file = bpMonthFile(state.monthKey);
-        const tmp = `${file}.tmp`;
+        const file =
+          bpMonthFile(
+            state.monthKey
+          );
 
-        fs.writeFileSync(tmp, JSON.stringify(state, null, 2), "utf8");
-        fs.renameSync(tmp, file);
+        const tmp =
+          `${file}.tmp`;
+
+        fs.writeFileSync(
+          tmp,
+          JSON.stringify(
+            state,
+            null,
+            2
+          ),
+          "utf8"
+        );
+
+        fs.renameSync(
+          tmp,
+          file
+        );
       } catch (e) {
-        console.error("[SC_BP] saveMonthToDisk error:", e);
+        console.error(
+          "[SC_BP] saveMonthToDisk error:",
+          e
+        );
+
+        if (required) {
+          throw e;
+        }
       }
     }
 
@@ -184,7 +221,22 @@ export default async function setupBatePonto(client) {
         .map((s) => s.trim())
         .filter(Boolean);
 
-    const ALLOWED = Array.from(new Set([...fromEnv(CFG.ROLES_ENV), ...EXTRA_ALLOWED_ROLES]));
+    const SITE_OPERATIONAL_PUNCH_ROLES = [
+      "1388975939161161728",
+      "1388976155830255697",
+      "1392678638176043029",
+      "1388976094920704141",
+      "1387253972661964840",
+      "1388976314253312100",
+    ];
+
+    const ALLOWED = Array.from(
+      new Set([
+        ...fromEnv(CFG.ROLES_ENV),
+        ...EXTRA_ALLOWED_ROLES,
+        ...SITE_OPERATIONAL_PUNCH_ROLES,
+      ])
+    );
     const CLEAR_ALLOWED = Array.from(
       new Set([
         ...(fromEnv(CFG.CLEAR_ROLES_ENV).length ? fromEnv(CFG.CLEAR_ROLES_ENV) : fromEnv(CFG.ROLES_ENV)),
@@ -200,6 +252,19 @@ export default async function setupBatePonto(client) {
     };
     const canClick = (m) => hasAnyRole(m, ALLOWED);
     const canClear = (m) => hasAnyRole(m, CLEAR_ALLOWED);
+
+    const canBypassPunch = member =>
+      Boolean(
+        member &&
+        (
+          member.id === process.env.OWNER ||
+          member.id === "660311795327828008" ||
+          member.id === "1262262852949905408" ||
+          member.roles?.cache?.has(
+            "1262262852949905408"
+          )
+        )
+      );
 
     // ===== GIF =====
     const GIF =
@@ -942,6 +1007,9 @@ try {
         // console.log(`[SC_BP] ${CFG.VERSION} pronto. userId=${client.user?.id}`);
         await boot();
 
+        client.__SC_BP_SITE_READY__ =
+          true;
+
         // ✅ avisa o GeralDash para reconstruir bate-ponto após boot
         await notifyDashSync();
 
@@ -1002,6 +1070,628 @@ try {
       }
     });
 
+    client.__SC_BP_SITE_API__ = {
+      form:
+        getBatePontoSiteForm,
+
+      submit:
+        submitBatePontoFromSite,
+    };
+
+    const batePontoSiteLocks =
+      new Set();
+
+    async function submitBatePontoFromSite(options) {
+      return runSiteOperation({
+        action: 'timeclock.submit',
+        guildId: options.guild.id,
+        actorId: options.actorId,
+        payload: options.payload || {},
+        authorize: async () => {
+          const member = await options.guild.members.fetch({
+            user: String(options.actorId), force: true,
+          });
+
+          const form = await getBatePontoSiteForm({
+            guild: options.guild,
+            member,
+          });
+
+          if (
+            member.guild.id !== options.guild.id ||
+            form.rights?.view !== true
+          ) {
+            throw Object.assign(
+              new Error('Seu acesso atual não permite este registro.'),
+              { status: 403 }
+            );
+          }
+        },
+        execute: () => executeBatePontoFromSite(options),
+      });
+    }
+
+    async function executeBatePontoFromSite({
+      guild,
+      actorId,
+      payload = {},
+    }) {
+      const lockKey =
+        `${guild.id}:${actorId}`;
+
+      if (batePontoSiteLocks.has(lockKey)) {
+        throw Object.assign(
+          new Error(
+            "Seu bate-ponto já está sendo processado."
+          ),
+          { status: 409 }
+        );
+      }
+
+      batePontoSiteLocks.add(lockKey);
+
+      try {
+        if (
+          !client.isReady() ||
+          client.__SC_BP_SITE_READY__ !== true
+        ) {
+          throw Object.assign(
+            new Error(
+              "O bate-ponto ainda está sincronizando os registros."
+            ),
+            { status: 503 }
+          );
+        }
+
+        const member =
+          await guild.members.fetch({
+            user:
+              String(actorId),
+
+            force:
+              true,
+          });
+
+        const form =
+          await getBatePontoSiteForm({
+            guild,
+            member,
+          });
+
+        if (form.rights.view !== true) {
+          throw Object.assign(
+            new Error(
+              form.reason ||
+              "Seu cargo não permite bater ponto nesta área."
+            ),
+            { status: 403 }
+          );
+        }
+
+        const firstName =
+          String(
+            payload.firstName || ""
+          )
+            .trim()
+            .split(/\s+/)[0];
+
+        if (
+          !firstName ||
+          firstName.length < 2 ||
+          firstName.length > 16
+        ) {
+          throw Object.assign(
+            new Error(
+              "Informe seu primeiro nome com 2 a 16 caracteres."
+            ),
+            { status: 400 }
+          );
+        }
+
+        const channel =
+          await guild.channels.fetch(
+            form.channelId
+          );
+
+        if (
+          channel?.guildId !== guild.id ||
+          typeof channel.send !== "function"
+        ) {
+          throw Object.assign(
+            new Error(
+              "O canal de bate-ponto está indisponível."
+            ),
+            { status: 503 }
+          );
+        }
+
+        const bypass =
+          canBypassPunch(member);
+
+        if (
+          !withinWindow() &&
+          !bypass
+        ) {
+          throw Object.assign(
+            new Error(
+              "Bate-ponto disponível das 19:00 às 00:00 e das 00:30 às 03:30."
+            ),
+            { status: 409 }
+          );
+        }
+
+        const alreadyAt =
+          getAlreadyPunchedTime(
+            member.id
+          );
+
+        if (
+          alreadyAt &&
+          !bypass
+        ) {
+          throw Object.assign(
+            new Error(
+              `Você já bateu ponto neste turno: ${alreadyAt}.`
+            ),
+            { status: 409 }
+          );
+        }
+
+        const real =
+          nowParts();
+
+        const effective =
+          effectiveKeyParts();
+
+        const monthKey =
+          effective.monthKey;
+
+        ensureMonth(
+          monthKey
+        );
+
+        const dayKey =
+          `${monthKey}-${String(effective.dd).padStart(2, "0")}`;
+
+        const timeStr =
+          `${String(real.dd).padStart(2, "0")}/${String(real.mm).padStart(2, "0")}/${real.yyyy} ` +
+          `${String(real.hh).padStart(2, "0")}:${String(real.mi).padStart(2, "0")}`;
+
+        const previousEntries = [
+          ...(STATE.days[dayKey] || []),
+        ];
+
+        const punchData = {
+          uid:
+            member.id,
+
+          mention:
+            `<@${member.id}>`,
+
+          name:
+            firstName,
+
+          time:
+            timeStr,
+
+          team:
+            form.team,
+        };
+
+        if (bypass) {
+          STATE.days[dayKey] ||= [];
+          STATE.days[dayKey].push(
+            punchData
+          );
+        } else {
+          addIfMissing(
+            dayKey,
+            punchData
+          );
+        }
+
+        try {
+          saveMonthToDisk(
+            STATE,
+            true
+          );
+        } catch (error) {
+          STATE.days[dayKey] =
+            previousEntries;
+
+          throw Object.assign(
+            new Error(
+              "Não foi possível salvar o bate-ponto. Nenhum novo crédito foi emitido."
+            ),
+            {
+              status: 503,
+              cause: error,
+            }
+          );
+        }
+
+        const warnings = [];
+
+        for (const [event, data] of [
+          [
+            "bp:punch",
+            {
+              userId:
+                member.id,
+
+              team:
+                form.team,
+
+              timeStr,
+
+              __at:
+                Date.now(),
+            },
+          ],
+          [
+            "bp:sync",
+            {
+              __at:
+                Date.now(),
+
+              source:
+                "batePonto-site-submit",
+            },
+          ],
+        ]) {
+          try {
+            dashEmit(
+              event,
+              data
+            );
+          } catch (error) {
+            console.error(
+              "[SC_BP SITE] Falha ao notificar o ranking:",
+              {
+                event,
+                error,
+              }
+            );
+
+            warnings.push(
+              "O ponto foi salvo, mas a atualização do ranking precisa ser conferida."
+            );
+          }
+        }
+
+        let published = null;
+
+        try {
+          published =
+            await channel.send({
+              embeds: [
+                embPunch({
+                  user:
+                    member.user,
+
+                  channel,
+
+                  team:
+                    form.team,
+
+                  timeStr,
+
+                  name:
+                    firstName,
+                }),
+              ],
+            });
+        } catch (error) {
+          console.error(
+            "[SC_BP SITE] Ponto salvo; publicação da mensagem falhou:",
+            error
+          );
+
+          warnings.push(
+            "O ponto foi salvo, mas a mensagem na área da equipe não foi publicada."
+          );
+        }
+
+        try {
+          const calendar =
+            await client.channels.fetch(
+              CFG.CHANNELS.calendar
+            );
+
+          if (!calendar) {
+            throw new Error(
+              "Calendário indisponível."
+            );
+          }
+
+          await persist(
+            calendar,
+            monthKey
+          );
+
+          await syncMonth();
+        } catch (error) {
+          console.error(
+            "[SC_BP SITE] Ponto salvo; sincronização do calendário falhou:",
+            error
+          );
+
+          warnings.push(
+            "O ponto foi salvo, mas o calendário precisa ser sincronizado."
+          );
+        }
+
+        return {
+          ok: true,
+
+          message:
+            "Bate-ponto salvo. Não é necessário registrar novamente.",
+
+          dayKey,
+          timeStr,
+
+          team:
+            form.team,
+
+          messageId:
+            published?.id || null,
+
+          url:
+            published?.url || null,
+
+          warnings:
+            [...new Set(warnings)],
+        };
+      } finally {
+        batePontoSiteLocks.delete(
+          lockKey
+        );
+      }
+    }
+
+    async function getBatePontoSiteForm({
+      guild,
+      member,
+    }) {
+      if (
+        member?.guild?.id !== guild.id ||
+        guild.client !== client
+      ) {
+        throw Object.assign(
+          new Error(
+            "Membro ou servidor inválido para o bate-ponto."
+          ),
+          { status: 403 }
+        );
+      }
+
+      const area =
+        resolveBatePontoSiteArea(
+          member
+        );
+
+      if (
+        !canClick(member) ||
+        !area
+      ) {
+        return {
+          rights: {
+            view: false,
+            canPunch: false,
+          },
+
+          fields: [],
+
+          reason:
+            "Seu cargo atual não possui uma área de bate-ponto habilitada no site.",
+        };
+      }
+
+      const channel =
+        await guild.channels.fetch(
+          area.channelId
+        );
+
+      const canView =
+        channel?.guildId === guild.id &&
+        typeof channel.send === "function" &&
+        channel.permissionsFor(member)?.has([
+          "ViewChannel",
+          "ReadMessageHistory",
+        ]) === true;
+
+      if (!canView) {
+        return {
+          rights: {
+            view: false,
+            canPunch: false,
+          },
+
+          fields: [],
+
+          reason:
+            "Você não possui acesso ao canal de bate-ponto da sua área.",
+        };
+      }
+
+      const ready =
+        client.__SC_BP_SITE_READY__ === true;
+
+      const bypass =
+        canBypassPunch(member);
+
+      const alreadyAt =
+        getAlreadyPunchedTime(
+          member.id
+        );
+
+      const windowOpen =
+        withinWindow();
+
+      const canPunch =
+        ready &&
+        (
+          bypass ||
+          (
+            windowOpen &&
+            !alreadyAt
+          )
+        );
+
+      let reason =
+        "Bate-ponto disponível.";
+
+      if (!ready) {
+        reason =
+          "O bate-ponto está sincronizando os registros iniciais.";
+      } else if (!bypass && alreadyAt) {
+        reason =
+          `Você já bateu ponto neste turno: ${alreadyAt}.`;
+      } else if (!bypass && !windowOpen) {
+        reason =
+          "Disponível das 19:00 às 00:00 e das 00:30 às 03:30.";
+      }
+
+      return {
+        rights: {
+          view: true,
+          canPunch,
+        },
+
+        channelId:
+          area.channelId,
+
+        team:
+          area.team,
+
+        windowOpen,
+        alreadyAt,
+        reason,
+
+        fields: [
+          {
+            key:
+              "firstName",
+
+                        label:
+              "Seu primeiro nome",
+
+            minLength: 2,
+
+            maxLength: 2,
+
+            maxLength:
+              16,
+
+            placeholder:
+              "Ex.: Macedo",
+          },
+        ],
+      };
+    }
+
+    function resolveBatePontoSiteArea(member) {
+      const roles =
+        member?.roles?.cache;
+
+      if (!roles) {
+        return null;
+      }
+
+      if (
+        member.id === process.env.OWNER ||
+        member.id === "660311795327828008" ||
+        roles.has("1262262852949905408") ||
+        roles.has("1352408327983861844") ||
+        roles.has("1262262852949905409") ||
+        roles.has("1352407252216184833") ||
+        roles.has("1414651836861907006")
+      ) {
+        return {
+          channelId:
+            CFG.CHANNELS.responsaveis,
+
+          team:
+            "Responsáveis",
+        };
+      }
+
+      if (
+        roles.has("1388976314253312100") ||
+        roles.has("1352385500614234134")
+      ) {
+        return {
+          channelId:
+            CFG.CHANNELS.coord,
+
+          team:
+            "Coordenação",
+        };
+      }
+
+      if (roles.has("1388975939161161728")) {
+        return {
+          channelId:
+            CFG.CHANNELS.gestor,
+
+          team:
+            "Gestor",
+        };
+      }
+
+      const operationalAreas = {
+        "1388976155830255697": {
+          channelId:
+            CFG.CHANNELS.manager,
+
+          team:
+            "Manager",
+        },
+
+        "1392678638176043029": {
+          channelId:
+            CFG.CHANNELS.manager,
+
+          team:
+            "Manager",
+        },
+
+        "1388976094920704141": {
+          channelId:
+            CFG.CHANNELS.sm,
+
+          team:
+            "Social Medias",
+        },
+
+        "1387253972661964840": {
+          channelId:
+            CFG.CHANNELS.sm,
+
+          team:
+            "Social Medias",
+        },
+      };
+
+      const role = [
+        ...roles.values(),
+      ]
+        .filter(item =>
+          Object.hasOwn(
+            operationalAreas,
+            item.id
+          )
+        )
+        .sort(
+          (first, second) =>
+            second.position - first.position
+        )[0];
+
+      return role
+        ? operationalAreas[role.id]
+        : null;
+    }
+
     // ===== Interações =====
     client.on(Events.InteractionCreate, async (it) => {
       try {
@@ -1014,7 +1704,10 @@ try {
         if (!isMyInteraction) return;
 
         // ✅ ISENÇÃO DE REGRAS (HORÁRIO E LIMITE)
-        const isBypassUser = it.user.id === process.env.OWNER || ["660311795327828008", "1262262852949905408"].includes(it.user.id);
+        const isBypassUser =
+          canBypassPunch(
+            it.member
+          );
 
         if (it.isButton() && it.customId === CFG.KEYS.BUTTON_PUNCH) {
           if (!canClick(it.member)) return it.reply({ ephemeral: true, embeds: [err("Você não tem permissão para bater ponto aqui.")] });
@@ -1049,6 +1742,19 @@ try {
         }
 
         if (it.isModalSubmit() && it.customId === CFG.KEYS.MODAL_ID) {
+          if (!canClick(it.member)) {
+            return it.reply({
+              flags:
+                MessageFlags.Ephemeral,
+
+              embeds: [
+                err(
+                  "Seu cargo atual não permite bater ponto."
+                ),
+              ],
+            });
+          }
+
           const firstName = (it.fields.getTextInputValue(CFG.KEYS.MODAL_NAME_ID) || "")
             .trim()
             .split(/\s+/)[0]
@@ -1098,6 +1804,10 @@ try {
             team
           };
 
+          const previousDayEntries = [
+            ...(STATE.days[dayKey] || []),
+          ];
+
           // ✅ Se for usuário bypass, ignora a trava de duplicidade (mesmo no mesmo minuto)
           if (isBypassUser) {
             STATE.days[dayKey] ??= [];
@@ -1106,23 +1816,60 @@ try {
             addIfMissing(dayKey, punchData);
           }
 
+          try {
+            saveMonthToDisk(
+              STATE,
+              true
+            );
+          } catch (error) {
+            STATE.days[dayKey] =
+              previousDayEntries;
+
+            throw error;
+          }
+
           await it.reply({
             embeds: [embPunch({ user: it.user, channel: it.channel, team, timeStr, name: firstName })]
           }).catch(() => {});
 
           // desce o botão
-          await refreshStickyOnPunch(it.channel, team);
+          await refreshStickyOnPunch(
+            it.channel,
+            team
+          ).catch(error => {
+            console.warn(
+              "[SC_BP] Ponto salvo; falha ao atualizar o botão fixo:",
+              error
+            );
+          });
 
-          // persiste primeiro no calendário
-          const cal = await client.channels.fetch(CFG.CHANNELS.calendar).catch(() => null);
+          // O registro local já foi salvo antes das operações de rede.
+          const cal =
+            await client.channels.fetch(
+              CFG.CHANNELS.calendar
+            ).catch(() => null);
+
           if (cal) {
-            await persist(cal, monthKey);
+            await persist(
+              cal,
+              monthKey
+            ).catch(error => {
+              console.warn(
+                "[SC_BP] Ponto salvo; falha ao persistir no calendário:",
+                error
+              );
+            });
           }
 
           // atualiza a linha do tempo
-          await syncMonth();
+          await syncMonth().catch(error => {
+            console.warn(
+              "[SC_BP] Ponto salvo; falha ao sincronizar a linha do tempo:",
+              error
+            );
+          });
 
-          // ✅ depois de persistir/sincronizar, avisa o dash
+          // ✅ após salvar o ponto, avisa o dash
           try {
             dashEmit("bp:punch", {
               userId: it.user.id,

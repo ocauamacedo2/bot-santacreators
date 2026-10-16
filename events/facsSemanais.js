@@ -70,6 +70,9 @@ const FACSMENU_GIF =
 const FACSMENU_STORE = "./facs_semanais.json";
 const FACSMENU_BACKUPS_STORE = "./facs_semanais.backups.json";
 
+const FACSMENU_SITE_HISTORY_STORE =
+  "./data/facs_semanais_site_history.json";
+
 // Canal do RM (pra repopular pelos aprovados)
 const CANAL_REGISTRO_MANAGER_ID = "1392680204517769277";
 
@@ -178,6 +181,164 @@ function writeJSON(file, data) {
 // ===============================
 // STATE
 // ===============================
+function isFacsSiteHistory(value) {
+  if (
+    !value ||
+    typeof value !== "object" ||
+    Array.isArray(value) ||
+    value.version !== 1 ||
+    !value.weeks ||
+    typeof value.weeks !== "object" ||
+    Array.isArray(value.weeks)
+  ) {
+    return false;
+  }
+
+  return Object.entries(
+    value.weeks
+  ).every(([key, sample]) =>
+    /^\d{4}-\d{2}-\d{2}$/.test(key) &&
+    sample &&
+    typeof sample === "object" &&
+    !Array.isArray(sample) &&
+    sample.weekKey === key &&
+    typeof sample.lista === "string" &&
+    Number.isFinite(sample.observedAt) &&
+    sample.observedAt > 0
+  );
+}
+
+function readFacsSiteHistory() {
+  if (
+    !fs.existsSync(
+      FACSMENU_SITE_HISTORY_STORE
+    )
+  ) {
+    return {
+      version: 1,
+      weeks: {},
+    };
+  }
+
+  const value =
+    JSON.parse(
+      fs.readFileSync(
+        FACSMENU_SITE_HISTORY_STORE,
+        "utf8"
+      )
+    );
+
+  if (!isFacsSiteHistory(value)) {
+    throw new Error(
+      "O histórico semanal de convites possui formato inválido."
+    );
+  }
+
+  return value;
+}
+
+function buildFacsSiteHistorySample(
+  state,
+  options = {}
+) {
+  const weekKey =
+    String(state?.weekKey || "");
+
+  const observedAt =
+    Number(
+      options.observedAt ??
+      Date.now()
+    );
+
+  const date =
+    new Date(
+      weekKey + "T12:00:00Z"
+    );
+
+  if (
+    !/^\d{4}-\d{2}-\d{2}$/.test(weekKey) ||
+    !Number.isFinite(date.getTime()) ||
+    date.toISOString().slice(0, 10) !== weekKey ||
+    date.getUTCDay() !== 0 ||
+    typeof state?.lista !== "string" ||
+    !Number.isFinite(observedAt) ||
+    observedAt <= 0
+  ) {
+    throw new Error(
+      "A observação semanal de convites está inválida."
+    );
+  }
+
+  return {
+    weekKey,
+
+    lista:
+      state.lista,
+
+    observedAt,
+
+    source:
+      String(
+        options.source || "state"
+      ),
+  };
+}
+
+function archiveFacsSiteWeek(
+  state,
+  options = {}
+) {
+  try {
+    const sample =
+      buildFacsSiteHistorySample(
+        state,
+        options
+      );
+
+    const history =
+      readFacsSiteHistory();
+
+    const previous =
+      history.weeks[
+        sample.weekKey
+      ];
+
+    if (
+      previous &&
+      previous.observedAt > sample.observedAt
+    ) {
+      return true;
+    }
+
+    history.weeks[
+      sample.weekKey
+    ] = sample;
+
+    writeJSON(
+      FACSMENU_SITE_HISTORY_STORE,
+      history
+    );
+
+    return true;
+  } catch (error) {
+    console.warn(
+      "[FACS SITE HISTORY] Não foi possível preservar a observação:",
+      {
+        weekKey:
+          state?.weekKey || null,
+
+        source:
+          options.source || "state",
+
+        message:
+          error.message,
+      }
+    );
+
+    return false;
+  }
+}
+
 function blankState(weekKey) {
   return {
     channelId: null,
@@ -210,7 +371,47 @@ function loadStore() {
 
 
 function saveStore(s) {
-  writeJSON(FACSMENU_STORE, s);
+  if (
+    fs.existsSync(
+      FACSMENU_STORE
+    )
+  ) {
+    try {
+      const previous =
+        JSON.parse(
+          fs.readFileSync(
+            FACSMENU_STORE,
+            "utf8"
+          )
+        );
+
+      archiveFacsSiteWeek(
+        previous,
+        {
+          source:
+            "before-replacement",
+        }
+      );
+    } catch (error) {
+      console.warn(
+        "[FACS SITE HISTORY] Não foi possível ler o estado anterior:",
+        error.message
+      );
+    }
+  }
+
+  writeJSON(
+    FACSMENU_STORE,
+    s
+  );
+
+  archiveFacsSiteWeek(
+    s,
+    {
+      source:
+        "state",
+    }
+  );
 }
 
 export function facsSemanaisDuplicateFromRM(orgId, orgName) {
@@ -260,6 +461,38 @@ function saveBackups(b) {
 }
 let facsBackups = loadBackups();
 
+for (
+  const snapshot
+  of [
+    ...(Array.isArray(facsBackups)
+      ? facsBackups
+      : []),
+  ].sort(
+    (first, second) =>
+      Number(first?.ts || 0) -
+      Number(second?.ts || 0)
+  )
+) {
+  archiveFacsSiteWeek(
+    snapshot,
+    {
+      observedAt:
+        snapshot?.ts,
+
+      source:
+        "backup-parcial",
+    }
+  );
+}
+
+archiveFacsSiteWeek(
+  facsState,
+  {
+    source:
+      "state-at-startup",
+  }
+);
+
 function pushBackup(reason = "edit") {
   try {
     const snap = {
@@ -271,9 +504,26 @@ function pushBackup(reason = "edit") {
     const last = facsBackups[facsBackups.length - 1];
     const same = last && last.weekKey === snap.weekKey && last.lista === snap.lista;
     if (!same) {
+      archiveFacsSiteWeek(
+        snap,
+        {
+          observedAt:
+            snap.ts,
+
+          source:
+            "backup",
+        }
+      );
+
       facsBackups.push(snap);
-      if (facsBackups.length > 20) facsBackups.shift();
-      saveBackups(facsBackups);
+
+      if (facsBackups.length > 20) {
+        facsBackups.shift();
+      }
+
+      saveBackups(
+        facsBackups
+      );
     }
   } catch {}
 }
@@ -1976,6 +2226,201 @@ export async function getFacsSemanaisSiteSnapshot({
     organizations,
     source,
     generatedAt: Date.now(),
+  };
+}
+
+export async function getFacsSemanaisHistorySiteSnapshot({
+  client,
+  guild,
+}) {
+  const history =
+    readFacsSiteHistory();
+
+  const samples =
+    new Map(
+      Object.entries(
+        history.weeks
+      )
+    );
+
+  for (
+    const backup
+    of Array.isArray(facsBackups)
+      ? facsBackups
+      : []
+  ) {
+    try {
+      const sample =
+        buildFacsSiteHistorySample(
+          backup,
+          {
+            observedAt:
+              backup.ts,
+
+            source:
+              "backup-parcial",
+          }
+        );
+
+      const previous =
+        samples.get(
+          sample.weekKey
+        );
+
+      if (
+        !previous ||
+        sample.observedAt > previous.observedAt
+      ) {
+        samples.set(
+          sample.weekKey,
+          sample
+        );
+      }
+    } catch {
+      // Um backup inválido não é convertido em total zero.
+    }
+  }
+
+  const countOrganizations = lista => {
+    const names =
+      _lines(lista)
+        .map(line =>
+          _extractOrgNameFromLine(
+            line
+          )
+        )
+        .map(name =>
+          String(name)
+            .replace(
+              /<@&(\d{17,20})>/g,
+              (_, id) =>
+                guild.roles.cache.get(id)?.name ||
+                id
+            )
+            .normalize("NFD")
+            .replace(/\p{Diacritic}/gu, "")
+            .replace(/\s+/g, " ")
+            .trim()
+            .toLowerCase()
+        )
+        .filter(Boolean);
+
+    return new Set(names).size;
+  };
+
+  const warnings = [];
+
+  let current = null;
+
+  try {
+    current =
+      await getFacsSemanaisSiteSnapshot({
+        client,
+        guild,
+      });
+  } catch (error) {
+    console.warn(
+      "[FACS SITE HISTORY] Lista atual indisponível:",
+      error.message
+    );
+
+    warnings.push(
+      "A lista atual não pôde ser consultada. Quando disponível, o gráfico usa a última observação salva."
+    );
+  }
+
+  const currentWeekKey =
+    getCurrentWeekSP().weekKey;
+
+  const weeks =
+    Array.from(
+      { length: 4 },
+      (_, index) => {
+        const date =
+          new Date(
+            currentWeekKey +
+            "T12:00:00Z"
+          );
+
+        date.setUTCDate(
+          date.getUTCDate() -
+          (3 - index) * 7
+        );
+
+        const weekKey =
+          date.toISOString().slice(0, 10);
+
+        const isCurrent =
+          weekKey === currentWeekKey;
+
+        const label =
+          isCurrent
+            ? "Esta semana"
+            : index === 2
+              ? "Semana passada"
+              : index === 1
+                ? "Semana retrasada"
+                : "Há três semanas";
+
+        if (
+          isCurrent &&
+          current?.currentWeek === true
+        ) {
+          return {
+            weekKey,
+            label,
+
+            available:
+              true,
+
+            count:
+              current.organizations.length,
+
+            source:
+              current.source,
+
+            observedAt:
+              current.generatedAt,
+          };
+        }
+
+        const sample =
+          samples.get(
+            weekKey
+          );
+
+        return {
+          weekKey,
+          label,
+
+          available:
+            Boolean(sample),
+
+          count:
+            sample
+              ? countOrganizations(
+                  sample.lista
+                )
+              : null,
+
+          source:
+            sample?.source || null,
+
+          observedAt:
+            sample?.observedAt || null,
+        };
+      }
+    );
+
+  return {
+    weeks,
+    warnings,
+
+    definition:
+      "Organizações únicas na última lista observada de cada semana.",
+
+    generatedAt:
+      Date.now(),
   };
 }
 

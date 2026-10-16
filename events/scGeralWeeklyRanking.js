@@ -1866,8 +1866,14 @@ async function fetchDiscordMessagesPageShared(
 
 // ================== SCAN HELPERS ==================
 async function scanChannelEmbeds(client, { channelId, weekFloorKey, maxPages = 60, onMessage }) {
-  const ch = await client.channels.fetch(channelId).catch(() => null);
-  if (!ch?.isTextBased?.()) return;
+  const ch = await client.channels.fetch(channelId);
+
+  if (!ch?.isTextBased?.() || !ch.messages?.fetch) {
+    throw new Error(
+      'O canal ' + channelId +
+      ' não está disponível para a coleta.'
+    );
+  }
 
   const floor = String(weekFloorKey || "").trim() || null;
   let lastId;
@@ -1886,6 +1892,16 @@ for (let p = 0; p < maxPages; p++) {
   if (!batch?.size) break;
 
     for (const msg of batch.values()) {
+      if (
+        !Number.isFinite(msg.createdTimestamp) ||
+        msg.createdTimestamp <= 0
+      ) {
+        throw new Error(
+          'Uma mensagem do canal ' + channelId +
+          ' não possui data válida.'
+        );
+      }
+
       if (floor) {
         const wkMsg = weekKeyFromDateSP(new Date(msg.createdTimestamp));
         if (wkMsg < floor) { stop = true; break; }
@@ -1893,8 +1909,25 @@ for (let p = 0; p < maxPages; p++) {
       await onMessage(msg);
     }
 
-    lastId = batch.last()?.id;
-    if (!lastId) break;
+    const nextId = batch.last()?.id;
+
+    if (!nextId) break;
+
+    if (
+      !/^\d{17,20}$/.test(nextId) ||
+      (
+        lastId &&
+        BigInt(nextId) >= BigInt(lastId)
+      )
+    ) {
+      throw new Error(
+        'A paginação do canal ' + channelId +
+        ' não avançou.'
+      );
+    }
+
+    lastId = nextId;
+
     if (stop) break;
   }
 }
@@ -2671,10 +2704,18 @@ const pushItem = (item) => {
     ).trim();
 
   if (
-    !userId ||
+    !/^\d{17,20}$/.test(String(userId || '')) ||
     !source ||
-    !item?.ts
-  ) return;
+    !item?.ts ||
+    !Number.isFinite(new Date(item.ts).getTime())
+  ) {
+    auditor.reject(
+      source || 'unknown',
+      'invalid_identity_or_timestamp'
+    );
+
+    return;
+  }
 
   if (
     client?.user?.id &&
@@ -3521,7 +3562,7 @@ function aggregateWeekDetailed(items, weekKey) {
         ""
       );
 
-    if (!canonicalUserId) {
+    if (!/^\d{17,20}$/.test(canonicalUserId)) {
       continue;
     }
 
