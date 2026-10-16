@@ -1871,7 +1871,47 @@ async function fetchDiscordMessagesPageShared(
 }
 
 // ================== SCAN HELPERS ==================
-async function scanChannelEmbeds(client, { channelId, weekFloorKey, maxPages = 60, onMessage }) {
+async function scanChannelEmbeds(client, options) {
+  const startedAt = Date.now();
+
+  const slowTimer = setTimeout(() => {
+    console.warn(
+      "[SC_GERAL_WEEKLY_RANK] Canal ainda em coleta após 15 segundos:",
+      {
+        channelId: options.channelId,
+        weekFloorKey: options.weekFloorKey,
+        maxPages: options.maxPages ?? 60,
+        durationMs: Date.now() - startedAt,
+      }
+    );
+  }, 15000);
+
+  slowTimer.unref?.();
+
+  try {
+    return await scanChannelEmbedsInternal(
+      client,
+      options
+    );
+  } finally {
+    clearTimeout(slowTimer);
+
+    const durationMs =
+      Date.now() - startedAt;
+
+    if (durationMs >= 15000) {
+      console.warn(
+        "[SC_GERAL_WEEKLY_RANK] Leitura lenta de canal encerrada:",
+        {
+          channelId: options.channelId,
+          durationMs,
+        }
+      );
+    }
+  }
+}
+
+async function scanChannelEmbedsInternal(client, { channelId, weekFloorKey, maxPages = 60, onMessage }) {
   const ch = await client.channels.fetch(channelId).catch(error => {
     if (
       Number(error?.code) !== 10003 ||
@@ -2667,9 +2707,7 @@ async function collectAllPoints(client, mode = "light") {
     mode === 'full' &&
     requests.has('light')
   ) {
-    await requests.get('light').catch(() => {});
-
-    return collectAllPoints(client, mode);
+    return requests.get('light');
   }
 
   if (requests.has(mode)) {

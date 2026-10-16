@@ -859,16 +859,20 @@ async function readVisibleFacsListFromPanel(client) {
 
     const listaVisivel = parts.join("\n").trim();
 
-    console.log(
-      "[FACS_SEMANAIS] Lista atual lida diretamente do painel:",
-      {
-        channelId,
-        messageId,
-        currentWeekKey,
-        total: _countLines(listaVisivel),
-        listaVisivel,
-      }
-    );
+    if (
+      process.env.FACS_SEMANAIS_TRACE === "1"
+    ) {
+      console.log(
+        "[FACS_SEMANAIS] Lista atual lida diretamente do painel:",
+        {
+          channelId,
+          messageId,
+          currentWeekKey,
+          total: _countLines(listaVisivel),
+          listaVisivel,
+        }
+      );
+    }
 
     return listaVisivel;
   } catch (e) {
