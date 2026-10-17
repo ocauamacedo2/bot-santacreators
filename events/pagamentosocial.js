@@ -2663,9 +2663,21 @@ const embedAtualizado =
   const componentsSemCidades = removerRowsCidadePagamento(message);
 
   await message.edit({
-    embeds: [embedAtualizado],
-    components: componentsSemCidades,
-  }).catch(() => null);
+    embeds:
+      message.embeds.map(
+        (embed, index) =>
+          index === 0
+            ? embedAtualizado
+            : EmbedBuilder.from(embed)
+      ),
+
+    components:
+      componentsSemCidades,
+
+    allowedMentions: {
+      parse: []
+    },
+  });
 
   return true;
 }
@@ -2690,11 +2702,38 @@ async function atualizarRegistroPagamentoAntigoNaMesmaMensagem(client, msg) {
     };
   }
 
-  const embedBuilder = EmbedBuilder.from(msg.embeds[0]);
+  const embedBuilder =
+    EmbedBuilder.from(
+      msg.embeds[0]
+    );
 
-  let alterou = false;
-  let cidadeAlterada = false;
-  let ocrAlterado = false;
+  const originalFields =
+    embedBuilder.data.fields || [];
+
+  const visibleFields =
+    originalFields.filter(
+      field =>
+        !isPaymentPlayerSeasonField(field)
+    );
+
+  const removedSeason =
+    visibleFields.length !==
+    originalFields.length;
+
+  if (removedSeason) {
+    embedBuilder.setFields(
+      visibleFields
+    );
+  }
+
+  let alterou =
+    removedSeason;
+
+  let cidadeAlterada =
+    false;
+
+  let ocrAlterado =
+    false;
 
   const cidadeKey = detectarCidadeAutomaticaPagamento(msg);
 
@@ -2763,9 +2802,21 @@ if (
       ];
 
   await msg.edit({
-    embeds: [embedBuilder],
-    components: componentsAtualizados,
-  }).catch(() => null);
+    embeds:
+      msg.embeds.map(
+        (embed, index) =>
+          index === 0
+            ? embedBuilder
+            : EmbedBuilder.from(embed)
+      ),
+
+    components:
+      componentsAtualizados,
+
+    allowedMentions: {
+      parse: []
+    },
+  });
 
   return {
     alterou: true,
@@ -2827,12 +2878,15 @@ async function varreduraPesadaPagamentosEditandoMesmoBotao(client, limiteBusca =
     const remaining = totalALer - lidos;
     const fetchLimit = Math.min(100, remaining);
 
-    const batch = await canal.messages.fetch({
-      limit: fetchLimit,
-      before: lastId,
-    }).catch(() => null);
+    const batch =
+      await canal.messages.fetch({
+        limit: fetchLimit,
+        before: lastId,
+      });
 
-    if (!batch || batch.size === 0) break;
+    if (batch.size === 0) {
+      break;
+    }
 
     for (const msg of batch.values()) {
       lidos++;
@@ -2880,10 +2934,36 @@ async function varreduraPesadaPagamentosEditandoMesmoBotao(client, limiteBusca =
       await new Promise(resolve => setTimeout(resolve, 900));
     }
 
-    lastId = batch.last()?.id;
+    const oldest =
+      [...batch.values()].reduce(
+        (current, message) =>
+          !current ||
+          BigInt(message.id) <
+            BigInt(current.id)
+            ? message
+            : current,
+        null
+      );
 
-    if (!lastId) break;
-    if (batch.size < fetchLimit) break;
+    if (
+      !oldest ||
+      (
+        lastId &&
+        BigInt(oldest.id) >=
+          BigInt(lastId)
+      )
+    ) {
+      throw new Error(
+        'A paginação dos pagamentos não avançou.'
+      );
+    }
+
+    lastId =
+      oldest.id;
+
+    if (batch.size < fetchLimit) {
+      break;
+    }
   }
 
   atual = "Varredura finalizada.";
@@ -4136,60 +4216,23 @@ function shouldMarkCurrentPlayerSeasonOnPayment(
   return true;
 }
 
+function isPaymentPlayerSeasonField(field) {
+  const name =
+    String(field?.name || '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-z0-9]+/gi, ' ')
+      .trim()
+      .toLowerCase();
+
+  return name === 'temporada de players';
+}
+
 function buildPaymentPlayerSeasonField(
-  cidadeKey = "",
+  cidadeKey = '',
   context = {}
 ) {
-  if (
-    !cidadeKey ||
-    !CIDADES_PAGAMENTO[
-      cidadeKey
-    ] ||
-    !shouldMarkCurrentPlayerSeasonOnPayment(
-      cidadeKey,
-      context
-    )
-  ) {
-    return null;
-  }
-
-  const season =
-    getActivePlayerSeasonForPayment(
-      cidadeKey
-    );
-
-  if (
-    !season?.seasonId
-  ) {
-    return null;
-  }
-
-  const cidade =
-    CIDADES_PAGAMENTO[
-      cidadeKey
-    ];
-
-  return {
-    name:
-      PAYMENT_PLAYER_SEASON_FIELD_NAME,
-
-    value:
-      `${cidade.emoji} **${cidade.label}** • ` +
-      `🆕 **${season.label || "Temporada atual"}**` +
-      ` • desde <t:${
-        Math.floor(
-          Number(
-            season.startedAt ||
-            Date.now()
-          ) /
-          1000
-        )
-      }:D>` +
-      `\n📌 Válido somente para o **ranking de players desta cidade**.`,
-
-    inline:
-      false
-  };
+  return null;
 }
 
 function atualizarCampoCidade(
@@ -4212,12 +4255,11 @@ function atualizarCampoCidade(
     {};
 
   const fields =
-    Array.isArray(
-      data.fields
-    )
-      ? [
-          ...data.fields
-        ]
+    Array.isArray(data.fields)
+      ? data.fields.filter(
+          field =>
+            !isPaymentPlayerSeasonField(field)
+        )
       : [];
 
   const textoCidade =
@@ -4361,35 +4403,135 @@ function mensagemEhDoMesAtualSP(msg) {
   return key === monthKey;
 }
 
-async function reconstruirStatsPorEmbeds(client, limiteBusca = 100) {
-  const canal = await client.channels.fetch(CANAL_PAGAMENTO).catch(() => null);
-  if (!canal || !canal.isTextBased()) return null;
+async function reconstruirStatsPorEmbeds(
+  client,
+  limiteBusca = 30000
+) {
+  const canal =
+    await client.channels.fetch(
+      CANAL_PAGAMENTO
+    );
 
-  const monthKey = getMonthKey();
-    const stats = makeEmptyStats(monthKey);
-
-  // ✅ CORREÇÃO: Implementação de paginação real (Discord limita fetch em 100)
-  let mensagensTotal = [];
-  let lastId = undefined;
-  const totalALer = Math.min(Number(limiteBusca || 30000), 50000);
-
-  while (mensagensTotal.length < totalALer) {
-
-    const remaining = totalALer - mensagensTotal.length;
-    const fetchLimit = Math.min(100, remaining);
-    const batch = await canal.messages.fetch({ limit: fetchLimit, before: lastId }).catch(() => null);
-    
-    if (!batch || batch.size === 0) break;
-    
-    mensagensTotal.push(...batch.values());
-    lastId = batch.last()?.id;
-
-    if (!lastId) break;
-    if (batch.size < fetchLimit) break;
+  if (!canal?.isTextBased()) {
+    throw new Error(
+      'Canal de pagamentos indisponível. Estatísticas preservadas.'
+    );
   }
 
-  // Se mensagensTotal estiver vazio, retornamos stats vazios para o dashboard não quebrar
-  if (mensagensTotal.length === 0) return stats;
+  const monthKey =
+    getMonthKey();
+
+  const stats =
+    makeEmptyStats(monthKey);
+
+  const monthStart =
+    Date.parse(
+      `${monthKey}-01T00:00:00-03:00`
+    );
+
+  if (!Number.isFinite(monthStart)) {
+    throw new Error(
+      'Mês de referência inválido.'
+    );
+  }
+
+  const totalALer =
+    Math.min(
+      Math.max(
+        Number(limiteBusca) || 30000,
+        100
+      ),
+      50000
+    );
+
+  const mensagensTotal = [];
+
+  let lastId;
+  let completed = false;
+
+  while (
+    mensagensTotal.length < totalALer
+  ) {
+    const fetchLimit =
+      Math.min(
+        100,
+        totalALer -
+          mensagensTotal.length
+      );
+
+    const batch =
+      await canal.messages.fetch({
+        limit: fetchLimit,
+        before: lastId,
+      });
+
+    if (!batch.size) {
+      completed = true;
+      break;
+    }
+
+    const messages =
+      [...batch.values()];
+
+    if (
+      messages.some(
+        message =>
+          !Number.isFinite(
+            message.createdTimestamp
+          ) ||
+          message.createdTimestamp <= 0
+      )
+    ) {
+      throw new Error(
+        'Mensagem com data inválida. Estatísticas preservadas.'
+      );
+    }
+
+    mensagensTotal.push(
+      ...messages
+    );
+
+    const oldest =
+      messages.reduce(
+        (current, message) =>
+          !current ||
+          BigInt(message.id) <
+            BigInt(current.id)
+            ? message
+            : current,
+        null
+      );
+
+    if (
+      !oldest ||
+      (
+        lastId &&
+        BigInt(oldest.id) >=
+          BigInt(lastId)
+      )
+    ) {
+      throw new Error(
+        'A paginação não avançou. Estatísticas preservadas.'
+      );
+    }
+
+    lastId =
+      oldest.id;
+
+    if (
+      batch.size < fetchLimit ||
+      oldest.createdTimestamp < monthStart
+    ) {
+      completed = true;
+      break;
+    }
+  }
+
+  if (!completed) {
+    throw new Error(
+      'O limite de leitura foi atingido antes de concluir o mês. Estatísticas preservadas.'
+    );
+  }
 
   const registrosFiltrados = mensagensTotal
     .filter((m) => m.author?.bot)
@@ -4463,6 +4605,14 @@ async function reconstruirStatsPorEmbeds(client, limiteBusca = 100) {
         stats.requesters[decisorId] = Number(stats.requesters[decisorId] || 0) + 1;
       }
     }
+  }
+
+  if (
+    getMonthKey() !== monthKey
+  ) {
+    throw new Error(
+      'O mês mudou durante a coleta. Execute a atualização novamente.'
+    );
   }
 
   saveStats(stats);
@@ -7818,10 +7968,19 @@ await autoMarcarCidadesPendentesPagamento(client, 1000).catch(() => null);
 // Antes, se o menu já existisse, dava return e o gráfico ficava travado.
 // ✅ SEMPRE recalcula e atualiza o dashboard ao ligar o bot.
 // ✅ recreate: true força criar uma mensagem nova quando trocou de bot.
-await sincronizarDashboardSocial(client, "ready:recriar_por_troca_de_bot", {
-  forceUnlock: true,
-  recreate: true,
-}).catch(() => null);
+await sincronizarDashboardSocial(
+  client,
+  'ready:sincronizar',
+  {
+    forceUnlock: false,
+    recreate: false,
+  }
+).catch(error => {
+  console.error(
+    '[PAGAMENTO_SOCIAL_DASH] Falha na sincronização inicial:',
+    error
+  );
+});
 
 if (!client.__SC_SOCIAL_DASH_INTERVAL__) {
   client.__SC_SOCIAL_DASH_INTERVAL__ = setInterval(() => {
@@ -8108,10 +8267,15 @@ export async function handlePagamentoSocial(interaction, client) {
 if (id === "pagamento_dash_atualizar") {
   await interaction.deferReply({ flags: MessageFlags.Ephemeral }).catch(() => {});
 
-  const result = await sincronizarDashboardSocial(client, "botao:pagamento_dash_atualizar_recriar", {
-    forceUnlock: true,
-    recreate: true,
-  });
+  const result =
+    await sincronizarDashboardSocial(
+      client,
+      'botao:pagamento_dash_atualizar',
+      {
+        forceUnlock: false,
+        recreate: false,
+      }
+    );
 
   if (!result.ok) {
     await interaction.editReply({
@@ -8532,8 +8696,23 @@ await interaction.editReply({
 // mas não seguram mais a resposta do botão.
 void (async () => {
   try {
-    await reconstruirStatsPorEmbeds(client, 100).catch(() => null);
-    await updateDashboard(client).catch(() => {});
+    const result =
+      await sincronizarDashboardSocial(
+        client,
+        'cidade:registro_atualizado',
+        {
+          forceUnlock: false,
+          recreate: false,
+        }
+      );
+
+    if (!result?.ok) {
+      throw new Error(
+        result?.error ||
+        result?.message ||
+        'Não foi possível atualizar o dashboard após marcar a cidade.'
+      );
+    }
   } catch (error) {
     console.error(
       "[PagamentoSocial] Erro ao atualizar estatísticas após marcar cidade:",
@@ -9657,16 +9836,16 @@ await interaction.editReply({
 // continuam sendo executadas sem prender a resposta.
 void (async () => {
   try {
-    // Reposta o menu e limpa menus duplicados.
-    await canal.send({
-      embeds: [criarEmbedMenu()],
-      components: [criarRowMenu()],
-    }).catch(() => {});
-
+    // Mantém o menu existente e remove duplicatas recentes.
     await limparBotoesAntigos(
       client,
       canal
-    ).catch(() => {});
+    ).catch(error => {
+      console.warn(
+        '[PAGAMENTO_SOCIAL] Falha ao limpar menus duplicados:',
+        error?.message || error
+      );
+    });
 
     // Se aprovado/reprovado/solicitado,
     // recalcula estatísticas pelos registros do mês atual.

@@ -652,13 +652,28 @@ async function assertModuleView(
     );
 
   if (!allowed) {
-    const error =
+    const error = Object.assign(
       new Error(
         'Você não possui acesso a esta área no Discord.'
-      );
+      ),
+      {
+        status: 403,
+        code: 'MODULE_VIEW_DENIED',
+        moduleKey
+      }
+    );
 
-    error.status =
-      403;
+    console.warn(
+      '[SITE HUB ACCESS]',
+      {
+        actorId: member?.id || null,
+        guildId: member?.guild?.id || null,
+        moduleKey,
+        sourceChannelIds:
+          CHANNELS[moduleKey] || [],
+        code: error.code
+      }
+    );
 
     throw error;
   }

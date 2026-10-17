@@ -3694,6 +3694,69 @@ async function restoreHallManualEditsFromAudit(client, hallChannel) {
   }
 }
 
+async function removeHallVisualSeasonLine(
+  message,
+  client
+) {
+  if (
+    message.author?.id !== client.user.id ||
+    !message.editable
+  ) {
+    return false;
+  }
+
+  const original =
+    String(message.content || "");
+
+  if (
+    !normalizeHallName(original)
+      .includes("hall da fama")
+  ) {
+    return false;
+  }
+
+  const seasonLine =
+    /^\s*(?:🆕\s*)?(?:\*\*)?Temporada de Players(?:\s*[—–-][^:\n]*)?:(?:\*\*)?(?:[ \t].*)?$/i;
+
+  const removed = [];
+
+  const cleaned =
+    original
+      .split("\n")
+      .filter(line => {
+        if (!seasonLine.test(line)) {
+          return true;
+        }
+
+        removed.push(line);
+        return false;
+      })
+      .join("\n");
+
+  if (!removed.length || cleaned === original) {
+    return false;
+  }
+
+  state.hallVisualSeasonCleanup ??= {};
+
+  state.hallVisualSeasonCleanup[message.id] ??= {
+    channelId: message.channelId,
+    removedLines: removed,
+    recordedAt: Date.now()
+  };
+
+  saveState(state);
+
+  await message.edit({
+    content: cleaned,
+    allowedMentions: {
+      parse: []
+    }
+  });
+
+  return true;
+}
+
 // =====================================================
 // VARREDURA ATIVA: ANALISA SEM REESCREVER OS HALLS
 // =====================================================
@@ -3709,7 +3772,7 @@ async function autoCorrectDuplications(channel, client, options = {}) {
   locks.add(lockKey);
 
   const startedAt = Date.now();
-  const analysisVersion = 3;
+  const analysisVersion = 4;
   const showProgress = options.showProgress ?? true;
   const approvalPages = new Map();
   const evidencePages = new Map();
@@ -3943,6 +4006,18 @@ async function autoCorrectDuplications(channel, client, options = {}) {
           );
         });
       const fetched = [...batch.values()];
+
+      if (options.cleanVisualSeason === true) {
+        for (const message of fetched) {
+          assertDeadline();
+
+          await removeHallVisualSeasonLine(
+            message,
+            client
+          );
+        }
+      }
+
       const oldest = fetched.reduce((current, message) =>
         !current || BigInt(message.id) < BigInt(current.id) ? message : current,
         null
@@ -4772,19 +4847,7 @@ function buildHallPlayerSeasonMarker(
     return "";
   }
 
-  return (
-    `🆕 **Temporada de Players — ${CITIES[cityKey].label}:** ` +
-    `${season.label} • ` +
-    `iniciada <t:${
-      Math.floor(
-        Number(
-          season.startedAt ||
-          Date.now()
-        ) /
-        1000
-      )
-    }:D>`
-  );
+  return "";
 }
 
 function sanitizeHallAiText(
@@ -7126,9 +7189,7 @@ ${historicalHallBlock
   ? `${historicalHallBlock}\n`
   : ""}
 
-${historicalHallBlock && parts.seasonMarker
-  ? `${parts.seasonMarker}\n`
-  : ""}
+
 
 ${parts.winnersText.trim()}
 
@@ -7377,7 +7438,8 @@ ${imageLines.join("\n")}`;
     [normalizeHallKey("legião bélica")]: "Legião Bélica",
     [normalizeHallKey("maldivas")]: "Maldivas",
 
-    [normalizeHallKey("mecanica")]: "Mecânica"
+    [normalizeHallKey("mecanica")]: "Mecânica",
+    [normalizeHallKey("vanguard")]: "Vanguard"
   };
 
   function normalizeOrgDisplayName(orgName = "") {
@@ -7391,16 +7453,21 @@ ${imageLines.join("\n")}`;
   }
   function isKnownOrgName(value = "") {
     const key = normalizeHallKey(value);
+
     if (!key) return false;
 
-    if (ORG_NAME_ALIASES[key]) return true;
+    if (
+      Object.prototype.hasOwnProperty.call(
+        ORG_NAME_ALIASES,
+        key
+      )
+    ) {
+      return true;
+    }
 
-    return KNOWN_ORG_NAMES.some(orgName => {
-      const orgKey = normalizeHallKey(orgName);
-      if (!orgKey) return false;
-
-      return key === orgKey || key.includes(orgKey) || orgKey.includes(key);
-    });
+    return KNOWN_ORG_NAMES.some(orgName =>
+      normalizeHallKey(orgName) === key
+    );
   }
 
   function isExactKnownOrgName(value = "") {
@@ -9849,7 +9916,15 @@ function cleanRankingPlayerName(value = "") {
   function looksLikePrizeOnly(value = "") {
     const normalized = normalizeHallName(value);
 
+    const additionalPrize =
+      /\bbattle\s*pass\b/i.test(normalized) ||
+      /\brole\s*pass\b/i.test(normalized) ||
+      /\b\d+\s*(?:mil\s*)?muni(?:cao|coes)?\b/i.test(normalized) ||
+      /\b\d+\s*g3\b/i.test(normalized) ||
+      /\b\d+\s*(?:pts?|pontos?)\b/i.test(normalized);
+
     return (
+      additionalPrize ||
       /\bvip\b/i.test(normalized) ||
       /\bvips\b/i.test(normalized) ||
       /\bpass\b/i.test(normalized) ||
@@ -10156,9 +10231,13 @@ function parseTopEmojiOrgWinnerLine(line = "", cityKey = "nobre") {
 
   if (!originalLine) return null;
 
+  const prefixText =
+    stripDiscordNoise(originalLine)
+      .replace(/^#{1,6}\s*/, "")
+      .trim();
+
   const hasTopPrefix =
-    /^#?\s*TOP\b/i.test(originalLine) ||
-    /^#?\s*TOP\s*:/i.test(originalLine);
+    /^TOP\b/i.test(prefixText);
 
   if (!hasTopPrefix) return null;
 
@@ -13988,27 +14067,79 @@ await sendRequiredPlayerCityReviewIfNeeded(
     return true;
   }
 
-  function formatRankingEventBreakdown(events = {}, cityKey = "nobre") {
-    const finalCityKey = CITIES[cityKey] ? cityKey : "nobre";
+  function formatRankingEventBreakdown(
+    events = {},
+    cityKey = "nobre"
+  ) {
+    const finalCityKey =
+      CITIES[cityKey] ? cityKey : "nobre";
 
-    const sorted = Object.entries(events)
-      .map(([eventName, total]) => [normalizeHallEventName(eventName, finalCityKey), total])
-      .filter(([eventName]) => isValidRankingEventName(eventName))
-      .reduce((acc, [eventName, total]) => {
-        acc[eventName] ??= 0;
-        acc[eventName] += total;
-        return acc;
-      }, {});
+    const totals = new Map();
 
-    const finalSorted = Object.entries(sorted)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 3);
+    for (
+      const [rawEventName, rawTotal] of
+      Object.entries(events || {})
+    ) {
+      const eventName =
+        normalizeHallEventName(
+          rawEventName,
+          finalCityKey
+        );
 
-    if (finalSorted.length === 0) return "Evento não identificado";
+      const total = Number(rawTotal);
 
-    return finalSorted
-      .map(([eventName, total]) => `${eventName}: ${total}`)
-      .join(" • ");
+      if (!isValidRankingEventName(eventName)) {
+        continue;
+      }
+
+      if (
+        !Number.isSafeInteger(total) ||
+        total <= 0
+      ) {
+        continue;
+      }
+
+      totals.set(
+        eventName,
+        (totals.get(eventName) || 0) + total
+      );
+    }
+
+    const ordered =
+      [...totals.entries()].sort(
+        (first, second) =>
+          second[1] - first[1] ||
+          first[0].localeCompare(
+            second[0],
+            "pt-BR"
+          )
+      );
+
+    if (!ordered.length) {
+      return "Evento não identificado";
+    }
+
+    const visible = ordered.slice(0, 3);
+
+    const remainingTotal =
+      ordered.slice(3).reduce(
+        (total, [, count]) => total + count,
+        0
+      );
+
+    const parts =
+      visible.map(
+        ([eventName, total]) =>
+          `${eventName}: ${total}`
+      );
+
+    if (remainingTotal > 0) {
+      parts.push(
+        `Outros eventos: ${remainingTotal}`
+      );
+    }
+
+    return parts.join(" • ");
   }
 
   function getDominantCityFromHalls(halls = [], fallbackCityKey = "nobre") {
@@ -19276,20 +19407,234 @@ new ButtonBuilder()
       return allButtons.some(c => c.customId === BTN_EDIT_BY_LINK);
     });
 
-      // Se não for forçado e já existir um painel atualizado, não faz nada.
-      if (!force && upToDateMsg) return;
+  async function ensureButtonAtBottom(
+    channel,
+    client,
+    force = false
+  ) {
+    const operations =
+      globalThis.__SC_HALL_CONTROL_PANEL_OPERATIONS__ ??=
+        new Map();
 
-      // Apaga todas as mensagens de botão antigas/desatualizadas do bot
-      for (const m of myMsgs.values()) {
-        await m.delete().catch(() => {});
+    const key =
+      `${client.user.id}:${channel.id}`;
+
+    const pending = operations.get(key);
+
+    if (pending) {
+      return pending;
+    }
+
+    const operation = (async () => {
+      const isControlPanel = message => {
+        if (
+          message?.author?.id !==
+          client.user.id
+        ) {
+          return false;
+        }
+
+        const ids = new Set(
+          (message.components || [])
+            .flatMap(
+              row => row.components || []
+            )
+            .map(
+              component => component.customId
+            )
+        );
+
+        return (
+          ids.has(BTN_OPEN_MENU) &&
+          ids.has(BTN_SCAN_ALL)
+        );
+      };
+
+      state.hallControlPanelIds ??= {};
+
+      const savedId =
+        state.hallControlPanelIds[key];
+
+      let keeper = null;
+
+      if (savedId) {
+        try {
+          const saved =
+            await channel.messages.fetch(savedId);
+
+          if (!isControlPanel(saved)) {
+            throw new Error(
+              "A mensagem salva não é um painel de controle do Hall."
+            );
+          }
+
+          keeper = saved;
+        } catch (error) {
+          if (Number(error?.code) !== 10008) {
+            throw error;
+          }
+        }
       }
 
-      await channel.send({
-        components: [
-          buildControlButtons(),
-          buildOldHallEditButtons()
-        ]
-      });
+      const found = new Map();
+
+      if (keeper) {
+        found.set(keeper.id, keeper);
+
+        const recent =
+          await channel.messages.fetch({
+            limit: 100
+          });
+
+        for (const message of recent.values()) {
+          if (isControlPanel(message)) {
+            found.set(message.id, message);
+          }
+        }
+      } else {
+        let before;
+        let reachedEnd = false;
+
+        for (let page = 0; page < 200; page++) {
+          const batch =
+            await channel.messages.fetch(
+              before
+                ? { limit: 100, before }
+                : { limit: 100 }
+            );
+
+          for (const message of batch.values()) {
+            if (isControlPanel(message)) {
+              found.set(message.id, message);
+            }
+          }
+
+          if (batch.size < 100) {
+            reachedEnd = true;
+            break;
+          }
+
+          const oldest =
+            [...batch.values()].reduce(
+              (current, message) =>
+                !current ||
+                BigInt(message.id) <
+                  BigInt(current.id)
+                  ? message
+                  : current,
+              null
+            );
+
+          if (
+            !oldest ||
+            (
+              before &&
+              BigInt(oldest.id) >=
+                BigInt(before)
+            )
+          ) {
+            throw new Error(
+              "A busca pelo painel não avançou."
+            );
+          }
+
+          before = oldest.id;
+        }
+
+        if (!reachedEnd) {
+          throw new Error(
+            "O histórico ultrapassou o limite da busca. Nenhum painel novo foi enviado."
+          );
+        }
+
+        keeper =
+          [...found.values()].sort(
+            (first, second) =>
+              BigInt(first.id) <
+                BigInt(second.id)
+                ? -1
+                : 1
+          )[0] || null;
+      }
+
+      const components = [
+        buildControlButtons(),
+        buildOldHallEditButtons()
+      ];
+
+      if (keeper) {
+        const current =
+          JSON.stringify(
+            keeper.components.map(
+              row => row.toJSON()
+            )
+          );
+
+        const desired =
+          JSON.stringify(
+            components.map(
+              row => row.toJSON()
+            )
+          );
+
+        if (current !== desired) {
+          keeper = await keeper.edit({
+            components,
+            allowedMentions: {
+              parse: []
+            }
+          });
+        }
+      } else {
+        keeper = await channel.send({
+          components,
+          allowedMentions: {
+            parse: []
+          }
+        });
+      }
+
+      state.hallControlPanelIds[key] =
+        keeper.id;
+
+      saveState(state);
+
+      for (const duplicate of found.values()) {
+        if (duplicate.id === keeper.id) {
+          continue;
+        }
+
+        await duplicate.delete().catch(error => {
+          console.warn(
+            "[HallDaFama] Painel duplicado não removido:",
+            {
+              messageId: duplicate.id,
+              code: error?.code || null
+            }
+          );
+        });
+      }
+
+      return keeper;
+    })();
+
+    operations.set(key, operation);
+
+    try {
+      return await operation;
+    } catch (error) {
+      console.error(
+        "[HallDaFama] Falha ao garantir painel:",
+        error
+      );
+
+      return null;
+    } finally {
+      if (operations.get(key) === operation) {
+        operations.delete(key);
+      }
+    }
+  }
     } catch (e) {
       console.error("[HallDaFama] Erro ao mover botão:", e);
     }
@@ -20025,7 +20370,7 @@ const channel =
       await ensureButtonAtBottom(
         channel,
         client,
-        true
+        false
       );
 
       await ensureHallRankingsDashboards(
@@ -20037,10 +20382,13 @@ const channel =
       );
 
       if (
-        state.hallManualAuditRecovery?.version !==
-          HALL_MANUAL_RECOVERY_VERSION ||
-        state.hallManualAuditRecovery?.completed !==
-          true
+        process.env.HALL_AUTO_RECOVERY_ON_START === "1" &&
+        (
+          state.hallManualAuditRecovery?.version !==
+            HALL_MANUAL_RECOVERY_VERSION ||
+          state.hallManualAuditRecovery?.completed !==
+            true
+        )
       ) {
         if (hallScanRunning) {
           console.warn(
@@ -20152,6 +20500,7 @@ const channel =
       }
 
       if (
+        process.env.HALL_AUTO_SCAN_ON_START === "1" &&
         (
           shouldRunHallScanToday() ||
           state.historicalRankingRebuildPending
@@ -21815,6 +22164,7 @@ const row = new ActionRowBuilder().addComponents(
           client,
           {
             showProgress: true,
+            cleanVisualSeason: true,
             auditInteraction: interaction
           }
         );
@@ -23856,7 +24206,11 @@ try {
         for (const e of emojis) await sentMsg.react(e).catch(() => {});
       } catch {}
 
-      await ensureButtonAtBottom(hallChannel, client, true);
+      await ensureButtonAtBottom(
+        hallChannel,
+        client,
+        false
+      );
 
       try {
         if (
@@ -23868,7 +24222,10 @@ try {
 
           saveState(state);
 
-          if (!hallScanRunning) {
+          if (
+            process.env.HALL_AUTO_REBUILD_AFTER_MIGRATION === "1" &&
+            !hallScanRunning
+          ) {
             hallScanRunning =
               true;
 

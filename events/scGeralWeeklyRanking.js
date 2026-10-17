@@ -1986,13 +1986,8 @@ async function scanChannelEmbedsInternal(client, { channelId, weekFloorKey, maxP
 
   const floor = String(weekFloorKey || "").trim() || null;
 
-  const reusableChannel =
-    PERGUNTAS_LOGS_CHANNEL_IDS.includes(String(channelId)) &&
-    CORRECAO_LOGS_CHANNEL_IDS.includes(String(channelId));
-
-  const scanPages = reusableChannel
-    ? weeklyScanPages.get(client)
-    : null;
+  const scanPages =
+    weeklyScanPages.get(client) || null;
 
   let lastId;
   let stop = false;
@@ -2036,7 +2031,19 @@ for (let p = 0; p < maxPages; p++) {
       await onMessage(msg);
     }
 
-    const nextId = batch.last()?.id;
+    const oldestMessage =
+      [...batch.values()].reduce(
+        (oldest, message) =>
+          !oldest ||
+          BigInt(message.id) <
+            BigInt(oldest.id)
+            ? message
+            : oldest,
+        null
+      );
+
+    const nextId =
+      oldestMessage?.id;
 
     if (!nextId) break;
 
