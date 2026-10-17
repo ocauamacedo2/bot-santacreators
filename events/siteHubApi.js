@@ -1,3 +1,5 @@
+import { createSiteBridgeOperations } from '../utils/siteBridgeOperations.js';
+
 import { createSiteTeamRequests } from "../utils/siteTeamRequests.js";
 
 import {
@@ -681,6 +683,7 @@ export function installSiteHubApi({
   app,
   client,
 }) {
+  const bridgeOperations = createSiteBridgeOperations();
   if (
     !app ||
     !client
@@ -2544,6 +2547,23 @@ const experience = createSiteHubExperience({
         if (action.startsWith('events.')) {
           await assertModuleView(client, member, 'events');
 
+          if (action === 'events.confirm') {
+            return bridgeOperations.respond({
+              res,
+              guildId: guild.id,
+              actorId,
+              action,
+              payload,
+
+              execute: () => eventsLibrary.handle({
+                guild,
+                member,
+                action,
+                payload,
+              }),
+            });
+          }
+
           return res.json(
             await eventsLibrary.handle({
               guild,
@@ -3307,20 +3327,20 @@ if (await experience.handle({ guild, member, action, payload, res })) return;
             );
           }
 
-          return res.json(
-            await globalThis
-              .__SC_GI_SITE_API__
-              .action({
+          return bridgeOperations.respond({
+            res,
+            guildId: guild.id,
+            actorId,
+            action,
+            payload,
+
+            execute: () =>
+              globalThis.__SC_GI_SITE_API__.action({
                 actorId,
-
-                action:
-                  payload.action,
-
-                payload:
-                  payload.payload ||
-                  {},
-              })
-          );
+                action: payload.action,
+                payload: payload.payload || {},
+              }),
+          });
         }
 
 

@@ -3105,7 +3105,10 @@ function activeTimeText(rec, n = nowMs()) {
     ) {
       const member =
         await guild.members
-          .fetch(rec.targetId)
+          .fetch({
+            user: rec.targetId,
+            force: true,
+          })
           .catch(() => null);
 
       if (!member) {
@@ -3236,6 +3239,15 @@ function activeTimeText(rec, n = nowMs()) {
               roleId
             );
 
+            continue;
+          }
+
+          // Um registro manual não autoriza o GI a adicionar cargos
+          // que não pertencem ao pacote da área selecionada.
+          if (
+            !areaProfile.requiredRoleIds.includes(roleId) ||
+            roleId === areaProfile.primaryRoleId
+          ) {
             continue;
           }
 
@@ -13249,7 +13261,7 @@ async function autoDesligarPausadosVencidos(guild, origem = 'tick') {
                         roleId
                       )
                   )
-                : addedRoleIds;
+                : [];
 
             const confirmedRemovedRoleIds =
               auditRemovedRoleIds.length > 0
@@ -13259,7 +13271,7 @@ async function autoDesligarPausadosVencidos(guild, origem = 'tick') {
                         roleId
                       )
                   )
-                : removedRoleIds;
+                : [];
 
             for (
               const roleId
