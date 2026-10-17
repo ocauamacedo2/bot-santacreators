@@ -67,8 +67,23 @@ import {
   getHierarchySiteSnapshot,
   hierarchySiteAction,
   isOfficialSantaCreatorsTeamMember,
-  canUsePersonalSantaCreatorsCentral,
 } from "./hierarquiaDivisoes.js";
+
+function canUsePersonalSantaCreatorsCentral(member) {
+  if (
+    !member ||
+    member.user?.bot ||
+    !member.roles?.cache
+  ) {
+    return false;
+  }
+
+  return (
+    member.id === '660311795327828008' ||
+    member.roles.cache.has('1262262852949905408') ||
+    !isOfficialSantaCreatorsTeamMember(member)
+  );
+}
 
 import { createSiteHubExperience } from "../utils/siteHubExperience.js";
 import { getNpsSiteSnapshot } from "./npsOperacional.js";
@@ -1754,7 +1769,7 @@ const experience = createSiteHubExperience({
             return res.status(403).json({
               error:
                 mode === 'view'
-                  ? 'Sua Central é exclusiva do Owner e do Dark.'
+                  ? 'A Central pessoal não está disponível para este perfil da equipe.'
                   : 'A Central Creators é exclusiva da equipe autorizada.',
             });
           }
