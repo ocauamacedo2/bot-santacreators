@@ -5625,15 +5625,13 @@ async function executarReconciliacaoVipPagamento(client) {
     );
   }
 
-  const payments =
-    await lerHistoricoParaVinculo(
-      paymentChannel
-    );
-
-  const vips =
-    await lerHistoricoParaVinculo(
-      vipChannel
-    );
+  const [
+    payments,
+    vips,
+  ] = await Promise.all([
+    lerHistoricoParaVinculo(paymentChannel),
+    lerHistoricoParaVinculo(vipChannel),
+  ]);
 
   const {
     corrigirCidadeVipPorCargo,

@@ -243,7 +243,8 @@ function normalizeName(value) {
 function prettyChannelName(channelName) {
   return String(channelName || '')
     .normalize('NFKC')
-    .replace(/[┃┋│|•・❖📁🎫🎟️💼🏷️📦🔒🔓#]/g, ' ')
+    .replace(/\p{Cf}/gu, '')
+    .replace(/[^\p{L}\p{N}\p{M}\s]/gu, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 }

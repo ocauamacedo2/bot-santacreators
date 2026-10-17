@@ -815,7 +815,18 @@ function VIP_buildRegistroEmbed(guild, registrante, payload, cityName) {
       { name: "🆔 ID do ganhador", value: VIP_formatarCampoIdGanhador(payload.ganhadorId), inline: true },
       { name: "👤 Nome do ganhador", value: `\`${payload.ganhadorNome || "Não identificado"}\``, inline: true },
       { name: "🌆 Cidade", value: `**${cityName}**`, inline: true },
-      { name: "🏢 Organização", value: `\`${payload.org}\``, inline: true },
+      {
+        name: "🏢 Organização",
+        value: `\`${
+          String(payload.org || '')
+            .normalize('NFKC')
+            .replace(/\p{Cf}/gu, '')
+            .replace(/[^\p{L}\p{N}\p{M}\s]/gu, ' ')
+            .replace(/\s+/g, ' ')
+            .trim() || 'Não informada'
+        }\``,
+        inline: true,
+      },
       { name: "🎁 Premiação", value: `${tipoBonito}\n\n${payload.premiacao || "—"}`, inline: false },
       { name: "🔎 Fonte automática", value: fontePagamento, inline: false },
       { name: "📝 Solicitações", value: "—", inline: false },
