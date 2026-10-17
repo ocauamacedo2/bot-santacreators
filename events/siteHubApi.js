@@ -1672,6 +1672,7 @@ const experience = createSiteHubExperience({
         const member = await resolveSiteMember(
           guild,
           actorId,
+          action === 'central.access' ||
           !permissionRead ||
           (
             payload.requireFresh === true &&
@@ -1721,6 +1722,50 @@ const experience = createSiteHubExperience({
                 mode === 'view'
                   ? 'Sua Central é exclusiva do Owner e do Dark.'
                   : 'A Central Creators é exclusiva da equipe autorizada.',
+            });
+          }
+
+          return res.json({
+            allowed: true,
+            actorId: member.id,
+            mode,
+          });
+        }
+
+        if (action === 'central.access') {
+          const mode = String(payload.mode || 'view');
+
+          if (!['view', 'admin'].includes(mode)) {
+            return res.status(400).json({
+              error: 'Modo de Central inválido.',
+            });
+          }
+
+          const personalAllowed =
+            !member.user?.bot &&
+            (
+              member.id === '660311795327828008' ||
+              member.roles?.cache?.has('1262262852949905408') === true
+            );
+
+          const teamAllowed =
+            !member.user?.bot &&
+            (
+              personalAllowed ||
+              isOfficialSantaCreatorsTeamMember(member)
+            );
+
+          const allowed = mode === 'view'
+            ? personalAllowed
+            : teamAllowed;
+
+          res.setHeader('Cache-Control', 'no-store');
+
+          if (!allowed) {
+            return res.status(403).json({
+              error: mode === 'view'
+                ? 'Sua Central é exclusiva do Owner e do Dark.'
+                : 'A Central Creators é exclusiva da equipe autorizada.',
             });
           }
 
