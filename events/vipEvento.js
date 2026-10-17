@@ -2042,6 +2042,13 @@ function VIP_siteDate(value) {
   ].join('/');
 }
 
+function VIP_siteManualActor(member) {
+  return (
+    String(member?.id || '') === '660311795327828008' ||
+    member?.roles?.cache?.has('1262262852949905408') === true
+  );
+}
+
 async function VIP_siteActor(guild, actorId) {
   actorId = String(actorId || '').trim();
 
@@ -2076,13 +2083,32 @@ async function VIP_siteActor(guild, actorId) {
   if (
     member?.guild?.id !== guild.id ||
     member.user?.bot ||
-    !member.roles.cache.has(IDS.LIDERES) ||
-    !canRegister(member)
+    (
+      !VIP_siteManualActor(member) &&
+      (
+        !member.roles.cache.has(IDS.LIDERES) ||
+        !canRegister(member)
+      )
+    )
   ) {
     throw VIP_siteFail(
       403,
-      'O formulário do site é exclusivo dos líderes autorizados.'
+      'O formulário do site está disponível para líderes autorizados, Owner e Macedo.'
     );
+  }
+
+  if (VIP_siteManualActor(member)) {
+    return {
+      member,
+      context: {
+        strict: false,
+        ok: true,
+        source: 'site_manual_owner',
+        cityKeys: Object.keys(CITIES),
+        orgName: null,
+        orgMatch: null,
+      },
+    };
   }
 
   const context = await VIP_getLeaderRequestContext(
@@ -2477,6 +2503,9 @@ export async function getVipEventoSiteForm({
       emoji: CITIES[key].emoji,
     })),
 
+    manualCity:
+      context.source === 'site_manual_owner',
+
     orgLocked:
       context.source === 'org_ticket',
 
@@ -2527,10 +2556,38 @@ async function VIP_sitePrepare(
   const { member, context } =
     await VIP_siteActor(guild, actorId);
 
-  const cityKey =
-    String(payload.cityKey || '');
+  let cityKey =
+    String(payload.cityKey || '').trim();
 
-  if (!context.cityKeys.includes(cityKey)) {
+  if (context.source === 'site_manual_owner') {
+    const normalizeCity = value =>
+      String(value || '')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase()
+        .replace(/^cidade\s+/, '')
+        .replace(/[^a-z0-9]/g, '');
+
+    const requestedCity = normalizeCity(cityKey);
+
+    const matchingCities = context.cityKeys.filter(key =>
+      normalizeCity(key) === requestedCity ||
+      normalizeCity(CITIES[key]?.label) === requestedCity
+    );
+
+    if (matchingCities.length !== 1) {
+      throw VIP_siteFail(
+        400,
+        'Digite uma cidade válida: ' +
+        context.cityKeys
+          .map(key => CITIES[key].label)
+          .join(', ') +
+        '.'
+      );
+    }
+
+    cityKey = matchingCities[0];
+  } else if (!context.cityKeys.includes(cityKey)) {
     throw VIP_siteFail(
       403,
       'A cidade não corresponde aos seus cargos atuais.'
