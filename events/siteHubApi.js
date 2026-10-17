@@ -67,6 +67,7 @@ import {
   getHierarchySiteSnapshot,
   hierarchySiteAction,
   isOfficialSantaCreatorsTeamMember,
+  canUsePersonalSantaCreatorsCentral,
 } from "./hierarquiaDivisoes.js";
 
 import { createSiteHubExperience } from "../utils/siteHubExperience.js";
@@ -1687,6 +1688,49 @@ const experience = createSiteHubExperience({
             });
         }
 
+        if (action === 'central.access') {
+          const mode =
+            String(
+              payload.mode || 'view'
+            );
+
+          if (
+            !['view', 'admin'].includes(mode)
+          ) {
+            return res.status(400).json({
+              error:
+                'Modo de Central inválido.',
+            });
+          }
+
+          const allowed =
+            mode === 'view'
+              ? canUsePersonalSantaCreatorsCentral(
+                  member
+                )
+              : (
+                  member.id === '660311795327828008' ||
+                  isOfficialSantaCreatorsTeamMember(
+                    member
+                  )
+                );
+
+          if (!allowed) {
+            return res.status(403).json({
+              error:
+                mode === 'view'
+                  ? 'Sua Central é exclusiva do Owner e do Dark.'
+                  : 'A Central Creators é exclusiva da equipe autorizada.',
+            });
+          }
+
+          return res.json({
+            allowed: true,
+            actorId: member.id,
+            mode,
+          });
+        }
+
         const siteReadOnlyVisitor =
           member.id !== '660311795327828008' &&
           !isOfficialSantaCreatorsTeamMember(member);
@@ -2947,6 +2991,14 @@ if (await experience.handle({ guild, member, action, payload, res })) return;
     })),
     profile: { ...experience.profile(member), preferences: await experience.preferences(guild, member) },
     team: isCentralMember,
+
+    personalCentralAllowed:
+      canUsePersonalSantaCreatorsCentral(
+        member
+      ),
+
+    personalCentralActorId:
+      member.id,
 
     readOnlyVisitor: !isCentralMember,
 

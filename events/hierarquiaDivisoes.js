@@ -593,6 +593,23 @@ export function getHierarchyPersonData(userId) {
 // neste CONFIG e as divisões persistidas por este sistema.
 // =====================================================
 
+export function canUsePersonalSantaCreatorsCentral(member) {
+  if (
+    !member ||
+    member.user?.bot ||
+    !member.roles?.cache
+  ) {
+    return false;
+  }
+
+  return (
+    member.id === '660311795327828008' ||
+    member.roles.cache.has(
+      CONFIG.ROLES.OWNER
+    )
+  );
+}
+
 export function isOfficialSantaCreatorsTeamMember(member) {
   if (
     !member ||
