@@ -636,7 +636,28 @@ export function createSiteCommunity({ client }) {
           presence.rights.confirm === true &&
           (
             item.status === 'PENDING' ||
-            presence.rights.overwrite === true
+            (
+              item.status === 'NO' &&
+              presence.rights.overwrite === true
+            )
+          ) &&
+          (
+            permissions.presenceStaff === true ||
+            ownKeys.has(
+              norm(readable(item.name, guild))
+            )
+          ),
+
+        canMarkAbsent:
+          (
+            presence.windowOpen === true ||
+            presence.rights.bypass === true
+          ) &&
+          presence.rights.confirm === true &&
+          presence.rights.overwrite === true &&
+          (
+            item.status === 'PENDING' ||
+            item.status === 'YES'
           ) &&
           (
             permissions.presenceStaff === true ||

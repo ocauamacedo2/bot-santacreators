@@ -464,18 +464,25 @@ function isPresenceBypass(member) {
 const sitePresenceLeaderToken = Symbol("sitePresenceLeader");
 
 function canOverwritePresence(member) {
-  if (isPresenceBypass(member)) {
+  const userId = String(
+    member?.id ||
+    member?.user?.id ||
+    ""
+  );
+
+  if (userId === "660311795327828008") {
     return true;
   }
 
-  return Boolean(
-    member?.roles?.cache?.some(role =>
-      [
-        "1352407252216184833",
-        "1262262852949905409",
-        "1352408327983861844",
-      ].includes(role.id)
-    )
+  const allowedRoleIds = [
+    "1352407252216184833", // Resp Líder
+    "1262262852949905409", // Resp Influ
+    "1352408327983861844", // Resp Creators
+    "1262262852949905408", // Owner
+  ];
+
+  return allowedRoleIds.some(roleId =>
+    member?.roles?.cache?.has(roleId)
   );
 }
 
@@ -686,11 +693,14 @@ async function resolvePresenceCredit(
 ) {
   if (
     status !== "YES" ||
-    previousInfo.status === "YES"
+    previousInfo.status === "YES" ||
+    previousInfo.creditClaimed === true
   ) {
     return {
       userId: null,
-      reason: "Esta ação não gera novo ponto.",
+      reason:
+        "Esta ação não gera novo ponto. " +
+        "A pontuação desta presença já foi reservada nesta consulta.",
     };
   }
 
@@ -1022,14 +1032,53 @@ if (alreadyConfirmedKey && alreadyConfirmedKey === orgKey && state.statuses[orgK
 
 const previousInfo = state.statuses[orgKey]
   ? { ...state.statuses[orgKey] }
-  : { status: "PENDING", by: null, time: null };
+  : {
+      status: "PENDING",
+      by: null,
+      time: null,
+    };
 
-// Atualiza estado
+if (previousInfo.status === status) {
+  await interaction.editReply(
+    status === "YES"
+      ? `✅ A presença de **${orgKey}** já está confirmada. Nenhuma alteração ou novo ponto foi realizado.`
+      : `ℹ️ A ausência de **${orgKey}** já está registrada. Nenhuma alteração foi realizada.`
+  );
+
+  return true;
+}
+
+if (
+  previousInfo.status !== "PENDING" &&
+  !canOverwritePresence(interaction.member)
+) {
+  await interaction.editReply(
+    "🚫 Esta organização já respondeu à consulta. " +
+    "Somente Resp Líder, Resp Influ, Resp Creators, " +
+    "Owner ou Macedo podem corrigir a resposta."
+  );
+
+  return true;
+}
+
+// Mantém a marca durante toda a consulta.
+// Uma mudança YES → NO → YES não libera outro ponto.
+// O reset diário/semanal existente limpa os registros.
+const creditClaimed =
+  previousInfo.creditClaimed === true ||
+  previousInfo.status === "YES" ||
+  status === "YES";
+
+// Não coloque await entre a leitura do estado,
+// a verificação acima e esta gravação.
 state.statuses[orgKey] = {
-  status: status,
+  ...previousInfo,
+  status,
   by: interaction.user.id,
-  time: Date.now()
+  time: Date.now(),
+  creditClaimed,
 };
+
 saveState(state);
 interaction.__scPresenceApplied = true;
 
