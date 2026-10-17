@@ -3772,7 +3772,7 @@ async function autoCorrectDuplications(channel, client, options = {}) {
   locks.add(lockKey);
 
   const startedAt = Date.now();
-  const analysisVersion = 4;
+  const analysisVersion = 5;
   const showProgress = options.showProgress ?? true;
   const approvalPages = new Map();
   const evidencePages = new Map();
@@ -3811,14 +3811,32 @@ async function autoCorrectDuplications(channel, client, options = {}) {
     fs.renameSync(temporary, checkpointFile);
   };
 
-  const report = async (values) => {
-    if (!showProgress) return;
-    await updateHallScanProgress(client, {
+  let lastProgress = {};
+
+  const report = async (values = {}) => {
+    const totalHalls =
+      values.totalHalls ??
+      checkpoint?.totalHalls ??
+      lastProgress.totalHalls ??
+      0;
+
+    lastProgress = {
+      ...lastProgress,
       totalMessages,
+      totalHalls,
       processed,
+      progressCurrent: processed,
+      progressTotal: totalHalls,
       edited: 0,
       ...values
-    });
+    };
+
+    if (!showProgress) return;
+
+    await updateHallScanProgress(
+      client,
+      lastProgress
+    );
   };
 
   try {
@@ -4388,13 +4406,21 @@ async function autoCorrectDuplications(channel, client, options = {}) {
           )
           .join("; ");
 
-      throw new Error(
-        "A reconstrução reduziria vitórias de organizações: " +
-        examples +
-        ". O ranking existente foi preservado. " +
-        "Comparação salva em " +
-        diagnosticFile +
-        "."
+      throw Object.assign(
+        new Error(
+          "A reconstrução reduziria vitórias de organizações: " +
+          examples +
+          ". O ranking existente foi preservado. " +
+          "Comparação salva em " +
+          diagnosticFile +
+          "."
+        ),
+        {
+          code:
+            "HALL_ORG_LOSS_REVIEW",
+
+          diagnosticFile
+        }
       );
     }
 
@@ -4466,8 +4492,14 @@ async function autoCorrectDuplications(channel, client, options = {}) {
     });
 
     await report({
-      status: "Varredura interrompida. Consulte o erro e retome pelo comando de varredura.",
-      phase: "Erro"
+      status:
+        "Varredura interrompida; a nova reconstrução não foi publicada. Motivo: " +
+        String(
+          error?.message || error
+        ).slice(0, 1200),
+
+      phase:
+        "Erro"
     }).catch(() => {});
     throw error;
   } finally {
@@ -7439,7 +7471,9 @@ ${imageLines.join("\n")}`;
     [normalizeHallKey("maldivas")]: "Maldivas",
 
     [normalizeHallKey("mecanica")]: "Mecânica",
-    [normalizeHallKey("vanguard")]: "Vanguard"
+    [normalizeHallKey("vanguard")]: "Vanguard",
+    [normalizeHallKey("família tequilas")]: "FAMÍLIA TEQUILAS",
+    [normalizeHallKey("predestined")]: "Predestined"
   };
 
   function normalizeOrgDisplayName(orgName = "") {
@@ -22187,6 +22221,22 @@ const row = new ActionRowBuilder().addComponents(
             phase: "Finalização"
           });
         });
+      } catch (error) {
+        state.historicalRankingRebuildPending =
+          true;
+
+        saveState(state);
+
+        await interaction.editReply({
+          content:
+            "❌ A varredura não publicou a reconstrução.\n" +
+            String(
+              error?.message || error
+            ).slice(0, 1400) +
+            "\nO processamento foi interrompido; consulte o painel e o diagnóstico.",
+
+          components: []
+        }).catch(() => {});
       } finally {
         hallScanRunning = false;
       }
