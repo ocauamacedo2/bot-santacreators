@@ -519,27 +519,19 @@ export function createQuizRemoteClient({
       'data/quiz-site-archive'
     );
 
-  async function request(
-    action,
-    actorId = ''
-  ) {
+  async function request(action, actorId = '') {
     const secret = String(
-      process.env
-        .SANTA_QUIZ_BRIDGE_SECRET || ''
+      process.env.SANTA_QUIZ_BRIDGE_SECRET || ''
     ).trim();
 
     const address = String(
-      process.env
-        .SANTA_QUIZ_API_URL || ''
+      process.env.SANTA_QUIZ_API_URL || ''
     ).trim();
 
     let url;
 
     try {
-      url = new URL(
-        '/quiz-site-bridge',
-        address
-      );
+      url = new URL('/quiz-site-bridge', address);
     } catch {
       throw fail(
         503,
@@ -559,70 +551,149 @@ export function createQuizRemoteClient({
       );
     }
 
-    const response =
-      await fetcher(
-        url,
-        {
-          method:
-            'POST',
+    const startedAt = Date.now();
+    const timeoutMs = 15000;
+    const signal = AbortSignal.timeout(timeoutMs);
 
-          redirect:
-            'error',
+    let response = null;
+    let phase = 'request';
 
-          headers: {
-            Authorization:
-              'Bearer ' + secret,
+    try {
+      response = await fetcher(url, {
+        method: 'POST',
 
-            'Content-Type':
-              'application/json',
-          },
+        redirect: 'error',
 
-          body: JSON.stringify({
-            guildId: String(
-              process.env
-                .DISCORD_GUILD_ID ||
-              '1262262852782129183'
+        headers: {
+          Authorization: 'Bearer ' + secret,
+          'Content-Type': 'application/json',
+        },
+
+        body: JSON.stringify({
+          guildId: String(
+            process.env.DISCORD_GUILD_ID ||
+            '1262262852782129183'
+          ),
+
+          actorId: String(actorId),
+
+          action,
+        }),
+
+        signal,
+      });
+
+      phase = 'body';
+
+      let value;
+
+      try {
+        value = await response.json();
+      } catch (error) {
+        if (signal.aborted) throw error;
+
+        throw fail(
+          response.status >= 400
+            ? response.status
+            : 502,
+
+          'A ponte do quiz retornou HTTP ' +
+          response.status +
+          ' sem uma resposta JSON válida.'
+        );
+      }
+
+      if (
+        !value ||
+        typeof value !== 'object' ||
+        Array.isArray(value)
+      ) {
+        throw fail(
+          response.ok ? 502 : response.status,
+          'A ponte do quiz retornou uma resposta inválida.'
+        );
+      }
+
+      if (!response.ok) {
+        throw fail(
+          response.status,
+
+          typeof value.error === 'string'
+            ? value.error
+            : 'O bot do quiz recusou a consulta.'
+        );
+      }
+
+      if (
+        action === 'snapshot' &&
+        !Array.isArray(value.ranking)
+      ) {
+        throw fail(
+          502,
+          'Ranking do quiz inválido.'
+        );
+      }
+
+      return value;
+    } catch (error) {
+      const timedOut =
+        signal.aborted ||
+        error?.name === 'TimeoutError' ||
+        error?.name === 'AbortError';
+
+      const status = Number(error?.status);
+
+      const failure = fail(
+        timedOut
+          ? 504
+          : (
+              status >= 400 && status <= 599
+                ? status
+                : 502
             ),
 
-            actorId:
-              String(actorId),
+        timedOut
+          ? (
+              action === 'reset'
+                ? 'O resultado do reset do quiz não foi confirmado. Confira o ranking antes de repetir.'
+                : 'A consulta ao bot do quiz excedeu ' +
+                  timeoutMs +
+                  ' ms.'
+            ) +
+            ' Etapa: ' +
+            phase +
+            '.'
 
-            action,
-          }),
-
-          signal:
-            AbortSignal.timeout(
-              15000
-            ),
-        }
+          : String(
+              error?.message ||
+              'Falha na conexão com o bot do quiz.'
+            )
       );
 
-    const value =
-      await response.json();
+      Object.assign(failure, {
+        name:
+          timedOut ? 'TimeoutError' : 'Error',
 
-    if (
-      !response.ok
-    ) {
-      throw fail(
-        response.status,
-        value.error ||
-          'O bot do quiz recusou a consulta.'
-      );
+        code:
+          error?.code ||
+          error?.cause?.code ||
+          null,
+
+        timedOut,
+
+        timeoutMs,
+
+        durationMs:
+          Date.now() - startedAt,
+
+        upstreamStatus:
+          response?.status || null,
+
+        phase,
+      });
+
+      throw failure;
     }
-
-    if (
-      action === 'snapshot' &&
-      !Array.isArray(
-        value.ranking
-      )
-    ) {
-      throw fail(
-        502,
-        'Ranking do quiz inválido.'
-      );
-    }
-
-    return value;
   }
 
   return {

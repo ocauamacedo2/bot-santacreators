@@ -14,6 +14,11 @@ import {
 } from 'discord.js';
 // ✅ ADD: HUB (pra contar nas métricas humanas do GeralDash)
 import { dashEmit } from "../utils/dashHub.js";
+import {
+  createPowerWorkflow,
+  powerInteractionOperationId,
+  withPowerStateLock,
+} from "../utils/sitePowerWorkflow.js";
 // ========================== CONFIG ==========================
 const CANAL_REGISTRO_EVENTO = '1392618646630568076';
 const CANAL_LOG_AUDIT_EVENTO = '1513320054568259835';
@@ -37,10 +42,24 @@ function readEventPowerState() {
 
 function writeEventPowerState(state) {
   try {
-    const dir = path.dirname(EVENT_POWER_STATE_PATH);
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(EVENT_POWER_STATE_PATH, JSON.stringify(state, null, 2), "utf8");
-  } catch {}
+    const dir = path.dirname(
+      EVENT_POWER_STATE_PATH
+    );
+
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, {
+        recursive: true,
+      });
+    }
+
+    fs.writeFileSync(
+      EVENT_POWER_STATE_PATH,
+      JSON.stringify(state, null, 2),
+      "utf8"
+    );
+  } catch (error) {
+    throw error;
+  }
 }
 
 async function sendAuditEventLog(client, guild, member, data, msg, oldLastAt) {
@@ -291,6 +310,7 @@ async function resetarBotao(channel, client) {
 
 // =================== FUNÇÃO PRINCIPAL ===================
 function iniciarRegistroEvento(client) {
+  installEventPowerWorkflow(client);
   if (client.registroEventoSocialMediaIniciado) return;
   client.registroEventoSocialMediaIniciado = true;
 
@@ -351,122 +371,60 @@ function iniciarRegistroEvento(client) {
         return;
       }
 
-      // Modal Submit -> Processa Registro
-      if (interaction.isModalSubmit() && interaction.customId === "modal_registro_evento") {
-        // ✅ Ganha tempo imediatamente
-        await interaction.deferReply({ ephemeral: true }).catch(() => {});
+      // Discord e site usam o mesmo registro.
+      if (
+        interaction.isModalSubmit() &&
+        interaction.customId === "modal_registro_evento"
+      ) {
+        await interaction.deferReply({
+          ephemeral: true,
+        }).catch(() => {});
 
-        const guild = interaction.guild;
-        if (!(await isAutorizado(interaction))) {
-          return interaction
-            .editReply({ content: "⚠️ Sem permissão." })
-            .catch(() => {});
-        }
+        const values = Object.fromEntries(
+          [
+            'jogador',
+            'evento',
+            'horario',
+            'data',
+          ].map(id => [
+            id,
+            interaction.fields
+              .getTextInputValue(id)
+              .trim()
+              .slice(0, 256),
+          ])
+        );
 
-const get = (id) =>
-  interaction.fields.getTextInputValue(id)?.trim().slice(0, 256) || "—";
+        const result =
+          await client
+            .__SC_POWER_WORKFLOWS__
+            .powersevent
+            .submit({
+              client,
+              guild: interaction.guild,
 
-const jogadorValue = get("jogador");
-const eventoValue = get("evento");
-const horarioValue = get("horario");
-const dataValue = get("data");
+              member:
+                await interaction.guild.members.fetch(
+                  interaction.user.id
+                ),
 
-const isNoUseRegister = isNoPowerEventRegister(
-  jogadorValue,
-  eventoValue,
-  horarioValue,
-  dataValue
-);
+              payload: {
+                operationId:
+                  powerInteractionOperationId(
+                    interaction.id
+                  ),
 
-// ✅ Pega o timestamp anterior para o log
-const stEv = readEventPowerState();
-const oldLastAt = Number(stEv?.users?.[interaction.user.id]?.lastRegisterAt || 0);
-stEv.users[interaction.user.id] = { lastRegisterAt: Date.now() };
-writeEventPowerState(stEv);
+                values,
+              },
+            });
 
-try {
-  if (typeof globalThis.SC_PODERES_hasRegisteredLastHours === "function") {
-    // força o sistema geral a reconhecer que houve registro recente
-  }
-
-  const poderesStatePath = path.resolve(__dirname, "../data/poderes_reminder_state.json");
-  let poderesState = { users: {} };
-
-  try {
-    poderesState = JSON.parse(fs.readFileSync(poderesStatePath, "utf8"));
-  } catch {}
-
-  poderesState.users ||= {};
-  poderesState.users[interaction.user.id] ||= {};
-  poderesState.users[interaction.user.id].lastRegisterAt = Date.now();
-  poderesState.users[interaction.user.id].lastReminderAt = 0;
-
-  fs.writeFileSync(poderesStatePath, JSON.stringify(poderesState, null, 2), "utf8");
-} catch (e) {
-  console.error("[RegistroEvento] Falha ao sincronizar registro com lembretes gerais:", e);
-}
-
-// ✅ MARCA QUE ESSA PESSOA JÁ REGISTROU PODERES NESSE EVENTO
-try {
-  SC_EVENT_POWER_MEMORY.set(
-    normalizePowerEventKey(interaction.user.id, eventoValue, dataValue),
-    {
-      userId: interaction.user.id,
-      evento: eventoValue,
-      horario: horarioValue,
-      data: dataValue,
-      registeredAt: Date.now(),
-    }
-  );
-} catch {}
-
-const embed = new EmbedBuilder()
-  .setTitle("📋 Registro de Poderes em Evento") // ✅ Ajustado para o Scanner do Dash reconhecer como Poderes
-.addFields(
-  { name: "👤 Membro", value: jogadorValue, inline: true },
-  { name: "📌 Evento", value: eventoValue, inline: true },
-  { name: "⏰ Horário", value: horarioValue, inline: true },
-  { name: "📅 Data", value: dataValue, inline: true },
-  { name: "📊 Pontuação", value: isNoUseRegister ? "🚫 Não pontuar — sem uso/ausente" : "✅ Pontuar normalmente", inline: false },
-  { name: "✍️ Registrado por", value: `<@${interaction.user.id}>` }
-)
-          .setThumbnail(interaction.user.displayAvatarURL())
-          .setColor("Blue")
-          .setFooter({ text: `Registro por ${interaction.user.tag}` })
-          .setTimestamp();
-
-        const canal = await client.channels.fetch(CANAL_REGISTRO_EVENTO).catch(() => null);
-        if (!canal) {
-          return interaction.editReply({ content: "❌ Erro: Canal de logs não encontrado." }).catch(() => {});
-        }
-
-        // Envia o log no canal
-        const registroMsg = await canal.send({
-          content: `<@${interaction.user.id}>`,
-          embeds: [embed],
+        await interaction.editReply({
+          content: [
+            '✅ Registro enviado com sucesso!',
+            ...(result.warnings || []),
+          ].join('\n'),
         });
 
-        // ✅ Envia o log de auditoria completo
-        if (registroMsg) await sendAuditEventLog(client, guild, interaction.member, { jogador: jogadorValue, evento: eventoValue, horario: horarioValue, data: dataValue }, registroMsg, oldLastAt);
-
-        // ✅ Dash: Emitir o nome correto para contar no GeralDash (Social Medias)
-if (!isNoUseRegister) {
-  try {
-    dashEmit("eventopoder:registrado", {
-      userId: interaction.user.id,
-      __at: Date.now(),
-      source: "registro_evento",
-      channelId: CANAL_REGISTRO_EVENTO,
-      // console.log(`[EVENTO_PODER] dashEmit: userId=${interaction.user.id}, channelId=${CANAL_REGISTRO_EVENTO}`); // Debug
-    });
-  } catch {}
-}
-
-        // Responde para o usuário que clicou (ephemeral)
-        await interaction.editReply({ content: "✅ Registro enviado com sucesso!" }).catch(() => {});
-
-        // Limpa botões antigos e envia um novo para ficar no final
-        await resetarBotao(canal, client);
         return;
       }
     } catch (err) {
@@ -474,7 +432,11 @@ if (!isNoUseRegister) {
       // ✅ Failsafe: Tenta avisar o usuário se algo deu errado para não ficar carregando infinito
       try {
         if (interaction.deferred || interaction.replied) {
-          await interaction.editReply({ content: "❌ Ocorreu um erro interno ao processar seu registro." }).catch(() => {});
+          await interaction.editReply({
+            content: err.status
+              ? err.message
+              : '❌ Não foi possível confirmar o registro. Confira o canal antes de repetir.',
+          }).catch(() => {});
         }
       } catch {}
     }
@@ -482,3 +444,212 @@ if (!isNoUseRegister) {
 }
 
 export { iniciarRegistroEvento };
+function installEventPowerWorkflow(client) {
+  client.__SC_POWER_WORKFLOWS__ ??= {};
+
+  client.__SC_POWER_WORKFLOWS__.powersevent ??=
+    createPowerWorkflow({
+      key: 'powersevent',
+      label: 'Poderes em evento',
+      title: '📋 Registro de Poderes em Evento',
+      channelId: CANAL_REGISTRO_EVENTO,
+      authorize: isAutorizado,
+
+      fields: [
+        {
+          id: 'jogador',
+          label: 'Quem usou os poderes?',
+          maxLength: 256,
+        },
+        {
+          id: 'evento',
+          label: 'Evento ou contexto',
+          maxLength: 256,
+        },
+        {
+          id: 'horario',
+          label: 'Horário',
+          maxLength: 256,
+        },
+        {
+          id: 'data',
+          label: 'Data do uso',
+          maxLength: 256,
+        },
+      ],
+
+      before(ctx) {
+        ctx.oldLastAt = Number(
+          readEventPowerState()
+            ?.users?.[ctx.member.id]
+            ?.lastRegisterAt || 0
+        );
+      },
+
+      build(ctx, values) {
+        ctx.noUse = isNoPowerEventRegister(
+          values.jogador,
+          values.evento,
+          values.horario,
+          values.data
+        );
+
+        return {
+          content: `<@${ctx.member.id}>`,
+
+          embeds: [
+            new EmbedBuilder()
+              .setTitle(
+                '📋 Registro de Poderes em Evento'
+              )
+              .addFields(
+                {
+                  name: '👤 Membro',
+                  value: values.jogador,
+                  inline: true,
+                },
+                {
+                  name: '📌 Evento',
+                  value: values.evento,
+                  inline: true,
+                },
+                {
+                  name: '⏰ Horário',
+                  value: values.horario,
+                  inline: true,
+                },
+                {
+                  name: '📅 Data',
+                  value: values.data,
+                  inline: true,
+                },
+                {
+                  name: '📊 Pontuação',
+                  value: ctx.noUse
+                    ? '🚫 Não pontuar — sem uso/ausente'
+                    : '✅ Pontuar normalmente',
+                },
+                {
+                  name: '✍️ Registrado por',
+                  value: `<@${ctx.member.id}>`,
+                }
+              )
+              .setThumbnail(
+                ctx.member.user.displayAvatarURL()
+              )
+              .setColor('Blue')
+              .setFooter({
+                text:
+                  `Registro por ${ctx.member.user.tag}`,
+              })
+              .setTimestamp(),
+          ],
+        };
+      },
+
+      async after(ctx, values, message) {
+        const at = Date.now();
+
+        const state =
+          readEventPowerState();
+
+        state.users ||= {};
+
+        state.users[ctx.member.id] = {
+          lastRegisterAt: at,
+        };
+
+        writeEventPowerState(state);
+
+        await withPowerStateLock(() => {
+          const file = path.resolve(
+            __dirname,
+            '../data/poderes_reminder_state.json'
+          );
+
+          let reminders = {
+            users: {},
+          };
+
+          try {
+            reminders = JSON.parse(
+              fs.readFileSync(file, 'utf8')
+            );
+          } catch (error) {
+            if (error.code !== 'ENOENT') {
+              throw error;
+            }
+          }
+
+          reminders.users ||= {};
+          reminders.users[ctx.member.id] ||= {};
+
+          reminders.users[
+            ctx.member.id
+          ].lastRegisterAt = at;
+
+          reminders.users[
+            ctx.member.id
+          ].lastReminderAt = 0;
+
+          fs.mkdirSync(
+            path.dirname(file),
+            { recursive: true }
+          );
+
+          const temporary =
+            file + '.event.tmp';
+
+          fs.writeFileSync(
+            temporary,
+            JSON.stringify(reminders, null, 2),
+            'utf8'
+          );
+
+          fs.renameSync(
+            temporary,
+            file
+          );
+        });
+
+        SC_EVENT_POWER_MEMORY.set(
+          normalizePowerEventKey(
+            ctx.member.id,
+            values.evento,
+            values.data
+          ),
+          {
+            userId: ctx.member.id,
+            ...values,
+            registeredAt: at,
+          }
+        );
+
+        if (!ctx.noUse) {
+          dashEmit('eventopoder:registrado', {
+            userId: ctx.member.id,
+            __at: at,
+            source: 'registro_evento',
+            channelId: CANAL_REGISTRO_EVENTO,
+          });
+        }
+
+        void sendAuditEventLog(
+          client,
+          ctx.guild,
+          ctx.member,
+          values,
+          message,
+          ctx.oldLastAt
+        ).catch(error =>
+          console.error(
+            '[PODERES EVENTO] Auditoria:',
+            error.message
+          )
+        );
+      },
+
+      refreshButton:
+        resetarBotao,
+    });
+}

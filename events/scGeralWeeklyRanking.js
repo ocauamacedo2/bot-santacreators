@@ -1894,6 +1894,8 @@ async function fetchDiscordMessagesPageShared(
 }
 
 // ================== SCAN HELPERS ==================
+const weeklyScanPages = new WeakMap();
+
 async function scanChannelEmbeds(client, options) {
   const startedAt = Date.now();
 
@@ -1983,18 +1985,36 @@ async function scanChannelEmbedsInternal(client, { channelId, weekFloorKey, maxP
   }
 
   const floor = String(weekFloorKey || "").trim() || null;
+
+  const reusableChannel =
+    PERGUNTAS_LOGS_CHANNEL_IDS.includes(String(channelId)) &&
+    CORRECAO_LOGS_CHANNEL_IDS.includes(String(channelId));
+
+  const scanPages = reusableChannel
+    ? weeklyScanPages.get(client)
+    : null;
+
   let lastId;
   let stop = false;
 
 for (let p = 0; p < maxPages; p++) {
-  const batch =
-    await fetchDiscordMessagesPageShared(
-      ch,
-      {
-        limit: 100,
-        before: lastId,
-      }
-    );
+  const pageKey =
+    String(ch.id) + ':' + String(lastId || 'LATEST');
+
+  let page = scanPages?.get(pageKey);
+
+  if (!page) {
+    page = fetchDiscordMessagesPageShared(ch, {
+      limit: 100,
+      before: lastId,
+    });
+
+    if (scanPages) {
+      scanPages.set(pageKey, page);
+    }
+  }
+
+  const batch = await page;
 
   if (!batch?.size) break;
 
@@ -2764,10 +2784,19 @@ async function collectAllPoints(client, mode = "light") {
 
   const collectionStartedAt = Date.now();
 
-  const operation = collectAllPointsUnshared(
-    client,
-    mode
-  ).then(
+  const operation = Promise.resolve().then(async () => {
+    const pages = new Map();
+
+    weeklyScanPages.set(client, pages);
+
+    try {
+      return await collectAllPointsUnshared(client, mode);
+    } finally {
+      if (weeklyScanPages.get(client) === pages) {
+        weeklyScanPages.delete(client);
+      }
+    }
+  }).then(
     result => {
       const durationMs =
         Date.now() - collectionStartedAt;
@@ -3448,8 +3477,37 @@ if (HALL_CHANNEL_ID) {
         }
 
         const pinList = bpPinsToArray(pins);
-        const recent = await cal.messages.fetch({ limit: 300 }).catch(() => null);
-        const recList = recent?.values ? [...recent.values()] : [];
+        const recList = [];
+        let recentBefore;
+
+        for (let page = 0; page < 3; page++) {
+          const batch = await cal.messages.fetch({
+            limit: 100,
+            ...(recentBefore ? { before: recentBefore } : {}),
+          });
+
+          recList.push(...batch.values());
+
+          if (batch.size < 100) break;
+
+          const nextBefore = batch.last()?.id;
+
+          if (!nextBefore) break;
+
+          if (
+            !/^\d{17,20}$/.test(nextBefore) ||
+            (
+              recentBefore &&
+              BigInt(nextBefore) >= BigInt(recentBefore)
+            )
+          ) {
+            throw new Error(
+              'A paginação do calendário de bate-ponto não avançou.'
+            );
+          }
+
+          recentBefore = nextBefore;
+        }
 
         const pool = new Map();
         for (const m of [...pinList, ...recList]) {

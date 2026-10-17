@@ -7285,6 +7285,28 @@ export async function setFormsCreatorStatus(client, { threadId, newStatus, actor
     writeState(latestState);
 }
 
+async function retryArchivedFormsWrite(client, threadId, write) {
+    try {
+        return await write();
+    } catch (error) {
+        if (Number(error?.code) !== 50083) throw error;
+
+        const fresh = await client.channels.fetch(
+            threadId,
+            { force: true }
+        );
+
+        if (!fresh?.isThread()) throw error;
+
+        await fresh.setArchived(
+            false,
+            "Sincronizando área do Controle GI"
+        );
+
+        return write();
+    }
+}
+
 export async function setFormsCreatorArea(client, { threadId, newArea, actor }) {
     const normalizedThreadId =
         String(threadId || "").trim();
@@ -7314,7 +7336,7 @@ export async function setFormsCreatorArea(client, { threadId, newArea, actor }) 
 
     const thread =
         await client.channels
-            .fetch(normalizedThreadId)
+            .fetch(normalizedThreadId, { force: true })
             .catch(() => null);
 
     if (
@@ -7445,9 +7467,13 @@ export async function setFormsCreatorArea(client, { threadId, newArea, actor }) 
         fields
     );
 
-    await registroMsg.edit({
-        embeds: [embed]
-    });
+    await retryArchivedFormsWrite(
+        client,
+        normalizedThreadId,
+        () => registroMsg.edit({
+            embeds: [embed]
+        })
+    );
 
     if (!registration) {
         const description =
@@ -7590,15 +7616,19 @@ export async function setFormsCreatorArea(client, { threadId, newArea, actor }) 
                     })
                     .setTimestamp();
 
-            await thread.send({
-                embeds: [
-                    transitionEmbed
-                ],
+            await retryArchivedFormsWrite(
+                client,
+                normalizedThreadId,
+                () => thread.send({
+                    embeds: [
+                        transitionEmbed
+                    ],
 
-                allowedMentions: {
-                    parse: []
-                }
-            });
+                    allowedMentions: {
+                        parse: []
+                    }
+                })
+            );
         } catch (error) {
             console.warn(
                 `[FormsCreator] Não consegui registrar a mudança de área no tópico ${normalizedThreadId}:`,

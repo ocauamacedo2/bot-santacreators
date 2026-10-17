@@ -159,6 +159,13 @@ const GUILD_ID =
 
 
 const CHANNELS = {
+  powersdaily: [
+    '1374066813171929218',
+  ],
+
+  powersevent: [
+    '1392618646630568076',
+  ],
   ...SITE_COMMUNITY_VIEW_CHANNELS,
   vipadmin: [
     "1414718336826081330",
@@ -754,7 +761,31 @@ export function installSiteHubApi({
 
   installApprovalAudit(client);
 
+const powerSiteProvider = key => ({
+  site(args) {
+    const provider =
+      client.__SC_POWER_WORKFLOWS__?.[key];
+
+    if (!provider) {
+      throw Object.assign(
+        new Error(
+          'O módulo de poderes ainda está inicializando.'
+        ),
+        { status: 503 }
+      );
+    }
+
+    return provider.site(args);
+  },
+});
+
 const workflowProviders = {
+  powersdaily:
+    powerSiteProvider('powersdaily'),
+
+  powersevent:
+    powerSiteProvider('powersevent'),
+
   hall:
     hallSiteWorkflow,
 
@@ -1131,51 +1162,81 @@ const experience = createSiteHubExperience({
 
   let quizPollBusy = false;
   let quizRankingSignature = null;
+  let quizRetryAt = 0;
+  let quizFailures = 0;
 
   async function refreshQuizBridge() {
     if (
       quizPollBusy ||
-      !process.env.SANTA_QUIZ_API_URL
+      !process.env.SANTA_QUIZ_API_URL ||
+      Date.now() < quizRetryAt
     ) {
       return;
     }
 
-    quizPollBusy =
-      true;
+    quizPollBusy = true;
 
     try {
       const result =
-        await globalThis
-          .__SC_QUIZ_SITE_API__
-          .snapshot({
-            refresh:
-              true,
-          });
+        await globalThis.__SC_QUIZ_SITE_API__.snapshot({
+          refresh: true,
+        });
 
       const signature =
-        JSON.stringify(
-          result.ranking || []
-        );
+        JSON.stringify(result.ranking || []);
 
-      if (
-        signature !==
-          quizRankingSignature
-      ) {
-        quizRankingSignature =
-          signature;
+      if (signature !== quizRankingSignature) {
+        quizRankingSignature = signature;
 
         snapshots.invalidate('quiz');
       }
+
+      quizFailures = 0;
+      quizRetryAt = 0;
     } catch (error) {
+      quizFailures =
+        Math.min(quizFailures + 1, 5);
+
+      const retryAfterMs = Math.min(
+        300000,
+        30000 * (2 ** (quizFailures - 1))
+      );
+
+      quizRetryAt =
+        Date.now() + retryAfterMs;
+
       console.warn('[SITE QUIZ SYNC]', {
-        name: error.name,
-        status: error.status || null,
-        code: error.code || null,
-        timedOut: error.name === 'TimeoutError' || error.name === 'AbortError',
+        name:
+          error?.name || 'Error',
+
+        status:
+          error?.status || null,
+
+        code:
+          error?.code || null,
+
+        timedOut:
+          error?.name === 'TimeoutError' ||
+          error?.name === 'AbortError',
+
+        retryAfterMs,
+
+        nextRetryAt:
+          new Date(quizRetryAt).toISOString(),
+
+        phase: error?.phase || null,
+        durationMs: error?.durationMs ?? null,
+        timeoutMs: error?.timeoutMs ?? null,
+        upstreamStatus: error?.upstreamStatus ?? null,
+
+        message:
+          String(
+            error?.message ||
+            'Falha na consulta ao bot do quiz.'
+          ),
       });
     } finally {
-      quizPollBusy =
-        false;
+      quizPollBusy = false;
     }
   }
 
@@ -1625,6 +1686,7 @@ const experience = createSiteHubExperience({
 
           'orgpresence.snapshot',
           'orgpresence.confirm',
+          'orgpresence.image',
 
           'events.published',
           'orginvites.snapshot',
@@ -1890,6 +1952,10 @@ const experience = createSiteHubExperience({
         if (
           !isCentralActor &&
           !isRegistrationAction &&
+          ![
+            'notifications.snapshot',
+            'notifications.seen',
+          ].includes(action) &&
           !requestedDiscordRead &&
           requestedAction !== 'events.published' &&
           (
@@ -2770,6 +2836,26 @@ if (await experience.handle({ guild, member, action, payload, res })) return;
     workflowData.timeclock?.rights?.view === true ||
     workflowData.paymentForm?.rights?.create === true,
   ]);
+
+  for (
+    const key
+    of ['powersdaily', 'powersevent']
+  ) {
+    entries.push([
+      key,
+
+      isCentralMember
+        ? workflowData.modules.some(module =>
+            module.key === key &&
+            module.rights?.view === true
+          )
+        : await canAccessSiteModule(
+            client,
+            member,
+            key
+          ),
+    ]);
+  }
 
   const checklistCatalog =
     isCentralMember

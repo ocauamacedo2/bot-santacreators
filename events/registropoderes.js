@@ -19,6 +19,11 @@ import {
 
 // ✅ ADD: HUB (conta no GeralDash: geral + métricas humanas)
 import { dashEmit } from "../utils/dashHub.js";
+import {
+  createPowerWorkflow,
+  powerInteractionOperationId,
+  withPowerStateLock,
+} from "../utils/sitePowerWorkflow.js";
 
 // ✅ __dirname no ESM
 const __filename = fileURLToPath(import.meta.url);
@@ -65,13 +70,31 @@ function readPoderesState() {
 
 function writePoderesState(state) {
   try {
-    const dir = path.dirname(PODERES_STATE_PATH);
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    const dir =
+      path.dirname(PODERES_STATE_PATH);
 
-    const tmp = PODERES_STATE_PATH + ".tmp";
-    fs.writeFileSync(tmp, JSON.stringify(state, null, 2), "utf8");
-    fs.renameSync(tmp, PODERES_STATE_PATH);
-  } catch {}
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, {
+        recursive: true,
+      });
+    }
+
+    const tmp =
+      PODERES_STATE_PATH + ".tmp";
+
+    fs.writeFileSync(
+      tmp,
+      JSON.stringify(state, null, 2),
+      "utf8"
+    );
+
+    fs.renameSync(
+      tmp,
+      PODERES_STATE_PATH
+    );
+  } catch (error) {
+    throw error;
+  }
 }
 
 function readRegpodCooldownState() {
@@ -88,13 +111,33 @@ function readRegpodCooldownState() {
 
 function writeRegpodCooldownState(state) {
   try {
-    const dir = path.dirname(REGPOD_COOLDOWN_STATE_PATH);
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    const dir = path.dirname(
+      REGPOD_COOLDOWN_STATE_PATH
+    );
 
-    const tmp = REGPOD_COOLDOWN_STATE_PATH + ".tmp";
-    fs.writeFileSync(tmp, JSON.stringify(state, null, 2), "utf8");
-    fs.renameSync(tmp, REGPOD_COOLDOWN_STATE_PATH);
-  } catch {}
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, {
+        recursive: true,
+      });
+    }
+
+    const tmp =
+      REGPOD_COOLDOWN_STATE_PATH +
+      ".tmp";
+
+    fs.writeFileSync(
+      tmp,
+      JSON.stringify(state, null, 2),
+      "utf8"
+    );
+
+    fs.renameSync(
+      tmp,
+      REGPOD_COOLDOWN_STATE_PATH
+    );
+  } catch (error) {
+    throw error;
+  }
 }
 
 function markRegpodCooldown(userId, at = Date.now()) {
@@ -385,6 +428,7 @@ async function isAuthorized(interaction) {
 
 
 function iniciarRegistroPoderes(client) {
+  installDailyPowerWorkflow(client);
   // ✅ GUARD GLOBAL (se importar 2x, não duplica listeners)
   if (globalThis.__REGPOD_MODULE_LOADED__) return;
   globalThis.__REGPOD_MODULE_LOADED__ = true;
@@ -521,119 +565,80 @@ const last = Number(stCd?.users?.[interaction.user.id]?.lastRegisterAt || 0);
 }
 
 
-      // 2. Enviou o Modal -> Processa e Loga
-            if (interaction.isModalSubmit() && interaction.customId === "formulario_registro") {
-  // ✅ ACK PRIMEIRO (pra nunca expirar)
-  await interaction.deferReply({ ephemeral: true }).catch(() => {});
+      // Discord e site usam o mesmo registro.
+      if (
+        interaction.isModalSubmit() &&
+        interaction.customId === "formulario_registro"
+      ) {
+        await interaction.deferReply({
+          ephemeral: true,
+        }).catch(() => {});
 
-  const guild = interaction.guild;
-  const autorizado = await isAuthorized(interaction);
-  if (!autorizado) {
-    return interaction
-      .editReply("⚠️ Você não tem permissão para enviar este registro.")
-      .catch(() => {});
-  }
+        const get = (id, max) =>
+          interaction.fields
+            .getTextInputValue(id)
+            .trim()
+            .slice(0, max);
 
-// ✅ COOLDOWN 8h: segurança, mas owner/bypass ignora cooldown
-if (!podeIgnorarCooldown(interaction.user.id)) {
-  try {
-    const stCd = readRegpodCooldownState();
-    const last = Number(stCd?.users?.[interaction.user.id]?.lastRegisterAt || 0);
-    if (last > 0) {
-      const now = Date.now();
-      const nextAt = last + REGPOD_COOLDOWN_MS;
-      if (now < nextAt) {
-        const left = nextAt - now;
-        return interaction
-          .editReply(`⏳ Você já registrou recentemente. Espera **${msToHuman(left)}** pra registrar de novo.`)
-          .catch(() => {});
-      }
-    }
-  } catch {}
-}
+        const result =
+          await client
+            .__SC_POWER_WORKFLOWS__
+            .powersdaily
+            .submit({
+              client,
+              guild: interaction.guild,
 
-// ✅ Pega o timestamp anterior ANTES de marcar o novo
-const stCd = readRegpodCooldownState();
-const oldLastAt = Number(stCd?.users?.[interaction.user.id]?.lastRegisterAt || 0);
+              member:
+                await interaction.guild.members.fetch(
+                  interaction.user.id
+                ),
 
-  const canal = await client.channels.fetch(CANAL_REGISTRO_ID).catch(() => null);
-  if (!canal) {
-    return interaction
-      .editReply("❌ Canal de registro não encontrado.")
-      .catch(() => {});
-  }
+              payload: {
+                operationId:
+                  powerInteractionOperationId(
+                    interaction.id
+                  ),
 
-        const user = interaction.user;
-        const poderes = interaction.fields.getTextInputValue('poderes')?.trim().slice(0, 1024) ?? '';
-        const data = interaction.fields.getTextInputValue('data_uso')?.trim().slice(0, 100) ?? '';
-        const horario = interaction.fields.getTextInputValue('horario')?.trim().slice(0, 256) ?? '';
-const ts = Math.floor(Date.now() / 1000);
-const nextAt = Date.now() + REGPOD_COOLDOWN_MS;
+                values: {
+                  poderes:
+                    get('poderes', 1024),
 
-const embed = new EmbedBuilder()
-  .setTitle('📘 Registro de Poderes Utilizados')
-  .setColor('Purple')
-  .setThumbnail(user.displayAvatarURL({ dynamic: true }))
-  .addFields(
-    { name: '👤 Criado por', value: `<@${user.id}>`, inline: true },
-    { name: '📅 Data', value: data || '—', inline: true },
-    { name: '⏰ Horário aproximado', value: horario || '—' },
-    { name: '📨 Enviado em', value: `<t:${ts}:F>` },
-    { name: '🔓 Próximo registro liberado', value: `<t:${Math.floor(nextAt / 1000)}:F> (<t:${Math.floor(nextAt / 1000)}:R>)` },
-    { name: '🔮 Poderes Utilizados', value: poderes || '—' },
-    { name: '🆔 ID', value: user.id }
-  )
-          .setImage(GIF_PODERES_URL)
-          .setFooter({ text: 'SantaCreators – Sistema Oficial de Registro' });
+                  data_uso:
+                    get('data_uso', 100),
 
-// ✅ Não apaga o botão antes do registro.
-// O botão antigo será apagado e recriado somente depois que o registro for enviado.
+                  horario:
+                    get('horario', 256),
+                },
+              },
+            });
 
-        // Envia o registro
-const registroEnviado = await canal.send({ content: `<@${user.id}>`, embeds: [embed] }).catch(() => null);
-
-// ✅ Manda o LOG completo sem quebrar o fluxo se der erro
-if (registroEnviado) {
-  await sendAuditLog(client, guild, interaction.member, { data, horario, poderes }, registroEnviado, oldLastAt)
-    .catch((err) => console.error("❌ Falha no sendAuditLog:", err));
-}
-
-// ✅ NOVO: salva “último registro” (pra lembretes 24h/48h funcionarem)
-// Usa o LOCK para garantir que a escrita não seja sobrescrita pelo loop de lembretes
-try {
-  const nowRegister = Date.now();
-
-  await markUserRegistered(user.id, nowRegister);
-  await markRegpodCooldown(user.id, nowRegister);
-} catch (e) {
-  console.error("Erro ao salvar registro de poderes:", e);
-}
-
-// ✅ ADD: manda pro HUB contar no GeralDash
-try {
-  dashEmit("poderes:registrado", {
-    userId: interaction.user.id,
-    __at: Date.now(),
-    source: "registro_poderes_utilizados",
-    channelId: CANAL_REGISTRO_ID,
-  });
-} catch {}
-
-
-
-
-// ✅ Envia o registro primeiro, depois apaga o botão antigo e cria outro embaixo
-await resetarBotaoRegistroPoderes(canal, client);
-
-await interaction.editReply("✅ Registro enviado com sucesso!");
-
+        await interaction.editReply({
+          content: [
+            '✅ Registro enviado com sucesso!',
+            ...(result.warnings || []),
+          ].join('\n'),
+        });
       }
 
     } catch (error) {
       console.error('Erro ao processar interactionCreate (Registro de Poderes):', error);
       try {
-        if (!interaction.deferred && !interaction.replied) {
-          await interaction.reply({ content: '❌ Ocorreu um erro ao processar sua ação.', ephemeral: true });
+        const content = error.status
+          ? error.message
+          : '❌ Não foi possível confirmar o registro. Confira o canal antes de repetir.';
+
+        if (
+          interaction.deferred ||
+          interaction.replied
+        ) {
+          await interaction.editReply({
+            content,
+          });
+        } else {
+          await interaction.reply({
+            content,
+            ephemeral: true,
+          });
         }
       } catch {}
     }
@@ -641,3 +646,174 @@ await interaction.editReply("✅ Registro enviado com sucesso!");
 }
 
 export { iniciarRegistroPoderes };
+function installDailyPowerWorkflow(client) {
+  client.__SC_POWER_WORKFLOWS__ ??= {};
+
+  client.__SC_POWER_WORKFLOWS__.powersdaily ??=
+    createPowerWorkflow({
+      key: 'powersdaily',
+      label: 'Registrar poderes do dia',
+      title: '📘 Registro de Poderes Utilizados',
+      channelId: CANAL_REGISTRO_ID,
+      authorize: isAuthorized,
+
+      fields: [
+        {
+          id: 'poderes',
+          label: 'Quais poderes utilizou?',
+          maxLength: 1024,
+          paragraph: true,
+        },
+        {
+          id: 'data_uso',
+          label: 'Data do uso',
+          maxLength: 100,
+        },
+        {
+          id: 'horario',
+          label: 'Horário aproximado',
+          maxLength: 256,
+        },
+      ],
+
+      before(ctx) {
+        const last = Number(
+          readRegpodCooldownState()
+            ?.users?.[ctx.member.id]
+            ?.lastRegisterAt || 0
+        );
+
+        ctx.oldLastAt = last;
+
+        const left =
+          last +
+          REGPOD_COOLDOWN_MS -
+          Date.now();
+
+        if (
+          !podeIgnorarCooldown(ctx.member.id) &&
+          last > 0 &&
+          left > 0
+        ) {
+          throw Object.assign(
+            new Error(
+              'Aguarde ' +
+              msToHuman(left) +
+              ' para registrar novamente.'
+            ),
+            { status: 400 }
+          );
+        }
+      },
+
+      build(ctx, values) {
+        const user = ctx.member.user;
+
+        const ts =
+          Math.floor(Date.now() / 1000);
+
+        const nextAt = Math.floor(
+          (
+            Date.now() +
+            REGPOD_COOLDOWN_MS
+          ) / 1000
+        );
+
+        return {
+          content: `<@${user.id}>`,
+
+          embeds: [
+            new EmbedBuilder()
+              .setTitle(
+                '📘 Registro de Poderes Utilizados'
+              )
+              .setColor('Purple')
+              .setThumbnail(
+                user.displayAvatarURL()
+              )
+              .addFields(
+                {
+                  name: '👤 Criado por',
+                  value: `<@${user.id}>`,
+                  inline: true,
+                },
+                {
+                  name: '📅 Data',
+                  value: values.data_uso,
+                  inline: true,
+                },
+                {
+                  name: '⏰ Horário aproximado',
+                  value: values.horario,
+                },
+                {
+                  name: '📨 Enviado em',
+                  value: `<t:${ts}:F>`,
+                },
+                {
+                  name: '🔓 Próximo registro liberado',
+                  value:
+                    `<t:${nextAt}:F> ` +
+                    `(<t:${nextAt}:R>)`,
+                },
+                {
+                  name: '🔮 Poderes Utilizados',
+                  value: values.poderes,
+                },
+                {
+                  name: '🆔 ID',
+                  value: user.id,
+                }
+              )
+              .setImage(GIF_PODERES_URL)
+              .setFooter({
+                text:
+                  'SantaCreators – Sistema Oficial de Registro',
+              }),
+          ],
+        };
+      },
+
+      async after(ctx, values, message) {
+        const at = Date.now();
+
+        await markUserRegistered(
+          ctx.member.id,
+          at
+        );
+
+        await markRegpodCooldown(
+          ctx.member.id,
+          at
+        );
+
+        dashEmit('poderes:registrado', {
+          userId: ctx.member.id,
+          __at: at,
+          source: 'registro_poderes_utilizados',
+          channelId: CANAL_REGISTRO_ID,
+        });
+
+        void sendAuditLog(
+          client,
+          ctx.guild,
+          ctx.member,
+          {
+            data: values.data_uso,
+            horario: values.horario,
+            poderes: values.poderes,
+          },
+          message,
+          ctx.oldLastAt
+        ).catch(error =>
+          console.error(
+            '[PODERES] Auditoria:',
+            error.message
+          )
+        );
+      },
+
+      refreshButton:
+        resetarBotaoRegistroPoderes,
+    });
+}
