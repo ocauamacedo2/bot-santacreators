@@ -268,8 +268,14 @@ export function createSiteEventsLibrary({ client }) {
     return value;
   }
 
-  async function catalog(guild, member) {
-    await channel(guild, member, MAIN);
+  async function catalog(
+    guild,
+    member,
+    { scheduleMetadataOnly = false } = {}
+  ) {
+    if (!scheduleMetadataOnly) {
+      await channel(guild, member, MAIN);
+    }
 
     let state;
 
@@ -390,7 +396,7 @@ export function createSiteEventsLibrary({ client }) {
       process.env.SANTA_EVENTS_CDS_CHANNEL_ID || ''
     ).trim();
 
-    if (cds) {
+    if (cds && !scheduleMetadataOnly) {
       try {
         await channel(guild, member, cds);
 
@@ -1958,5 +1964,110 @@ export function createSiteEventsLibrary({ client }) {
     });
   }
 
-  return { handle };
+  async function scheduleCovers(guild, schedule) {
+    await writes;
+
+    const normalize = value => String(value || '')
+      .replace(/^[#\s]+/, '')
+      .replace(/[*_`]/g, '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .toLocaleLowerCase('pt-BR');
+
+    const scheduledNames = new Set();
+
+    function collect(value) {
+      if (!value || typeof value !== 'object') {
+        return;
+      }
+
+      if (Array.isArray(value)) {
+        value.forEach(collect);
+        return;
+      }
+
+      for (const key of [
+        'eventName',
+        'name',
+        'nome',
+        'evento',
+      ]) {
+        if (typeof value[key] === 'string') {
+          scheduledNames.add(normalize(value[key]));
+        }
+      }
+
+      Object.values(value).forEach(collect);
+    }
+
+    collect(schedule);
+
+    const state = await read();
+
+    const events = await catalog(guild, null, {
+      scheduleMetadataOnly: true,
+    });
+
+    const candidates = new Map();
+
+    for (const event of events) {
+      const ids = event.aliasIds || [event.id];
+
+      const name =
+        state.names?.[guild.id + ':' + event.id] ||
+        ids
+          .map(id => state.names?.[guild.id + ':' + id])
+          .find(Boolean) ||
+        event.name;
+
+      const key = normalize(name);
+
+      if (!scheduledNames.has(key)) {
+        continue;
+      }
+
+      const cover = Object.hasOwn(
+        state.covers,
+        guild.id + ':' + event.id
+      )
+        ? state.covers[guild.id + ':' + event.id]
+        : ids
+            .map(id => state.covers[guild.id + ':' + id])
+            .find(Boolean) || '';
+
+      let url;
+
+      try {
+        url = new URL(String(cover || ''));
+
+        if (url.protocol !== 'https:') {
+          continue;
+        }
+      } catch {
+        continue;
+      }
+
+      if (!candidates.has(key)) {
+        candidates.set(key, new Set());
+      }
+
+      candidates.get(key).add(url.href);
+    }
+
+    return Object.fromEntries(
+      [...candidates]
+        .filter(([, urls]) => urls.size === 1)
+        .map(([name, urls]) => [
+          name,
+          [...urls][0],
+        ])
+    );
+  }
+
+  return {
+    handle,
+    scheduleCovers,
+  };
 }

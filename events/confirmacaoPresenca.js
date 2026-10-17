@@ -1432,7 +1432,33 @@ export async function getConfirmacaoPresencaSiteSnapshot({
         )
       );
 
+  const confirmationNow = getNowSP();
+
+  const confirmationWindow =
+    confirmationNow.getDay() === 5
+      ? 1
+      : Number(state.activeWindow || 1);
+
   return {
+    confirmation: {
+      date:
+        confirmationNow.toLocaleDateString('pt-BR'),
+
+      timeZone:
+        'America/Sao_Paulo',
+
+      days:
+        'Quinta, sexta e sábado',
+
+      hours:
+        confirmationWindow === 2
+          ? '22h às 00h'
+          : '19h às 21h',
+
+      fridayHours:
+        '19h às 21h',
+    },
+
     activeWindow:
       state.activeWindow ||
       1,

@@ -1577,8 +1577,14 @@ const experience = createSiteHubExperience({
           'mywins.snapshot',
           'mywins.detail',
           'viprequest.snapshot',
+          'viprequest.submit',
+
           'orgticket.snapshot',
+
           'orgpresence.snapshot',
+          'orgpresence.confirm',
+
+          'events.published',
           'orginvites.snapshot',
           'orgblacklist.snapshot',
 
@@ -3364,9 +3370,25 @@ if (await experience.handle({ guild, member, action, payload, res })) return;
       const data =
         await getCronogramaData();
 
-      const eventCovers = {};
+      let eventCovers = {};
       const eventPublications = {};
       const eventWarnings = [];
+
+      try {
+        eventCovers = await eventsLibrary.scheduleCovers(
+          guild,
+          data
+        );
+      } catch (error) {
+        console.warn(
+          '[CRONOGRAMA SITE] Capas do cronograma:',
+          error.message
+        );
+
+        eventWarnings.push(
+          'Não foi possível consultar as capas configuradas do cronograma.'
+        );
+      }
 
       const canViewInternalEvents =
         await canAccessSiteModule(

@@ -143,7 +143,11 @@ export function createSiteCommunity({ client }) {
 
         viprequest:
           visible.viprequest === true &&
-          member.roles.cache.has(leaderRole),
+          (
+            member.roles.cache.has(leaderRole) ||
+            member.id === '660311795327828008' ||
+            member.roles.cache.has('1262262852949905408')
+          ),
       };
     }
 
@@ -194,7 +198,11 @@ export function createSiteCommunity({ client }) {
 
       viprequest:
         visible.viprequest === true &&
-        leader,
+        (
+          leader ||
+          member.id === '660311795327828008' ||
+          member.roles.cache.has('1262262852949905408')
+        ),
 
       orgpresence:
         visible.orgpresence === true &&
@@ -600,6 +608,9 @@ export function createSiteCommunity({ client }) {
       weekKey: invitations.weekKey,
       currentWeek: invitations.currentWeek,
       windowOpen: presence.windowOpen,
+
+      confirmation:
+        presence.confirmation || null,
 
       organizations: presence.organizations.map(item => ({
         name: readable(item.name, guild),
