@@ -370,6 +370,151 @@ async function canViewAnyChannel(
 }
 
 
+function siteReadOnlyChannelIds(moduleKey) {
+  if (moduleKey === 'payments') {
+    return [
+      ...new Set([
+        ...(CHANNELS.social || []),
+        ...(CHANNELS.vipadmin || []),
+      ]),
+    ];
+  }
+
+  return Array.isArray(CHANNELS[moduleKey])
+    ? [...new Set(CHANNELS[moduleKey])]
+    : [];
+}
+
+async function siteReadOnlyChannels(member, moduleKey) {
+  const visible = [];
+
+  for (const id of siteReadOnlyChannelIds(moduleKey)) {
+    const channel = await member.guild.channels
+      .fetch(id)
+      .catch(() => null);
+
+    if (
+      !channel ||
+      channel.guildId !== member.guild.id ||
+      !channel.isTextBased() ||
+      !channel.messages
+    ) {
+      continue;
+    }
+
+    const permissions = channel.permissionsFor(member);
+
+    if (!permissions?.has([
+      PermissionFlagsBits.ViewChannel,
+      PermissionFlagsBits.ReadMessageHistory,
+    ])) {
+      continue;
+    }
+
+    // Threads privadas exigem participação ou gestão de threads.
+    if (
+      channel.type === 12 &&
+      !permissions.has(PermissionFlagsBits.ManageThreads)
+    ) {
+      const membership = await channel.members
+        .fetch(member.id)
+        .catch(() => null);
+
+      if (!membership) continue;
+    }
+
+    visible.push(channel);
+  }
+
+  return visible;
+}
+
+async function siteReadOnlySnapshot(member, payload = {}) {
+  const moduleKey = String(payload.module || '');
+
+  if (
+    moduleKey !== 'payments' &&
+    !Object.prototype.hasOwnProperty.call(CHANNELS, moduleKey)
+  ) {
+    throw Object.assign(
+      new Error('Área de leitura desconhecida.'),
+      { status: 404 }
+    );
+  }
+
+  const channels = await siteReadOnlyChannels(
+    member,
+    moduleKey
+  );
+
+  if (!channels.length) {
+    throw Object.assign(
+      new Error('Você não pode visualizar os canais desta área no Discord.'),
+      { status: 403 }
+    );
+  }
+
+  const selectedId = String(payload.channelId || '');
+  const selected = selectedId
+    ? channels.find(channel => channel.id === selectedId)
+    : channels[0];
+
+  if (!selected) {
+    throw Object.assign(
+      new Error('Canal não autorizado.'),
+      { status: 403 }
+    );
+  }
+
+  const before = String(payload.before || '');
+
+  if (before && !/^\d{17,20}$/.test(before)) {
+    throw Object.assign(
+      new Error('Referência de paginação inválida.'),
+      { status: 400 }
+    );
+  }
+
+  const batch = await selected.messages.fetch({
+    limit: 25,
+    ...(before ? { before } : {}),
+  });
+
+  const messages = [...batch.values()].sort(
+    (a, b) => b.createdTimestamp - a.createdTimestamp
+  );
+
+  return {
+    readOnly: true,
+    module: moduleKey,
+    channelId: selected.id,
+    channels: channels.map(channel => ({
+      id: channel.id,
+      name: channel.name,
+    })),
+    records: messages.map(message => ({
+      id: message.id,
+      author: message.author?.globalName ||
+        message.author?.username ||
+        'Discord',
+      createdAt: message.createdTimestamp,
+      content: message.content || '',
+      url: message.url,
+      embeds: message.embeds.map(embed => ({
+        title: embed.title || '',
+        description: embed.description || '',
+        fields: (embed.fields || []).map(field => ({
+          name: field.name,
+          value: field.value,
+        })),
+      })),
+    })),
+    nextBefore: messages.length === 25
+      ? messages[messages.length - 1].id
+      : null,
+  };
+}
+
 async function canAccessSiteModule(
   client,
   member,
@@ -1416,7 +1561,36 @@ const experience = createSiteHubExperience({
             });
         }
 
-               if (
+        const siteReadOnlyVisitor =
+          member.id !== '660311795327828008' &&
+          !isOfficialSantaCreatorsTeamMember(member);
+
+        if (
+          siteReadOnlyVisitor &&
+          ![
+            'bootstrap',
+            'discordview.snapshot',
+            'cache.authorize',
+            'identity.batch',
+            'profile-options',
+            'changes.snapshot',
+            'notifications.snapshot',
+            'notifications.seen',
+          ].includes(action)
+        ) {
+          return res.status(403).json({
+            error:
+              'Sua Minha Central permite somente visualização. Esta ação não está disponível.',
+          });
+        }
+
+        if (action === 'discordview.snapshot') {
+          return res.json(
+            await siteReadOnlySnapshot(member, payload)
+          );
+        }
+
+        if (
           action === 'timeclock.form' ||
           action === 'timeclock.submit'
         ) {
@@ -2539,6 +2713,29 @@ if (await experience.handle({ guild, member, action, payload, res })) return;
     })),
     profile: { ...experience.profile(member), preferences: await experience.preferences(guild, member) },
     team: isCentralMember,
+
+    readOnlyVisitor: !isCentralMember,
+
+    discordReadOnlyModules: !isCentralMember
+      ? Object.fromEntries(
+          await Promise.all(
+            [
+              ...Object.keys(CHANNELS),
+              'payments',
+            ]
+              .filter((key, index, keys) =>
+                keys.indexOf(key) === index &&
+                key !== 'ai'
+              )
+              .map(async key => [
+                key,
+                (
+                  await siteReadOnlyChannels(member, key)
+                ).length > 0,
+              ])
+          )
+        )
+      : {},
 
     community: {
       organizations:
