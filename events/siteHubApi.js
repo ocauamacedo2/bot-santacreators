@@ -1094,10 +1094,23 @@ const experience = createSiteHubExperience({
   async function resolveSiteMember(guild, actorId, force = false) {
     const id = guild.id + ':' + actorId;
     const previous = memberReads.get(id);
-    if (!force && previous && Date.now() - previous.at < 30000) {
+
+    if (
+      previous &&
+      (
+        previous.pending === true ||
+        (!force && Date.now() - previous.at < 30000)
+      )
+    ) {
       return previous.promise;
     }
-    const record = { at: Date.now(), promise: null };
+
+    const record = {
+      at: Date.now(),
+      promise: null,
+      pending: true,
+    };
+
     record.promise = guild.members.fetch({
       user: actorId,
       force: true,
@@ -1107,15 +1120,36 @@ const experience = createSiteHubExperience({
         return member;
       })
       .catch(error => {
-        if (memberReads.get(id) === record) memberReads.delete(id);
-        if (Number(error.code) === 10007) return null;
-        throw Object.assign(new Error('Não foi possível verificar seu vínculo com o Discord.'), { status: 503 });
+        if (memberReads.get(id) === record) {
+          memberReads.delete(id);
+        }
+
+        if (Number(error.code) === 10007) {
+          return null;
+        }
+
+        throw Object.assign(
+          new Error(
+            'Não foi possível verificar seu vínculo com o Discord.'
+          ),
+          {
+            status: 503,
+          }
+        );
+      })
+      .finally(() => {
+        record.pending = false;
       });
+
     memberReads.delete(id);
     memberReads.set(id, record);
+
     while (memberReads.size > 256) {
-      memberReads.delete(memberReads.keys().next().value);
+      memberReads.delete(
+        memberReads.keys().next().value
+      );
     }
+
     return record.promise;
   }
 
