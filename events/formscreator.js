@@ -155,19 +155,22 @@ const ROLE_REQUIRED_FOR_ACTIVE = "1352275728476930099";
 // =========================
 // PERSISTÊNCIA
 // =========================
-function canWriteDirectory(
-  dir
-) {
+function canWriteDirectory(dir) {
   if (!dir) {
     return false;
   }
+
+  const probeFile =
+    path.join(
+      dir,
+      `.formscreator-write-test-${process.pid}.tmp`
+    );
 
   try {
     fs.mkdirSync(
       dir,
       {
-        recursive:
-          true,
+        recursive: true,
       }
     );
 
@@ -177,25 +180,48 @@ function canWriteDirectory(
       fs.constants.W_OK
     );
 
-    const probeFile =
-      path.join(
-        dir,
-        `.formscreator-write-test-${process.pid}-${Date.now()}.tmp`
-      );
-
     fs.writeFileSync(
       probeFile,
       "ok",
       "utf8"
     );
 
-    fs.unlinkSync(
-      probeFile
-    );
-
     return true;
-  } catch {
+  } catch (error) {
+    if (
+      ["ENOSPC", "EDQUOT"].includes(
+        error?.code
+      )
+    ) {
+      throw Object.assign(
+        new Error(
+          "[FormsCreator] Sem espaço para persistir em " +
+          dir +
+          ". O diretório não será trocado automaticamente."
+        ),
+        {
+          code: error.code,
+          cause: error,
+        }
+      );
+    }
+
     return false;
+  } finally {
+    try {
+      fs.unlinkSync(
+        probeFile
+      );
+    } catch (error) {
+      if (
+        error?.code !== "ENOENT"
+      ) {
+        console.warn(
+          "[FormsCreator] Não foi possível remover o teste temporário:",
+          error?.code
+        );
+      }
+    }
   }
 }
 
@@ -469,11 +495,11 @@ function readPersonalTicketHistoryState() {
 function writePersonalTicketHistoryState(
   state
 ) {
+  const temporaryFile =
+    `${PERSONAL_TICKET_HISTORY_FILE}.${process.pid}.tmp`;
+
   try {
     ensureDataDir();
-
-    const temporaryFile =
-      `${PERSONAL_TICKET_HISTORY_FILE}.${process.pid}.${Date.now()}.tmp`;
 
     fs.writeFileSync(
       temporaryFile,
@@ -494,6 +520,21 @@ function writePersonalTicketHistoryState(
       "[FormsCreator] Falha ao salvar histórico dos tickets pessoais:",
       error?.message || error
     );
+  } finally {
+    try {
+      fs.unlinkSync(
+        temporaryFile
+      );
+    } catch (error) {
+      if (
+        error?.code !== "ENOENT"
+      ) {
+        console.warn(
+          "[FormsCreator] Temporário do histórico não removido:",
+          error?.code
+        );
+      }
+    }
   }
 }
 
@@ -1891,11 +1932,11 @@ function readState() {
 }
 
 function writeState(state) {
+  const tmp =
+    `${STATE_FILE}.${process.pid}.tmp`;
+
   try {
     ensureDataDir();
-
-    const tmp =
-      `${STATE_FILE}.${process.pid}.${Date.now()}.tmp`;
 
     fs.writeFileSync(
       tmp,
@@ -1925,6 +1966,21 @@ function writeState(state) {
           e.code,
       }
     );
+  } finally {
+    try {
+      fs.unlinkSync(
+        tmp
+      );
+    } catch (error) {
+      if (
+        error?.code !== "ENOENT"
+      ) {
+        console.warn(
+          "[FormsCreator] Temporário do state não removido:",
+          error?.code
+        );
+      }
+    }
   }
 }
 
