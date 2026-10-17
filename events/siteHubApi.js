@@ -1565,18 +1565,31 @@ const experience = createSiteHubExperience({
           member.id !== '660311795327828008' &&
           !isOfficialSantaCreatorsTeamMember(member);
 
+        const siteVisitorReadActions = new Set([
+          'bootstrap',
+          'cache.authorize',
+          'identity.batch',
+          'profile-options',
+          'changes.snapshot',
+          'notifications.snapshot',
+          'notifications.seen',
+
+          'mywins.snapshot',
+          'mywins.detail',
+          'viprequest.snapshot',
+          'orgticket.snapshot',
+          'orgpresence.snapshot',
+          'orginvites.snapshot',
+          'orgblacklist.snapshot',
+
+          'hall.snapshot',
+          'quiz.snapshot',
+          'cronograma.snapshot',
+        ]);
+
         if (
           siteReadOnlyVisitor &&
-          ![
-            'bootstrap',
-            'discordview.snapshot',
-            'cache.authorize',
-            'identity.batch',
-            'profile-options',
-            'changes.snapshot',
-            'notifications.snapshot',
-            'notifications.seen',
-          ].includes(action)
+          !siteVisitorReadActions.has(action)
         ) {
           return res.status(403).json({
             error:
