@@ -534,20 +534,59 @@ async function canAccessSiteModule(
     member.id === '660311795327828008' ||
     isOfficialSantaCreatorsTeamMember(member);
 
-  const communityModules = new Set([
-    'hall',
-    'quiz',
-    'cronograma',
-    ...Object.keys(
-      SITE_COMMUNITY_VIEW_CHANNELS
-    ),
-  ]);
+  if (!isCentralMember) {
+    // Estes módulos possuem caminhos próprios de autorização.
+    // Não liberar suas consultas agregadas por um canal isolado.
+    const separatelyAuthorized = new Set([
+      'staff',
+      'workflow',
+      'ai',
+    ]);
 
-  if (
-    !isCentralMember &&
-    !communityModules.has(moduleKey)
-  ) {
-    return false;
+    if (separatelyAuthorized.has(moduleKey)) {
+      return false;
+    }
+
+    // Para um painel com várias fontes, a liberação integral
+    // exige leitura de todos os canais configurados.
+    // A liberação parcial precisa ser feita pelo provedor.
+    const sourceIds = [...new Set(channelIds.map(String))];
+
+    if (!sourceIds.length) {
+      return false;
+    }
+
+    for (const channelId of sourceIds) {
+      const channel = await member.guild.channels
+        .fetch(channelId)
+        .catch(() => null);
+
+      if (
+        !channel ||
+        channel.guildId !== member.guild.id ||
+        !channel.permissionsFor(member)?.has([
+          PermissionFlagsBits.ViewChannel,
+          PermissionFlagsBits.ReadMessageHistory,
+        ])
+      ) {
+        return false;
+      }
+
+      if (
+        channel.type === 12 &&
+        !channel.permissionsFor(member)?.has(
+          PermissionFlagsBits.ManageThreads
+        )
+      ) {
+        const threadMember = await channel.members
+          .fetch(member.id)
+          .catch(() => null);
+
+        if (!threadMember) {
+          return false;
+        }
+      }
+    }
   }
 
   const visible =
@@ -1593,14 +1632,37 @@ const experience = createSiteHubExperience({
           'cronograma.snapshot',
         ]);
 
+        const discordModuleRead =
+          action.endsWith('.snapshot') &&
+          ![
+            'staff.snapshot',
+            'ai.snapshot',
+          ].includes(action) &&
+          Object.hasOwn(
+            CHANNELS,
+            action.slice(0, -'.snapshot'.length)
+          );
+
         if (
           siteReadOnlyVisitor &&
-          !siteVisitorReadActions.has(action)
+          !siteVisitorReadActions.has(action) &&
+          !discordModuleRead
         ) {
           return res.status(403).json({
             error:
-              'Sua Minha Central permite somente visualização. Esta ação não está disponível.',
+              'Esta ação exige uma permissão de gerenciamento.',
           });
+        }
+
+        if (
+          siteReadOnlyVisitor &&
+          discordModuleRead
+        ) {
+          await assertModuleView(
+            client,
+            member,
+            action.slice(0, -'.snapshot'.length)
+          );
         }
 
         if (action === 'discordview.snapshot') {
@@ -1800,9 +1862,32 @@ const experience = createSiteHubExperience({
           action === 'staff.retry' ||
           action === 'profile-options';
 
+        const requestedDiscordRead =
+          requestedAction.endsWith('.snapshot') &&
+          ![
+            'staff.snapshot',
+            'ai.snapshot',
+          ].includes(requestedAction) &&
+          Object.hasOwn(
+            CHANNELS,
+            requestedModule
+          );
+
+        if (
+          !isCentralActor &&
+          requestedDiscordRead
+        ) {
+          await assertModuleView(
+            client,
+            member,
+            requestedModule
+          );
+        }
+
         if (
           !isCentralActor &&
           !isRegistrationAction &&
+          !requestedDiscordRead &&
           requestedAction !== 'events.published' &&
           (
             internalModules.has(requestedModule) ||
@@ -1811,7 +1896,8 @@ const experience = createSiteHubExperience({
           )
         ) {
           return res.status(403).json({
-            error: 'Esta área é exclusiva da equipe autorizada.',
+            error:
+              'Esta ação é exclusiva da equipe autorizada.',
           });
         }
 
@@ -2627,12 +2713,12 @@ if (await experience.handle({ guild, member, action, payload, res })) return;
         key === 'events'
     );
 
-  if (
-    eventsEntry &&
-    member.id !== '660311795327828008' &&
-    !isOfficialSantaCreatorsTeamMember(member)
-  ) {
-    eventsEntry[1] = false;
+  if (eventsEntry) {
+    eventsEntry[1] = await canAccessSiteModule(
+      client,
+      member,
+      'events'
+    );
   }
 
   const isCentralMember =

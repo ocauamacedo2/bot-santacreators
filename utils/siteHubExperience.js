@@ -115,13 +115,56 @@ export function createSiteHubExperience({ client, channels, isTeamMember, genera
     void writes.catch(error => console.error('[SITE HISTORY] Não foi possível guardar a consulta:', error.code));
   }
   async function accessible(guild, member, module) {
-    if (!Object.hasOwn(channels, module) || !Array.isArray(channels[module])) throw failure(404, 'Categoria desconhecida.');
-    const results = [];
-    for (const id of channels[module]) {
-      const channel = guild.channels.cache.get(id) || await client.channels.fetch(id).catch(() => null);
-      if (channel?.guildId === guild.id && (member.id === '660311795327828008' || channel.permissionsFor(member)?.has('ViewChannel'))) results.push(channel);
+    if (
+      !Object.hasOwn(channels, module) ||
+      !Array.isArray(channels[module])
+    ) {
+      throw failure(404, 'Categoria desconhecida.');
     }
-    if (!results.length) throw failure(403, 'Você não possui acesso a esta área no Discord.');
+
+    const results = [];
+
+    for (const id of new Set(channels[module])) {
+      const channel = await guild.channels
+        .fetch(String(id))
+        .catch(() => null);
+
+      const permissions =
+        channel?.permissionsFor(member);
+
+      if (
+        channel?.guildId !== guild.id ||
+        !permissions?.has([
+          'ViewChannel',
+          'ReadMessageHistory',
+        ])
+      ) {
+        continue;
+      }
+
+      if (
+        channel.type === 12 &&
+        !permissions.has('ManageThreads')
+      ) {
+        const threadMember = await channel.members
+          .fetch(member.id)
+          .catch(() => null);
+
+        if (!threadMember) {
+          continue;
+        }
+      }
+
+      results.push(channel);
+    }
+
+    if (!results.length) {
+      throw failure(
+        403,
+        'Você não possui acesso de leitura a esta área no Discord.'
+      );
+    }
+
     return results;
   }
   function validateDay(day) {
