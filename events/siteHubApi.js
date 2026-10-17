@@ -1197,8 +1197,16 @@ const experience = createSiteHubExperience({
           refresh: true,
         });
 
+      if (
+        result.pending === true
+      ) {
+        return;
+      }
+
       const signature =
-        JSON.stringify(result.ranking || []);
+        JSON.stringify(
+          result.ranking || []
+        );
 
       if (signature !== quizRankingSignature) {
         quizRankingSignature = signature;

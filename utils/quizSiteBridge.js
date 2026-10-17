@@ -91,6 +91,12 @@ export function createQuizWeeklyArchive(directory) {
 
   return {
     save(snapshot) {
+      if (
+        snapshot?.pending === true
+      ) {
+        return Promise.resolve();
+      }
+
       const value = clone(snapshot);
 
       writes = writes
@@ -220,9 +226,8 @@ export function installQuizBridgeServer({
   }
 
   const port = Number(
+    process.env.SANTA_QUIZ_BRIDGE_PORT ||
     process.env.PORT ||
-    process.env
-      .SANTA_QUIZ_BRIDGE_PORT ||
     8080
   );
 
@@ -445,7 +450,10 @@ export function installQuizBridgeServer({
           });
 
         return send(
-          200,
+          result.pending === true
+            ? 202
+            : 200,
+
           {
             ...result,
 
@@ -494,7 +502,14 @@ export function installQuizBridgeServer({
 
   server.listen(
     port,
-    '0.0.0.0'
+    '0.0.0.0',
+    () => {
+      console.log('[QUIZ BRIDGE SERVER] API disponível:', {
+        host: '0.0.0.0',
+        port,
+        route: '/quiz-site-bridge',
+      });
+    }
   );
 
   client
@@ -519,19 +534,27 @@ export function createQuizRemoteClient({
       'data/quiz-site-archive'
     );
 
-  async function request(action, actorId = '') {
+  async function request(
+    action,
+    actorId = ''
+  ) {
     const secret = String(
-      process.env.SANTA_QUIZ_BRIDGE_SECRET || ''
+      process.env
+        .SANTA_QUIZ_BRIDGE_SECRET || ''
     ).trim();
 
     const address = String(
-      process.env.SANTA_QUIZ_API_URL || ''
+      process.env
+        .SANTA_QUIZ_API_URL || ''
     ).trim();
 
     let url;
 
     try {
-      url = new URL('/quiz-site-bridge', address);
+      url = new URL(
+        '/quiz-site-bridge',
+        address
+      );
     } catch {
       throw fail(
         503,
@@ -551,149 +574,104 @@ export function createQuizRemoteClient({
       );
     }
 
-    const startedAt = Date.now();
-    const timeoutMs = 15000;
-    const signal = AbortSignal.timeout(timeoutMs);
+    const response =
+      await fetcher(
+        url,
+        {
+          method:
+            'POST',
 
-    let response = null;
-    let phase = 'request';
+          redirect:
+            'error',
 
-    try {
-      response = await fetcher(url, {
-        method: 'POST',
+          headers: {
+            Authorization:
+              'Bearer ' + secret,
 
-        redirect: 'error',
+            'Content-Type':
+              'application/json',
+          },
 
-        headers: {
-          Authorization: 'Bearer ' + secret,
-          'Content-Type': 'application/json',
-        },
-
-        body: JSON.stringify({
-          guildId: String(
-            process.env.DISCORD_GUILD_ID ||
-            '1262262852782129183'
-          ),
-
-          actorId: String(actorId),
-
-          action,
-        }),
-
-        signal,
-      });
-
-      phase = 'body';
-
-      let value;
-
-      try {
-        value = await response.json();
-      } catch (error) {
-        if (signal.aborted) throw error;
-
-        throw fail(
-          response.status >= 400
-            ? response.status
-            : 502,
-
-          'A ponte do quiz retornou HTTP ' +
-          response.status +
-          ' sem uma resposta JSON válida.'
-        );
-      }
-
-      if (
-        !value ||
-        typeof value !== 'object' ||
-        Array.isArray(value)
-      ) {
-        throw fail(
-          response.ok ? 502 : response.status,
-          'A ponte do quiz retornou uma resposta inválida.'
-        );
-      }
-
-      if (!response.ok) {
-        throw fail(
-          response.status,
-
-          typeof value.error === 'string'
-            ? value.error
-            : 'O bot do quiz recusou a consulta.'
-        );
-      }
-
-      if (
-        action === 'snapshot' &&
-        !Array.isArray(value.ranking)
-      ) {
-        throw fail(
-          502,
-          'Ranking do quiz inválido.'
-        );
-      }
-
-      return value;
-    } catch (error) {
-      const timedOut =
-        signal.aborted ||
-        error?.name === 'TimeoutError' ||
-        error?.name === 'AbortError';
-
-      const status = Number(error?.status);
-
-      const failure = fail(
-        timedOut
-          ? 504
-          : (
-              status >= 400 && status <= 599
-                ? status
-                : 502
+          body: JSON.stringify({
+            guildId: String(
+              process.env
+                .DISCORD_GUILD_ID ||
+              '1262262852782129183'
             ),
 
-        timedOut
-          ? (
-              action === 'reset'
-                ? 'O resultado do reset do quiz não foi confirmado. Confira o ranking antes de repetir.'
-                : 'A consulta ao bot do quiz excedeu ' +
-                  timeoutMs +
-                  ' ms.'
-            ) +
-            ' Etapa: ' +
-            phase +
-            '.'
+            actorId:
+              String(actorId),
 
-          : String(
-              error?.message ||
-              'Falha na conexão com o bot do quiz.'
-            )
+            action,
+          }),
+
+          signal:
+            AbortSignal.timeout(
+              15000
+            ),
+        }
       );
 
-      Object.assign(failure, {
-        name:
-          timedOut ? 'TimeoutError' : 'Error',
+    const contentType = String(
+      response.headers.get('content-type') || ''
+    );
 
-        code:
-          error?.code ||
-          error?.cause?.code ||
-          null,
+    const responseText = await response.text();
 
-        timedOut,
+    let value = null;
 
-        timeoutMs,
-
-        durationMs:
-          Date.now() - startedAt,
-
-        upstreamStatus:
-          response?.status || null,
-
-        phase,
+    try {
+      value = JSON.parse(responseText);
+    } catch {
+      console.error('[SITE QUIZ API] Resposta não JSON:', {
+        status: response.status,
+        contentType,
+        destino: url.origin + url.pathname,
       });
 
-      throw failure;
+      throw fail(
+        response.ok ? 502 : response.status,
+        'A API do quiz retornou uma resposta que não é JSON. Confira se a nova aplicação está executando a ponte na porta 80 e se SANTA_QUIZ_API_URL aponta para ela.'
+      );
     }
+
+    if (
+      !value ||
+      typeof value !== 'object' ||
+      Array.isArray(value)
+    ) {
+      throw fail(
+        502,
+        'A API do quiz retornou um formato de resposta inválido.'
+      );
+    }
+
+    if (!response.ok) {
+      console.error('[SITE QUIZ API] Consulta recusada:', {
+        status: response.status,
+        contentType,
+        destino: url.origin + url.pathname,
+      });
+
+      throw fail(
+        response.status,
+        typeof value.error === 'string'
+          ? value.error
+          : 'O bot do quiz recusou a consulta.'
+      );
+    }
+
+    if (
+      action === 'snapshot' &&
+      !Array.isArray(value.ranking)
+    ) {
+      throw fail(
+        502,
+        'Ranking do quiz inválido.'
+      );
+    }
+
+    return value;
   }
 
   return {
@@ -736,6 +714,12 @@ export function createQuizRemoteClient({
         )
           .then(
             async value => {
+              if (
+                value.pending === true
+              ) {
+                return value;
+              }
+
               await archive.save(
                 value
               );
@@ -820,4 +804,4 @@ export function createQuizRemoteClient({
   };
 }
 
-////TESTE
+///TESTE
