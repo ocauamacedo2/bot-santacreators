@@ -1999,13 +1999,18 @@ const experience = createSiteHubExperience({
 
         // Autorizar ANTES de ler qualquer consulta persistida, inclusive em atualização manual.
         const moduleKey = action === 'teamRequests.list' ? 'staff' : action.split('.')[0];
+
         if (
           action === 'bootstrap' ||
           action === 'teamRequests.list' ||
           (
             action.endsWith('.snapshot') &&
             CHANNELS[moduleKey] &&
-            action !== 'weekly.snapshot'
+            ![
+              'weekly.snapshot',
+              'gi.snapshot',
+              'hierarchy.snapshot',
+            ].includes(action)
           )
         ) {
           await authorizeStoredRead(action, payload);
@@ -2973,15 +2978,11 @@ if (await experience.handle({ guild, member, action, payload, res })) return;
             );
           }
 
-          const giData = await globalThis.__SC_GI_SITE_API__.snapshot({ actorId });
-          const ids = [...new Set((giData.records || []).map(item => String(item.targetId)))];
-          let next = 0;
-          await Promise.all(Array.from({ length: Math.min(4, ids.length) }, async () => {
-            while (next < ids.length) {
-              const id = ids[next++];
-              if (!guild.members.cache.has(id)) await guild.members.fetch(id).catch(() => null);
-            }
-          }));
+          const giData =
+            await globalThis.__SC_GI_SITE_API__.snapshot({
+              actorId,
+            });
+
           return res.json(giData);
         }
 

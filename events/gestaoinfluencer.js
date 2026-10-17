@@ -13701,6 +13701,18 @@ async function enrichGISiteRecords(guild, actor, records) {
           let formsId = null;
 
           if (
+            typeof findFormsCreatorThreadIdFastByUserId === 'function'
+          ) {
+            const indexedId =
+              findFormsCreatorThreadIdFastByUserId(rec.targetId);
+
+            if (/^\d{17,20}$/.test(String(indexedId || ''))) {
+              formsId = String(indexedId);
+            }
+          }
+
+          if (
+            !formsId &&
             typeof findFormsCreatorThreadLinkByUserId === 'function'
           ) {
             const formsUrl =
